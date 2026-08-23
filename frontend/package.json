@@ -1,0 +1,33 @@
+{
+  "name": "openci-tf-console",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build:client": "tsc --noEmit && vite build",
+    "build:server": "tsc -p server/tsconfig.json",
+    "build": "npm run build:client && npm run build:server",
+    "package:lambda": "npm run build && bash scripts/package-lambda.sh",
+    "typecheck": "tsc --noEmit && tsc -p server/tsconfig.json --noEmit",
+    "start": "node server-dist/local.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.66.9",
+    "@tanstack/react-router": "^1.105.0",
+    "aws4fetch": "^1.0.20",
+    "hono": "^4.7.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0",
+    "vitest": "^3.0.5"
+  }
+}

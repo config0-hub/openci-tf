@@ -1,0 +1,306 @@
+{
+  "StartAt": "ValidateAction",
+  "States": {
+    "BookkeepCredentialRetry": {
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "WriteFailureManifestFailed",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "PrepareAndSubmit",
+      "Parameters": {
+        "event.$": "$",
+        "execution_started_at.$": "$$.Execution.StartTime"
+      },
+      "Resource": "arn:aws:lambda:us-east-1:123456789012:function:mock",
+      "ResultPath": "$",
+      "Retry": [
+        {
+          "BackoffRate": 2,
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3
+        }
+      ],
+      "Type": "Task"
+    },
+    "Collect": {
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "WriteFailureManifest",
+          "ResultPath": "$.error"
+        }
+      ],
+      "End": true,
+      "Parameters": {
+        "account_id.$": "$.account_id",
+        "action.$": "$.action",
+        "attempt.$": "$.probe.attempt",
+        "commit_hash.$": "$.commit_hash",
+        "credential_expired.$": "$.probe.credential_expired",
+        "deadline_at.$": "$.deadline_at",
+        "error.$": "$.probe.error",
+        "exec_id.$": "$.probe.exec_id",
+        "folder.$": "$.folder",
+        "pointers.$": "$.probe.pointers",
+        "repo_name.$": "$.repo_name",
+        "run_id.$": "$.run_id",
+        "steps.$": "$.probe.steps",
+        "submitted_at.$": "$.probe.submitted_at",
+        "succeeded.$": "$.probe.succeeded"
+      },
+      "Resource": "arn:aws:lambda:us-east-1:123456789012:function:mock",
+      "Retry": [
+        {
+          "BackoffRate": 2,
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3
+        }
+      ],
+      "Type": "Task"
+    },
+    "FolderExecutionFailed": {
+      "Cause": "folder execution failed after failure manifest persistence",
+      "Error": "FolderExecutionFailed",
+      "Type": "Fail"
+    },
+    "PrepareAndSubmit": {
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "CredentialExpiredError"
+          ],
+          "Next": "RouteProbeOutcome",
+          "ResultPath": "$.error"
+        },
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "WriteFailureManifest",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "ProbeDone",
+      "Resource": "arn:aws:lambda:us-east-1:123456789012:function:mock",
+      "ResultPath": "$.result",
+      "Type": "Task"
+    },
+    "ProbeDone": {
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "CredentialExpiredError"
+          ],
+          "Next": "RouteProbeOutcome",
+          "ResultPath": "$.error"
+        },
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "WriteFailureManifest",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "RouteProbeOutcome",
+      "Resource": "arn:aws:lambda:us-east-1:123456789012:function:mock",
+      "ResultPath": "$.probe",
+      "Type": "Task"
+    },
+    "RouteProbeOutcome": {
+      "Choices": [
+        {
+          "And": [
+            {
+              "IsPresent": true,
+              "Variable": "$.error.Error"
+            },
+            {
+              "StringEquals": "CredentialExpiredError",
+              "Variable": "$.error.Error"
+            },
+            {
+              "IsPresent": true,
+              "Variable": "$.attempt"
+            },
+            {
+              "NumericLessThan": 1,
+              "Variable": "$.attempt"
+            }
+          ],
+          "Next": "BookkeepCredentialRetry"
+        },
+        {
+          "And": [
+            {
+              "IsPresent": true,
+              "Variable": "$.error.Error"
+            }
+          ],
+          "Next": "WriteFailureManifest"
+        },
+        {
+          "And": [
+            {
+              "IsPresent": true,
+              "Variable": "$.probe.probe_status"
+            },
+            {
+              "StringEquals": "pending",
+              "Variable": "$.probe.probe_status"
+            }
+          ],
+          "Next": "WaitBeforeProbe"
+        },
+        {
+          "And": [
+            {
+              "IsPresent": true,
+              "Variable": "$.probe.succeeded"
+            },
+            {
+              "BooleanEquals": false,
+              "Variable": "$.probe.succeeded"
+            },
+            {
+              "IsPresent": true,
+              "Variable": "$.probe.credential_expired"
+            },
+            {
+              "BooleanEquals": true,
+              "Variable": "$.probe.credential_expired"
+            },
+            {
+              "IsPresent": true,
+              "Variable": "$.probe.attempt"
+            },
+            {
+              "NumericLessThan": 1,
+              "Variable": "$.probe.attempt"
+            }
+          ],
+          "Next": "BookkeepCredentialRetry"
+        },
+        {
+          "And": [
+            {
+              "IsPresent": true,
+              "Variable": "$.probe.probe_status"
+            },
+            {
+              "StringEquals": "complete",
+              "Variable": "$.probe.probe_status"
+            }
+          ],
+          "Next": "Collect"
+        },
+        {
+          "And": [
+            {
+              "IsPresent": true,
+              "Variable": "$.probe.probe_status"
+            },
+            {
+              "StringEquals": "terminal",
+              "Variable": "$.probe.probe_status"
+            }
+          ],
+          "Next": "Collect"
+        },
+        {
+          "And": [
+            {
+              "IsPresent": true,
+              "Variable": "$.probe.probe_status"
+            },
+            {
+              "StringEquals": "expired",
+              "Variable": "$.probe.probe_status"
+            }
+          ],
+          "Next": "WriteFailureManifest"
+        }
+      ],
+      "Default": "WriteFailureManifest",
+      "Type": "Choice"
+    },
+    "ValidateAction": {
+      "Choices": [
+        {
+          "Next": "PrepareAndSubmit",
+          "StringEquals": "plan",
+          "Variable": "$.action"
+        },
+        {
+          "Next": "PrepareAndSubmit",
+          "StringEquals": "plan_destroy",
+          "Variable": "$.action"
+        },
+        {
+          "Next": "PrepareAndSubmit",
+          "StringEquals": "drift",
+          "Variable": "$.action"
+        },
+        {
+          "Next": "PrepareAndSubmit",
+          "StringEquals": "report",
+          "Variable": "$.action"
+        }
+      ],
+      "Default": "WriteFailureManifest",
+      "Type": "Choice"
+    },
+    "WaitBeforeProbe": {
+      "Next": "ProbeDone",
+      "Seconds": 30,
+      "Type": "Wait"
+    },
+    "WriteFailureManifest": {
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "WriteFailureManifestFailed",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "FolderExecutionFailed",
+      "Parameters": {
+        "event.$": "$",
+        "execution_started_at.$": "$$.Execution.StartTime"
+      },
+      "Resource": "arn:aws:lambda:us-east-1:123456789012:function:mock",
+      "ResultPath": null,
+      "Retry": [
+        {
+          "BackoffRate": 2,
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3
+        }
+      ],
+      "Type": "Task"
+    },
+    "WriteFailureManifestFailed": {
+      "Cause": "failure manifest writer exhausted retries",
+      "Error": "WriteFailureManifestFailed",
+      "Type": "Fail"
+    }
+  }
+}

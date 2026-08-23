@@ -1,0 +1,3 @@
+steps:
+  - folder: terraform/eu-west-1/01-vpc
+  - folder: terraform/eu-west-1/02-ec2

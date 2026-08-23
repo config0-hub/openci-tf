@@ -1,0 +1,54 @@
+# Dockerfile for running unit tests in a portable container.
+# Uses the same Python 3.14 base as the production Lambda image.
+FROM public.ecr.aws/lambda/python:3.14
+
+# Install test dependencies
+# EXTRA_CA_CERT defaults to an empty tracked placeholder. Developers behind a TLS
+# interception proxy can override it with a local, ignored certificate file.
+ARG EXTRA_CA_CERT=docker/certs/extra-ca.crt.optional
+COPY ${EXTRA_CA_CERT} /tmp/extra-ca.crt
+RUN if [ -s /tmp/extra-ca.crt ]; then cp /tmp/extra-ca.crt /etc/pki/ca-trust/source/anchors/extra-ca.crt && update-ca-trust extract; fi
+ENV REQUESTS_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt \
+    PIP_CERT=/etc/pki/tls/certs/ca-bundle.crt
+COPY requirements.txt ./
+RUN python3 -m pip install -r requirements.txt --target ${LAMBDA_TASK_ROOT}
+RUN python3 -m pip install pytest
+
+# Policy-evaluator and Terraform compatibility tests execute the real Terraform CLI.
+ARG TERRAFORM_VERSION=1.12.2
+ARG JUST_VERSION=1.51.0
+ARG TARGETARCH
+RUN dnf install -y git jq tar unzip && dnf clean all \
+    && curl --fail --show-error --silent --location \
+      "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${TARGETARCH}.zip" \
+      --output /tmp/terraform.zip \
+    && unzip /tmp/terraform.zip -d /usr/local/bin \
+    && rm /tmp/terraform.zip \
+    && curl --fail --show-error --silent --location \
+      "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-$(uname -m)-unknown-linux-musl.tar.gz" \
+      --output /tmp/just.tar.gz \
+    && tar -xzf /tmp/just.tar.gz -C /usr/local/bin just \
+    && rm /tmp/just.tar.gz \
+    && terraform version \
+    && just --version
+
+# Copy source, tests, and the tracked repository contracts inspected by tests.
+# .dockerignore excludes local Terraform state/configuration and credentials.
+COPY src/ ${LAMBDA_TASK_ROOT}/src/
+COPY tests/ ${LAMBDA_TASK_ROOT}/tests/
+COPY docs/ ${LAMBDA_TASK_ROOT}/docs/
+COPY scripts/ ${LAMBDA_TASK_ROOT}/scripts/
+COPY infra/ ${LAMBDA_TASK_ROOT}/infra/
+COPY justfile ${LAMBDA_TASK_ROOT}/justfile
+RUN terraform -chdir=${LAMBDA_TASK_ROOT}/infra/modules/hub-setup init -backend=false -input=false \
+    && terraform -chdir=${LAMBDA_TASK_ROOT}/infra/modules/executor-poweruser init -backend=false -input=false
+# Staged by the test recipe from the read-only engine repository; contract tests
+# import this exact implementation rather than reproducing its validation rules.
+COPY docker/engine_ref/payload.py ${LAMBDA_TASK_ROOT}/engine_payload.py
+# Installer script exercised by tests/unit/test_install_ssm_env.py via _REPO_ROOT/scripts/.
+COPY scripts/install_ssm_env.sh ${LAMBDA_TASK_ROOT}/scripts/install_ssm_env.sh
+
+WORKDIR ${LAMBDA_TASK_ROOT}
+
+ENTRYPOINT ["python3", "-m", "pytest"]
+CMD ["tests/", "-v"]

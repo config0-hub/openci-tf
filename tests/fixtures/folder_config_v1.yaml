@@ -1,0 +1,6 @@
+version: 1
+
+apply: true
+destroy: false
+timeout: 600
+tf_runtime: "tofu:1.8"

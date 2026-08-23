@@ -1,0 +1,43 @@
+.reference-list { max-width: 72rem; margin: 0; padding: 0; list-style: none; border-top: 2px solid var(--ink); }
+.reference-row { display: grid; grid-template-columns: 2.5rem minmax(13rem, 0.7fr) minmax(18rem, 1.3fr); grid-template-areas: "number subject facts"; gap: 1rem; align-items: start; min-height: 7.5rem; padding: 1.1rem 1rem 1.1rem 0.8rem; border-bottom: 1px solid var(--ink); }
+.reference-row > .row-number { grid-area: number; }
+.reference-subject { grid-area: subject; display: grid; gap: 0.35rem; min-width: 0; }
+.reference-subject strong { overflow-wrap: anywhere; font-size: var(--type-large); line-height: 1.05; letter-spacing: 0.04em; text-transform: uppercase; }
+.reference-subject span { font-weight: 700; letter-spacing: 0.04em; }
+.reference-facts { grid-area: facts; display: grid; gap: 0.75rem; min-width: 0; margin: 0; }
+.reference-facts > div { display: grid; grid-template-columns: auto minmax(2rem, 1fr) minmax(8rem, auto); align-items: baseline; gap: 0.65rem; min-width: 0; }
+.reference-facts dt { font-weight: 900; letter-spacing: 0.06em; }
+.reference-facts i { min-width: 1rem; border-bottom: 2px dotted var(--ink); transform-origin: left; animation: leader-draw var(--motion-clock) var(--motion-ease-draw) both; }
+.reference-facts dd { min-width: 0; max-width: 42rem; margin: 0; overflow-wrap: anywhere; text-align: right; font-variant-numeric: tabular-nums; }
+.boolean-state { display: inline-flex; align-items: center; justify-content: flex-end; gap: 0.45rem; font-weight: 900; letter-spacing: 0.04em; }
+.boolean-state b { display: inline-grid; width: 1.15rem; height: 1.15rem; place-items: center; border: 1px solid currentColor; line-height: 1; }
+.reference-facts .boolean-state { animation: stamp-in var(--motion-clock) var(--motion-ease-stamp) var(--motion-clock) both; }
+.boolean-state[data-enabled] { color: var(--complete); }
+.lock-row time { font-weight: 900; font-variant-numeric: tabular-nums; letter-spacing: 0.07em; }
+.gate-ledger { max-width: 72rem; }
+.gate-memory { display: grid; grid-template-columns: minmax(14rem, 1fr) auto; align-items: center; gap: 2rem; margin-bottom: 1.2rem; padding: 1.25rem; }
+.gate-memory > div:first-child { display: grid; gap: 0.4rem; }
+.gate-memory > div:first-child span { font-weight: 700; letter-spacing: 0.06em; }
+.gate-memory > div:first-child strong { font-size: var(--type-large); overflow-wrap: anywhere; }
+.gate-section-heading { display: flex; justify-content: space-between; gap: 2rem; margin: 3rem 0 1rem; padding-bottom: 0.65rem; border-bottom: 2px solid var(--ink); letter-spacing: 0.06em; }
+.folder-gate dl { display: grid; gap: 0.65rem; min-width: 19rem; margin: 0; }
+.folder-gate dl > div { display: grid; grid-template-columns: auto minmax(10rem, 1fr); gap: 1.5rem; }
+.folder-gate dt { font-weight: 900; }
+.folder-gate dd { min-width: 0; margin: 0; overflow-wrap: anywhere; text-align: right; font-variant-numeric: tabular-nums; }
+.folder-gate time { font-variant-numeric: tabular-nums; }
+.gates-page .fixed-measure { margin-top: 2rem; padding-block: 0.8rem; border-block: 1px solid var(--ink); font-weight: 700; }
+
+@media (max-width: 760px) {
+  .reference-row { grid-template-columns: 2rem minmax(0, 1fr); grid-template-areas: "number subject" ". facts"; min-height: 0; padding-right: 0.4rem; }
+  .reference-facts { margin-top: 0.6rem; }
+  .reference-facts > div { grid-template-columns: auto minmax(1rem, 1fr); grid-template-areas: "term leader" "value value"; }
+  .reference-facts dt { grid-area: term; }
+  .reference-facts i { grid-area: leader; }
+  .reference-facts dd { grid-area: value; text-align: left; }
+  .boolean-state { justify-content: flex-start; }
+  .gate-memory { grid-template-columns: 1fr; gap: 1rem; }
+  .gate-memory > .boolean-state { justify-content: flex-start; }
+  .gate-section-heading { display: grid; gap: 0.35rem; }
+  .folder-gate dl { min-width: 0; }
+  .folder-gate dl > div { grid-template-columns: auto 1fr; }
+}

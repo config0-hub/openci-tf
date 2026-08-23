@@ -1,0 +1,53 @@
+.new-run-page { max-width: 84rem; }
+.procedure-form { max-width: 72rem; }
+.form-instruction { display: flex; justify-content: space-between; gap: 2rem; margin-bottom: 3rem; padding: 1.05rem 1.25rem; letter-spacing: 0.06em; }
+.form-instruction span { font-weight: 900; text-align: right; }
+.form-section { margin-top: 3rem; padding-top: 0.8rem; border-top: 2px solid var(--ink); }
+.form-section > h2 { margin-bottom: 1.2rem; }
+.field-grid { display: grid; grid-template-columns: minmax(10rem, 0.7fr) minmax(20rem, 1.3fr); gap: 1rem; }
+.field-grid label, .folder-list-field, .idempotency-field { display: grid; gap: 0.45rem; font-weight: 900; letter-spacing: 0.05em; }
+.field-grid input, .idempotency-field input { width: 100%; }
+input[aria-invalid="true"], textarea[aria-invalid="true"] { border: 2px solid var(--warning); }
+.procedure-fieldset { min-width: 0; margin: 0 0 1.3rem; padding: 0; border: 0; }
+.procedure-fieldset legend { margin-bottom: 0.55rem; padding: 0; font-weight: 900; letter-spacing: 0.06em; }
+.choice-bank { display: grid; grid-template-columns: repeat(2, minmax(8rem, 1fr)); max-width: 38rem; border: 1px solid var(--ink); }
+.safe-verb-bank { grid-template-columns: repeat(3, minmax(7rem, 1fr)); }
+.choice-bank label { position: relative; min-width: 0; cursor: pointer; }
+.choice-bank label + label { border-left: 1px solid var(--ink); }
+.choice-bank input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.choice-bank span { min-height: 3rem; display: flex; align-items: center; justify-content: center; gap: 0.55rem; padding: 0.6rem; font-weight: 900; letter-spacing: 0.07em; }
+.choice-bank b { display: inline-grid; width: 1.15rem; height: 1.15rem; place-items: center; border: 1px solid var(--ink); line-height: 1; }
+.choice-bank input:checked + span { color: var(--paper); background: var(--ink); }
+.choice-bank label:hover span { color: var(--ink); background: var(--caution-fill); }
+.choice-bank label:has(input:focus-visible) { z-index: 1; outline: 2px solid var(--ink); outline-offset: 3px; }
+.folder-list-field { margin-top: 1.3rem; }
+.folder-list-field textarea { width: 100%; min-height: 9rem; resize: vertical; line-height: 1.45; }
+.idempotency-field { max-width: 38rem; }
+.registry-target { max-width: 38rem; display: flex; justify-content: space-between; gap: 2rem; margin-top: 1rem; padding: 0.75rem; border-block: 1px dotted var(--ink); letter-spacing: 0.06em; }
+.validation-checklist { margin-top: 3rem; padding-top: 0.8rem; border-top: 3px double var(--ink); }
+.validation-checklist h2 { margin-bottom: 1rem; }
+.validation-checklist ol { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--ink); }
+.validation-checklist li { display: grid; grid-template-columns: 1.5rem auto minmax(2rem, 1fr) auto; align-items: center; gap: 0.7rem; min-height: 2.9rem; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--ink); }
+.validation-checklist li > span { display: inline-grid; width: 1.15rem; height: 1.15rem; place-items: center; border: 1px solid currentColor; font-weight: 900; line-height: 1; }
+.validation-checklist li i { border-bottom: 2px dotted var(--ink); transform-origin: left; animation: leader-draw var(--motion-clock) var(--motion-ease-draw) both; }
+.validation-checklist li > b { min-width: 3.5rem; text-align: right; letter-spacing: 0.05em; animation: stamp-in var(--motion-clock) var(--motion-ease-stamp) var(--motion-clock) both; }
+.validation-checklist li[data-valid] { color: var(--complete); }
+.form-abnormal { margin-top: 2rem; }
+.form-submit-row { display: flex; align-items: center; justify-content: space-between; gap: 2rem; margin-top: 2rem; padding-top: 1rem; border-top: 2px solid var(--ink); font-weight: 900; letter-spacing: 0.06em; }
+.form-submit-row button:disabled { cursor: wait; opacity: 0.72; }
+.form-submit-row button:disabled:hover { color: var(--paper); background: var(--ink); }
+
+@media (max-width: 760px) {
+  .form-instruction { display: grid; gap: 0.45rem; }
+  .form-instruction span { text-align: left; }
+  .field-grid { grid-template-columns: 1fr; }
+  .safe-verb-bank { grid-template-columns: 1fr; }
+  .choice-bank { max-width: none; }
+  .safe-verb-bank label + label { border-top: 1px solid var(--ink); border-left: 0; }
+  .validation-checklist li { grid-template-columns: 1.5rem minmax(0, 1fr) auto; grid-template-areas: "mark label state"; }
+  .validation-checklist li > span { grid-area: mark; }
+  .validation-checklist li > strong { grid-area: label; }
+  .validation-checklist li > i { display: none; }
+  .validation-checklist li > b { grid-area: state; }
+  .form-submit-row { align-items: stretch; flex-direction: column; }
+}

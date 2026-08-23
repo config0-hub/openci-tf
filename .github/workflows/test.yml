@@ -1,0 +1,25 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tracked engine contract reference
+        run: |
+          test -f docker/engine_ref/payload.py
+
+      - name: Build test image
+        run: |
+          docker build -f docker/Dockerfile.test -t openci-tf-test .
+
+      - name: Run unit tests
+        run: |
+          docker run --rm openci-tf-test tests/ -v --tb=short

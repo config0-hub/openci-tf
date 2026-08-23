@@ -1,0 +1,22 @@
+variable "project_name" {
+  description = "Project name prefix for all resources"
+  type        = string
+  default     = "openci-tf"
+}
+
+variable "aws_region" {
+  description = "AWS region"
+  type        = string
+}
+
+variable "hub_lambda_exec_role_arn" {
+  description = "Hub account hub-lambda-exec role ARN (empty = same-account data lookup)"
+  type        = string
+  default     = ""
+}
+
+variable "state_bucket_arn" {
+  description = "Target account Terraform state bucket ARN (empty = deterministic same-account name)"
+  type        = string
+  default     = ""
+}

@@ -1,0 +1,932 @@
+"""Apply/destroy grammar, intent gates, and script generation tests."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+
+import pytest
+
+from src.core.models import FolderConfig, MutationVerbConfig, RepoSettings
+from src.core.errors import ConfigValidationError
+from src.domain.cmd_builder.cmd_resolver import resolve_commands
+from src.domain.cmd_builder.script_generator import ScriptParams, render
+from src.domain.command.grammar import parse_command
+from src.domain.config.folder_config import (
+    compact_folder_config_for_outer_state,
+    parse_folder_config,
+)
+from src.domain.config.pipeline import Pipeline, Step
+from src.domain.intent.gates import evaluate_confirm_gates, evaluate_intent_gates
+from src.domain.intent.models import FolderPlanPin, IntentGateFailure, IntentRecord
+from src.domain.intent.token import mint_token
+from src.services.intent.confirm import confirm_intent
+from src.services.intent.create import IntentCreationError, create_intent
+from src.services.intent.handler import confirm_handler, create_handler
+from src.services.intent.registry import mark_intent_used
+from src.platform.aws.run_registry import RunRegistryError
+from src.services.render.handler import _pipeline_apply_footer
+
+
+@pytest.mark.parametrize(
+    "text,action,folders,destroy,token",
+    [
+        ("tf plan --destroy infra/vpc", "plan", ["infra/vpc"], True, None),
+        (
+            "tf apply infra/vpc,infra/rds",
+            "apply",
+            ["infra/vpc", "infra/rds"],
+            False,
+            None,
+        ),
+        ("tf apply confirm abc123", "apply", [], False, "abc123"),
+        ("tf destroy infra/vpc", "destroy", ["infra/vpc"], False, None),
+        ("tf destroy confirm deadbeef", "destroy", [], False, "deadbeef"),
+    ],
+)
+def test_apply_destroy_grammar(text, action, folders, destroy, token):
+    cmd = parse_command(text)
+    assert cmd.action == action
+    assert cmd.folders == folders
+    assert cmd.destroy_flag is destroy
+    assert cmd.confirm_token == token
+
+
+def test_folder_config_apply_destroy_default_false():
+    config = parse_folder_config("account_alias: target\n")
+    assert config.apply.allow is False
+    assert config.destroy.allow is False
+
+
+def test_folder_config_apply_destroy_explicit_true_rejected():
+    with pytest.raises(ConfigValidationError, match="mapping with allow/grace_seconds"):
+        parse_folder_config("account_alias: target\napply: true\ndestroy: true\n")
+
+
+def test_folder_config_block_syntax_with_grace():
+    config = parse_folder_config(
+        "account_alias: target\n"
+        "apply:\n  allow: true\n  grace_seconds: 30\n"
+        "destroy:\n  allow: true\n"
+    )
+    assert config.apply.allow is True
+    assert config.apply.grace_seconds == 30
+    assert config.destroy.allow is True
+    assert config.destroy.grace_seconds == 60
+
+
+def test_compact_enabled_mutation_blocks_retain_default_grace_seconds():
+    config = compact_folder_config_for_outer_state(
+        {
+            "account_alias": "target",
+            "apply": {"allow": True, "grace_seconds": 15},
+            "destroy": {"allow": True, "grace_seconds": 60},
+        }
+    )
+
+    assert config["apply"] == {"allow": True, "grace_seconds": 15}
+    assert config["destroy"] == {"allow": True, "grace_seconds": 60}
+    assert FolderConfig(**config).resolved_grace_seconds("destroy") == 60
+
+
+def test_apply_and_destroy_scripts_verify_sha256_and_apply_plan():
+    for verb, artifact in (
+        ("apply", "plan.tfplan"),
+        ("destroy", "destroy.plan.tfplan"),
+    ):
+        script = render(ScriptParams(verb=verb, execution_target="lambda"))
+        assert "download_and_verify_pinned_plan" in script
+        assert "OPENCI_TF_PINNED_PLAN_SHA256" in script
+        assert f'"{artifact}"' in script
+        assert "tofu show" in script
+        assert script.index("tofu show") < script.index("tofu apply")
+        assert "tofu apply -no-color" in script
+
+
+def test_plan_destroy_script_writes_destroy_plan_artifacts():
+    script = render(ScriptParams(verb="plan_destroy", execution_target="lambda"))
+    assert "destroy.plan.tfplan" in script
+    assert "upload_destroy_plan_binary_artifact" in script
+    assert "-destroy -out=" in script
+
+
+def test_collect_accepts_destroy_plan_metadata_key_for_plan_destroy():
+    from src.domain.engine.artifact_paths import build_folder_artifact_keys
+    from src.services.run_folder.collect import _expected_plan_metadata_key
+
+    keys = build_folder_artifact_keys(
+        repo_name="org/repo", run_id="run-1", folder_path="infra/a"
+    )
+
+    assert _expected_plan_metadata_key("plan", keys) == keys.plan_metadata
+    assert _expected_plan_metadata_key("report", keys) == keys.plan_metadata
+    assert _expected_plan_metadata_key("plan_destroy", keys) == keys.destroy_plan_metadata
+
+
+def test_cross_application_refusal_in_pinned_plan_helper():
+    script = render(ScriptParams(verb="apply", execution_target="lambda"))
+    assert "plan.tfplan" in script
+    assert "destroy.plan.tfplan" in script
+    assert "unsupported pinned plan artifact" in script
+
+
+def test_intent_gate_apply_disabled_for_account(monkeypatch):
+    monkeypatch.setattr(
+        "src.domain.intent.gates.load_account_alias",
+        lambda _: SimpleNamespace(account_id="123456789012", enable_apply=False),
+    )
+    result = evaluate_intent_gates(
+        action="apply",
+        folders=["infra/vpc"],
+        folder_configs={
+            "infra/vpc": FolderConfig(
+                account_alias="target", apply=MutationVerbConfig(allow=True)
+            )
+        },
+        settings=RepoSettings(
+            trigger_id="t", repo_name="o/r", git_url="https://github.com/o/r"
+        ),
+        pr_number=1,
+        commit_hash="a" * 40,
+    )
+    assert result.ok is False
+    assert (
+        result.failures[0].message
+        == "apply/destroy not enabled for account target (123456789012)"
+    )
+
+
+def test_intent_gate_apply_enabled_account_passes_folder_gate(monkeypatch):
+    monkeypatch.setattr(
+        "src.domain.intent.gates.load_account_alias",
+        lambda alias: SimpleNamespace(
+            account_id="123456789012" if alias == "target" else "210987654321",
+            role_name="openci-tf-executor-readonly",
+            poweruser_role_name="openci-tf-executor-poweruser",
+            external_id="openci-tf-0123456789abcdef",
+            max_ttl=3600,
+            enable_apply=True,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.domain.intent.gates.find_newest_fresh_plan_run",
+        lambda **_kwargs: {
+            "run_id": "plan-run",
+            "plan_sha256": "b" * 64,
+            "plan_artifact_name": "plan.tfplan",
+            "tf_runtime": "tofu:1.8.0",
+        },
+    )
+    result = evaluate_intent_gates(
+        action="apply",
+        folders=["infra/vpc"],
+        folder_configs={
+            "infra/vpc": FolderConfig(
+                account_alias="target", apply=MutationVerbConfig(allow=True)
+            )
+        },
+        settings=RepoSettings(
+            trigger_id="t", repo_name="o/r", git_url="https://github.com/o/r"
+        ),
+        pr_number=1,
+        commit_hash="a" * 40,
+    )
+    assert result.ok is True
+
+
+def test_intent_gate_mixed_accounts_collects_all_enable_apply_failures(monkeypatch):
+    def _load(alias: str):
+        accounts = {
+            "prod": SimpleNamespace(account_id="123456789012", enable_apply=False),
+            "staging": SimpleNamespace(account_id="210987654321", enable_apply=False),
+        }
+        return accounts[alias]
+
+    monkeypatch.setattr("src.domain.intent.gates.load_account_alias", _load)
+    result = evaluate_intent_gates(
+        action="apply",
+        folders=["infra/vpc", "infra/rds"],
+        folder_configs={
+            "infra/vpc": FolderConfig(
+                account_alias="prod", apply=MutationVerbConfig(allow=True)
+            ),
+            "infra/rds": FolderConfig(
+                account_alias="staging", apply=MutationVerbConfig(allow=True)
+            ),
+        },
+        settings=RepoSettings(
+            trigger_id="t", repo_name="o/r", git_url="https://github.com/o/r"
+        ),
+        pr_number=1,
+        commit_hash="a" * 40,
+    )
+    assert result.ok is False
+    assert len(result.failures) == 2
+    messages = {failure.message for failure in result.failures}
+    assert messages == {
+        "apply/destroy not enabled for account prod (123456789012)",
+        "apply/destroy not enabled for account staging (210987654321)",
+    }
+
+
+def test_intent_gate_folder_not_enabled(monkeypatch):
+    monkeypatch.setattr(
+        "src.domain.intent.gates.load_account_alias",
+        lambda _: SimpleNamespace(account_id="123456789012", enable_apply=True),
+    )
+    result = evaluate_intent_gates(
+        action="apply",
+        folders=["infra/vpc"],
+        folder_configs={"infra/vpc": FolderConfig(account_alias="target")},
+        settings=RepoSettings(
+            trigger_id="t", repo_name="o/r", git_url="https://github.com/o/r"
+        ),
+        pr_number=1,
+        commit_hash="a" * 40,
+    )
+    assert result.ok is False
+    assert "apply.allow: true" in result.failures[0].message
+
+
+def _intent_gate_settings() -> RepoSettings:
+    return RepoSettings(
+        trigger_id="t",
+        repo_name="o/r",
+        git_url="https://github.com/o/r",
+        ssm_openci_tf_github_token="/openci-tf/clone-token/test",
+    )
+
+
+def _phase4_pipeline() -> Pipeline:
+    return Pipeline(
+        name="data/primary",
+        steps=(
+            Step(("infra/vpc",)),
+            Step(("infra/rds", "infra/ec2")),
+            Step(("infra/db",)),
+        ),
+    )
+
+
+def _phase4_configs() -> dict[str, FolderConfig]:
+    return {
+        folder: FolderConfig(account_alias="target", apply=MutationVerbConfig(allow=True))
+        for folder in ["infra/vpc", "infra/rds", "infra/ec2", "infra/db"]
+    }
+
+
+def _phase4_record(folders: list[str]) -> IntentRecord:
+    return IntentRecord(
+        token="abc123",
+        trigger_id="t",
+        pr_number=1,
+        action="apply",
+        source_run_id="plan-run",
+        folders=tuple(folders),
+        commit_hash="a" * 40,
+        folder_pins=(),
+        expires_at=9999999999,
+    )
+
+
+def test_apply_pipeline_intent_checks_all_pipeline_folders_before_step(monkeypatch):
+    calls: list[list[str]] = []
+
+    def _fake_gates(**kwargs):
+        folders = list(kwargs["folders"])
+        calls.append(folders)
+        if "infra/db" in folders:
+            return SimpleNamespace(
+                ok=False,
+                failures=[IntentGateFailure("db blocks apply", folder="infra/db")],
+                record=None,
+            )
+        return SimpleNamespace(ok=True, failures=[], record=_phase4_record(folders))
+
+    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
+    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create._pipeline_for_intent",
+        lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "h" * 64),
+    )
+    monkeypatch.setattr("src.services.intent.create.evaluate_intent_gates", _fake_gates)
+    monkeypatch.setattr("src.services.intent.create.put_intent", lambda _record: pytest.fail("blocked pipeline must not store an intent"))
+
+    failure, record = create_intent(
+        action="apply",
+        folders=[],
+        trigger_id="t",
+        pr_number=1,
+        commit_hash="a" * 40,
+        pipeline="data/primary",
+        pipeline_step=1,
+    )
+
+    assert record is None
+    assert failure == IntentGateFailure("db blocks apply", folder="infra/db")
+    assert calls == [["infra/vpc", "infra/rds", "infra/ec2", "infra/db"]]
+
+
+def test_apply_pipeline_intent_scopes_record_to_requested_step(monkeypatch):
+    stored: list[IntentRecord] = []
+
+    def _fake_gates(**kwargs):
+        folders = list(kwargs["folders"])
+        return SimpleNamespace(ok=True, failures=[], record=_phase4_record(folders))
+
+    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
+    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create._pipeline_for_intent",
+        lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "c" * 64),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.find_latest_successful_pipeline_apply",
+        lambda **_kwargs: {"pipeline_sha256": "c" * 64},
+    )
+    monkeypatch.setattr("src.services.intent.create.evaluate_intent_gates", _fake_gates)
+    monkeypatch.setattr("src.services.intent.create.put_intent", lambda record: stored.append(record))
+
+    failure, record = create_intent(
+        action="apply",
+        folders=[],
+        trigger_id="t",
+        pr_number=1,
+        commit_hash="a" * 40,
+        pipeline="data/primary",
+        pipeline_step=2,
+    )
+
+    assert failure is None
+    assert record is not None
+    assert record["folders"] == ["infra/rds", "infra/ec2"]
+    assert record["pipeline"] == "data/primary"
+    assert record["step_index"] == 2
+    assert record["step_count"] == 3
+    assert record["pipeline_sha256"] == "c" * 64
+    assert stored[0].folders == ("infra/rds", "infra/ec2")
+
+
+def test_apply_pipeline_intent_rejects_pipeline_hash_mismatch(monkeypatch):
+    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
+    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create._pipeline_for_intent",
+        lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "new"),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.find_latest_successful_pipeline_apply",
+        lambda **_kwargs: {"pipeline_sha256": "old"},
+    )
+    monkeypatch.setattr("src.services.intent.create.evaluate_intent_gates", lambda **_kwargs: pytest.fail("hash mismatch must reject before gates"))
+
+    failure, record = create_intent(
+        action="apply",
+        folders=[],
+        trigger_id="t",
+        pr_number=1,
+        commit_hash="a" * 40,
+        pipeline="data/primary",
+        pipeline_step=2,
+    )
+
+    assert record is None
+    assert failure is not None
+    assert failure.message == "pipeline data/primary changed since step 1 was applied; restart from step 1"
+
+
+def test_apply_pipeline_intent_rejects_missing_prior_step_anchor(monkeypatch):
+    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
+    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create._pipeline_for_intent",
+        lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "h" * 64),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.find_latest_successful_pipeline_apply",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr("src.services.intent.create.evaluate_intent_gates", lambda **_kwargs: pytest.fail("missing anchor must reject before gates"))
+
+    failure, record = create_intent(
+        action="apply",
+        folders=[],
+        trigger_id="t",
+        pr_number=1,
+        commit_hash="a" * 40,
+        pipeline="data/primary",
+        pipeline_step=3,
+    )
+
+    assert record is None
+    assert failure is not None
+    assert failure.message == "pipeline data/primary step 3 requires a completed apply of step 2 first"
+
+
+def test_apply_pipeline_intent_propagates_prior_step_registry_errors(monkeypatch):
+    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
+    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create._pipeline_for_intent",
+        lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "h" * 64),
+    )
+
+    def _fail_registry(**_kwargs):
+        raise RunRegistryError("registry query failed")
+
+    monkeypatch.setattr("src.services.intent.create.find_latest_successful_pipeline_apply", _fail_registry)
+
+    with pytest.raises(IntentCreationError, match="registry query failed"):
+        create_intent(
+            action="apply",
+            folders=[],
+            trigger_id="t",
+            pr_number=1,
+            commit_hash="a" * 40,
+            pipeline="data/primary",
+            pipeline_step=2,
+        )
+
+
+def test_apply_pipeline_intent_accepts_same_hash_prior_step_from_previous_day(monkeypatch):
+    stored: list[IntentRecord] = []
+
+    def _fake_gates(**kwargs):
+        folders = list(kwargs["folders"])
+        return SimpleNamespace(ok=True, failures=[], record=_phase4_record(folders))
+
+    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
+    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create._pipeline_for_intent",
+        lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "w" * 64),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.find_latest_successful_pipeline_apply",
+        lambda **_kwargs: {
+            "pipeline_sha256": "w" * 64,
+            "pipeline_apply_completed_at": 1_700_000_000 - 86_400,
+        },
+    )
+    monkeypatch.setattr("src.services.intent.create.evaluate_intent_gates", _fake_gates)
+    monkeypatch.setattr("src.services.intent.create.put_intent", lambda record: stored.append(record))
+
+    failure, record = create_intent(
+        action="apply",
+        folders=[],
+        trigger_id="t",
+        pr_number=1,
+        commit_hash="a" * 40,
+        pipeline="data/primary",
+        pipeline_step=2,
+    )
+
+    assert failure is None
+    assert record is not None
+    assert stored[0].step_index == 2
+
+
+def test_apply_pipeline_intent_accepts_whitespace_only_pipeline_change(monkeypatch):
+    stored: list[IntentRecord] = []
+
+    def _fake_gates(**kwargs):
+        folders = list(kwargs["folders"])
+        return SimpleNamespace(ok=True, failures=[], record=_phase4_record(folders))
+
+    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
+    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create._pipeline_for_intent",
+        lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "canonical"),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.find_latest_successful_pipeline_apply",
+        lambda **_kwargs: {"pipeline_sha256": "canonical"},
+    )
+    monkeypatch.setattr("src.services.intent.create.evaluate_intent_gates", _fake_gates)
+    monkeypatch.setattr("src.services.intent.create.put_intent", lambda record: stored.append(record))
+
+    failure, record = create_intent(
+        action="apply",
+        folders=[],
+        trigger_id="t",
+        pr_number=1,
+        commit_hash="a" * 40,
+        pipeline="data/primary",
+        pipeline_step=2,
+    )
+
+    assert failure is None
+    assert record is not None
+    assert stored[0].pipeline_sha256 == "canonical"
+
+
+def test_apply_pipeline_intent_rejects_step_out_of_range(monkeypatch):
+    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
+    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create._pipeline_for_intent",
+        lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "h" * 64),
+    )
+
+    failure, record = create_intent(
+        action="apply",
+        folders=[],
+        trigger_id="t",
+        pr_number=1,
+        commit_hash="a" * 40,
+        pipeline="data/primary",
+        pipeline_step=4,
+    )
+
+    assert record is None
+    assert failure is not None
+    assert "step_count=3" in failure.message
+
+
+def test_pipeline_apply_footer_renders_next_step_and_completion():
+    event = {
+        "webhook_info": {
+            "pipeline": "data/primary",
+            "pipeline_step_index": 1,
+            "pipeline_step_count": 2,
+        }
+    }
+    outcomes = [{"folder": "infra/vpc", "status": "succeeded", "succeeded": True}]
+
+    assert _pipeline_apply_footer(event, "apply", outcomes, []) == "next: tf apply pipeline data/primary step 2"
+
+    complete_event = {
+        "webhook_info": {
+            "pipeline": "data/primary",
+            "pipeline_step_index": 2,
+            "pipeline_step_count": 2,
+        }
+    }
+    assert _pipeline_apply_footer(complete_event, "apply", outcomes, []) == "pipeline data/primary complete (2 steps)"
+    assert _pipeline_apply_footer(event, "apply", [{"status": "failed"}], []) is None
+
+
+@patch("src.domain.accounts.aliases.get_account_alias")
+def test_intent_gate_unknown_account_alias_refusal(get_account_alias):
+    get_account_alias.side_effect = ValueError("Unknown account alias: 'missing'")
+    result = evaluate_intent_gates(
+        action="apply",
+        folders=["infra/vpc"],
+        folder_configs={
+            "infra/vpc": FolderConfig(
+                account_alias="missing", apply=MutationVerbConfig(allow=True)
+            )
+        },
+        settings=_intent_gate_settings(),
+        pr_number=1,
+        commit_hash="a" * 40,
+    )
+    assert result.ok is False
+    assert len(result.failures) == 1
+    assert result.failures[0].folder == "infra/vpc"
+    assert result.failures[0].message == (
+        "account alias 'missing' is invalid or not registered: Unknown account alias: 'missing'"
+    )
+
+
+@patch("src.domain.accounts.aliases.get_account_alias")
+def test_intent_gate_malformed_account_alias_refusal(get_account_alias):
+    get_account_alias.return_value = {"account_id": "invalid", "role_name": "bad role!"}
+    result = evaluate_intent_gates(
+        action="apply",
+        folders=["infra/vpc"],
+        folder_configs={
+            "infra/vpc": FolderConfig(
+                account_alias="broken", apply=MutationVerbConfig(allow=True)
+            )
+        },
+        settings=_intent_gate_settings(),
+        pr_number=1,
+        commit_hash="a" * 40,
+    )
+    assert result.ok is False
+    assert result.failures[0].message == (
+        "account alias 'broken' is invalid or not registered: account alias has invalid account_id"
+    )
+
+
+@patch("src.domain.accounts.aliases.get_account_alias")
+def test_create_handler_unknown_account_alias_returns_intent_failed(
+    get_account_alias, monkeypatch
+):
+    get_account_alias.side_effect = ValueError("Unknown account alias: 'missing'")
+    monkeypatch.setattr(
+        "src.services.intent.create._folder_configs_for_intent",
+        lambda **_kwargs: {
+            "infra/vpc": FolderConfig(
+                account_alias="missing", apply=MutationVerbConfig(allow=True)
+            )
+        },
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.get_repo_settings",
+        lambda *_args, **_kwargs: _intent_gate_settings(),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.get_github_token",
+        lambda _path: "github-token",
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._post_comment", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._current_pr_head_sha",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
+
+    event = {
+        "action": "apply",
+        "folders": ["infra/vpc"],
+        "webhook_info": {"pr_number": 1, "trigger_id": "t", "repo_name": "o/r"},
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+    result = create_handler(event, None)
+    assert result["intent_failed"] is True
+    assert result["intent_failures"] == [
+        "account alias 'missing' is invalid or not registered: Unknown account alias: 'missing'"
+    ]
+
+
+@patch("src.domain.accounts.aliases.get_account_alias")
+def test_create_handler_malformed_account_alias_returns_intent_failed(
+    get_account_alias, monkeypatch
+):
+    get_account_alias.return_value = {"account_id": "invalid", "role_name": "bad role!"}
+    monkeypatch.setattr(
+        "src.services.intent.create._folder_configs_for_intent",
+        lambda **_kwargs: {
+            "infra/vpc": FolderConfig(
+                account_alias="broken", apply=MutationVerbConfig(allow=True)
+            )
+        },
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.get_repo_settings",
+        lambda *_args, **_kwargs: _intent_gate_settings(),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.get_github_token",
+        lambda _path: "github-token",
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._post_comment", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._current_pr_head_sha",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
+
+    event = {
+        "action": "apply",
+        "folders": ["infra/vpc"],
+        "webhook_info": {"pr_number": 1, "trigger_id": "t", "repo_name": "o/r"},
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+    result = create_handler(event, None)
+    assert result["intent_failed"] is True
+    assert result["intent_failures"] == [
+        "account alias 'broken' is invalid or not registered: account alias has invalid account_id"
+    ]
+
+
+def test_confirm_handler_forces_pinned_intent_folder_selection(monkeypatch):
+    monkeypatch.setattr(
+        "src.services.intent.handler._current_pr_head_sha", lambda *_args: "a" * 40
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.confirm_intent",
+        lambda **_kwargs: (
+            [],
+            {
+                "action": "apply",
+                "folders": ["infra/vpc"],
+                "folder_pins": {"infra/vpc": {"source_run_id": "plan-run"}},
+                "source_plan_run_id": "plan-run",
+                "pipeline": "data/primary",
+                "step_index": 1,
+                "step_count": 2,
+                "pipeline_sha256": "c" * 64,
+            },
+        ),
+    )
+    event = {
+        "action": "apply",
+        "folders": [],
+        "all_flag": False,
+        "affected_flag": True,
+        "confirm_token": "abc123",
+        "webhook_info": {"pr_number": 1, "trigger_id": "t", "repo_name": "o/r"},
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    result = confirm_handler(event, None)
+
+    assert result["folders"] == ["infra/vpc"]
+    assert result["affected_flag"] is False
+    assert result["all_flag"] is False
+    assert result["folder_pins"] == {"infra/vpc": {"source_run_id": "plan-run"}}
+    assert result["webhook_info"]["pipeline"] == "data/primary"
+    assert result["webhook_info"]["pipeline_step_index"] == 1
+    assert result["webhook_info"]["pipeline_step_count"] == 2
+
+
+def test_confirm_handler_records_pipeline_metadata_when_registry_enabled(monkeypatch):
+    recorded: list[tuple[str, str, int]] = []
+    monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")
+    monkeypatch.setattr(
+        "src.services.intent.handler._current_pr_head_sha", lambda *_args: "a" * 40
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.confirm_intent",
+        lambda **_kwargs: (
+            [],
+            {
+                "action": "apply",
+                "folders": ["infra/rds"],
+                "folder_pins": {"infra/rds": {"source_run_id": "plan-run"}},
+                "source_plan_run_id": "plan-run",
+                "pipeline": "data/primary",
+                "step_index": 2,
+                "step_count": 3,
+                "pipeline_sha256": "c" * 64,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.set_run_pipeline_metadata",
+        lambda run_id, *, pipeline, step_count: recorded.append(
+            (run_id, pipeline, step_count)
+        ),
+    )
+    event = {
+        "action": "apply",
+        "folders": [],
+        "all_flag": False,
+        "affected_flag": True,
+        "confirm_token": "abc123",
+        "run_id": "run-1",
+        "webhook_info": {"pr_number": 1, "trigger_id": "t", "repo_name": "o/r"},
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    result = confirm_handler(event, None)
+
+    assert recorded == [("run-1", "data/primary", 3)]
+    assert result["webhook_info"]["pipeline"] == "data/primary"
+    assert result["webhook_info"]["pipeline_step_index"] == 2
+    assert result["webhook_info"]["pipeline_step_count"] == 3
+
+
+def test_confirm_intent_carries_the_intents_frozen_account_binding(monkeypatch):
+    frozen_binding = {
+        "account_id": "123456789012",
+        "readonly_role_name": "openci-tf-executor-readonly",
+        "poweruser_role_name": "openci-tf-executor-poweruser",
+        "external_id": "openci-tf-0123456789abcdef",
+        "max_ttl": 3600,
+    }
+    record = IntentRecord(
+        token="abc123",
+        trigger_id="t",
+        pr_number=1,
+        action="apply",
+        source_run_id="run1",
+        folders=("infra/vpc",),
+        commit_hash="a" * 40,
+        folder_pins=(
+            FolderPlanPin(
+                "infra/vpc",
+                "run1",
+                "b" * 64,
+                "plan.tfplan",
+                "123456789012",
+                "tofu:1.8.0",
+                frozen_binding,
+            ),
+        ),
+        expires_at=9999999999,
+    )
+    monkeypatch.setattr("src.services.intent.confirm.get_intent", lambda _: record)
+    monkeypatch.setattr(
+        "src.services.intent.confirm.mark_intent_used", lambda *_args, **_kwargs: record
+    )
+
+    failures, confirmed = confirm_intent(
+        token="abc123",
+        action="apply",
+        commit_hash="a" * 40,
+        trigger_id="t",
+        pr_number=1,
+        repo_name="o/r",
+    )
+
+    assert failures == []
+    assert confirmed is not None
+    assert confirmed["folder_pins"]["infra/vpc"]["account_id"] == "123456789012"
+    assert confirmed["folder_pins"]["infra/vpc"]["account_binding"] == frozen_binding
+
+
+def test_token_single_use_race(monkeypatch):
+    table = Mock()
+    monkeypatch.setattr("src.platform.aws.intent_registry._table", lambda: table)
+    record = IntentRecord(
+        token="abc123",
+        trigger_id="t",
+        pr_number=1,
+        action="apply",
+        source_run_id="run1",
+        folders=("infra/vpc",),
+        commit_hash="a" * 40,
+        folder_pins=(
+            FolderPlanPin(
+                "infra/vpc",
+                "run1",
+                "b" * 64,
+                "plan.tfplan",
+                "123456789012",
+                "tofu:1.8.0",
+                {
+                    "account_id": "123456789012",
+                    "readonly_role_name": "openci-tf-executor-readonly",
+                    "poweruser_role_name": "openci-tf-executor-poweruser",
+                    "external_id": "openci-tf-0123456789abcdef",
+                    "max_ttl": 3600,
+                },
+            ),
+        ),
+        expires_at=9999999999,
+    )
+    table.update_item.return_value = {
+        "Attributes": {
+            "token": record.token,
+            "trigger_id": record.trigger_id,
+            "pr_number": record.pr_number,
+            "action": record.action,
+            "source_run_id": record.source_run_id,
+            "folders": list(record.folders),
+            "commit_hash": record.commit_hash,
+            "folder_pins": [
+                {
+                    "folder": pin.folder,
+                    "source_run_id": pin.source_run_id,
+                    "plan_sha256": pin.plan_sha256,
+                    "plan_artifact_name": pin.plan_artifact_name,
+                    "account_id": pin.account_id,
+                    "tf_runtime": pin.tf_runtime,
+                    "account_binding": pin.account_binding,
+                }
+                for pin in record.folder_pins
+            ],
+            "expires_at": record.expires_at,
+            "used": True,
+        }
+    }
+    confirmed = mark_intent_used("abc123", trigger_id="t", pr_number=1, now=1)
+    assert confirmed.used is True
+    table.update_item.assert_called_once()
+
+
+def test_confirm_gate_commit_mismatch():
+    record = IntentRecord(
+        token="abc123",
+        trigger_id="t",
+        pr_number=1,
+        action="apply",
+        source_run_id="run1",
+        folders=("infra/vpc",),
+        commit_hash="a" * 40,
+        folder_pins=(),
+        expires_at=9999999999,
+    )
+    failures = evaluate_confirm_gates(
+        record=record,
+        commit_hash="b" * 40,
+        trigger_id="t",
+        pr_number=1,
+        repo_name="o/r",
+        now=1,
+    )
+    assert any("PR moved" in failure.message for failure in failures)
+
+
+def test_mutation_actions_resolve():
+    config = FolderConfig(
+        account_alias="target",
+        apply=MutationVerbConfig(allow=True),
+        destroy=MutationVerbConfig(allow=True, grace_seconds=60),
+    )
+    assert resolve_commands("apply", config).verb == "apply"
+    assert resolve_commands("destroy", config).verb == "destroy"
+    assert resolve_commands("plan_destroy", config).verb == "plan_destroy"
+
+
+def test_token_format():
+    token = mint_token()
+    assert 6 <= len(token) <= 8
+    assert all(ch in "0123456789abcdef" for ch in token)

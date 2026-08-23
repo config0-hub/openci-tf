@@ -1,0 +1,576 @@
+# PUBLIC kit-synced modules: UpAgent work dispatch, Herdr transport tools, and run control.
+import '.shared-llm/public/extensions/common/upagent/justfile'
+import '.shared-llm/public/extensions/common/herdr/justfile'
+import '.shared-llm/public/extensions/common/runner/justfile'
+
+set positional-arguments
+
+ENGINE_REPO_PATH := env_var_or_default("ENGINE_REPO_PATH", "../aws-execution-engine")
+# ref 4353245 - openci-tf remote executor consistency naming
+OPENCI_TF_PROJECT := env_var_or_default("OPENCI_TF_PROJECT", "openci-tf")
+# ref 4353245 - openci-tf remote executor consistency naming
+export TF_VAR_project_name := OPENCI_TF_PROJECT
+export SSM_CONFIG_PROJECT := OPENCI_TF_PROJECT
+OPENCI_TF_REGION := env_var_or_default("AWS_REGION", env_var_or_default("AWS_DEFAULT_REGION", "us-east-1"))
+export AWS_REGION := OPENCI_TF_REGION
+
+# --- install-time configuration (SSM Parameter Store SecureString) -----------
+
+# Set or read /openci-tf/install/<project>/<key>. Non-secret values are passed as
+# argv; set-stdin keeps secrets out of shell history and process arguments.
+config action key value="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    action="$1"; key="$2"; value="${3:-}"
+    case "$action" in
+    set) ./scripts/ssm_config.sh set "$key" "$value" ;;
+    set-stdin) ./scripts/ssm_config.sh set-stdin "$key" ;;
+    get) ./scripts/ssm_config.sh get "$key" ;;
+    *) echo "Usage: just config set|set-stdin|get <key> [value]" >&2; exit 1 ;;
+    esac
+
+# --- component recipes (each: SSM -> tfvars -> init/apply -> source copy) ----
+
+# State bucket + lock table. Chicken-and-egg: first run applies with LOCAL
+# state (the backend bucket does not exist yet), then migrates state into it.
+bootstrap:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ACCT="$(aws sts get-caller-identity --query Account --output text)"
+    BUCKET="{{OPENCI_TF_PROJECT}}-state-${ACCT}"
+    ./scripts/write_tfvars.sh infra/bootstrap "aws_region={{OPENCI_TF_REGION}}"
+    set +e; ./scripts/bucket_exists.sh "$BUCKET"; probe_rc=$?; set -e
+    [ "$probe_rc" = 0 ] || [ "$probe_rc" = 1 ] || exit "$probe_rc"
+    LOCK_TABLE="{{OPENCI_TF_PROJECT}}-tf-locks"
+    if [ -s infra/bootstrap/terraform.tfstate ]; then
+        # Crash-window recovery: a previous run applied locally but never
+        # finished migrating. Resume from LOCAL state ONLY if it provably
+        # tracks OUR bucket name AND OUR lock table name (no foreign resource
+        # may be reachable through this state), and any live bucket/table is
+        # not foreign-owned.
+        ./scripts/state_identity.sh infra/bootstrap/terraform.tfstate "$BUCKET" "$LOCK_TABLE" || exit 1
+        if [ "$probe_rc" = 0 ]; then
+            OWNER="$(./scripts/bucket_owner.sh "$BUCKET")"
+            [ "$OWNER" = "openci-tf-bootstrap" ] || [ "$OWNER" = "untagged" ] || {
+                echo "ERROR: bucket ${BUCKET} is owned by '${OWNER}'; refusing to adopt via local-state resume" >&2; exit 1; }
+        fi
+        set +e; ./scripts/table_exists.sh "$LOCK_TABLE"; t_rc=$?; set -e
+        [ "$t_rc" = 0 ] || [ "$t_rc" = 1 ] || exit "$t_rc"
+        if [ "$t_rc" = 0 ]; then
+            T_OWNER="$(aws dynamodb list-tags-of-resource --resource-arn "arn:aws:dynamodb:{{OPENCI_TF_REGION}}:${ACCT}:table/${LOCK_TABLE}" --query "Tags[?Key=='ManagedBy'].Value" --output text)"
+            [ "$T_OWNER" = "openci-tf-bootstrap" ] || [ -z "$T_OWNER" ] || [ "$T_OWNER" = "None" ] || {
+                echo "ERROR: lock table ${LOCK_TABLE} is owned by '${T_OWNER}'; refusing local-state resume" >&2; exit 1; }
+        fi
+        echo "local bootstrap state survives and tracks ${BUCKET}/${LOCK_TABLE}: resuming interrupted bootstrap"
+        rm -f infra/bootstrap/backend.tf
+        terraform -chdir=infra/bootstrap init -reconfigure -input=false
+        terraform -chdir=infra/bootstrap apply -input=false -auto-approve
+        ./scripts/generate_backend.sh "$BUCKET" bootstrap "{{OPENCI_TF_REGION}}" infra/bootstrap "{{OPENCI_TF_PROJECT}}-tf-locks"
+        terraform -chdir=infra/bootstrap init -migrate-state -force-copy -input=false
+        rm -f infra/bootstrap/terraform.tfstate infra/bootstrap/terraform.tfstate.backup
+    elif [ "$probe_rc" = 0 ]; then
+        # Existing bucket: only proceed against a bucket this installer owns.
+        OWNER="$(./scripts/bucket_owner.sh "$BUCKET")"   # aborts on unreadable tags
+        if [ "$OWNER" != "openci-tf-bootstrap" ]; then
+            echo "ERROR: bucket ${BUCKET} exists but is not owned by openci-tf-bootstrap (owner: ${OWNER})." >&2
+            echo "Refusing to use a foreign bucket as the state backend. Rename OPENCI_TF_PROJECT or free the name." >&2
+            exit 1
+        fi
+        ./scripts/generate_backend.sh "$BUCKET" bootstrap "{{OPENCI_TF_REGION}}" infra/bootstrap "{{OPENCI_TF_PROJECT}}-tf-locks"
+        terraform -chdir=infra/bootstrap init -reconfigure -input=false
+        terraform -chdir=infra/bootstrap apply -input=false -auto-approve
+    else
+        rm -f infra/bootstrap/backend.tf
+        terraform -chdir=infra/bootstrap init -reconfigure -input=false
+        terraform -chdir=infra/bootstrap apply -input=false -auto-approve
+        ./scripts/generate_backend.sh "$BUCKET" bootstrap "{{OPENCI_TF_REGION}}" infra/bootstrap "{{OPENCI_TF_PROJECT}}-tf-locks"
+        terraform -chdir=infra/bootstrap init -migrate-state -force-copy -input=false
+        rm -f infra/bootstrap/terraform.tfstate infra/bootstrap/terraform.tfstate.backup
+    fi
+    ./scripts/upload_source.sh "$BUCKET" bootstrap . infra/bootstrap
+
+# Destroys the state bucket (after emptying it) and the lock table. Handles
+# partial first-install failures: bucket and lock table are recovered
+# independently (local bootstrap state, remote state, or direct table check).
+bootstrap-destroy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ACCT="$(aws sts get-caller-identity --query Account --output text)"
+    BUCKET="{{OPENCI_TF_PROJECT}}-state-${ACCT}"
+    LOCK_TABLE="{{OPENCI_TF_PROJECT}}-tf-locks"
+    ./scripts/write_tfvars.sh infra/bootstrap "aws_region={{OPENCI_TF_REGION}}"
+    set +e; ./scripts/bucket_exists.sh "$BUCKET"; bucket_rc=$?; set -e
+    [ "$bucket_rc" = 0 ] || [ "$bucket_rc" = 1 ] || exit "$bucket_rc"
+    set +e; ./scripts/table_exists.sh "$LOCK_TABLE"; table_rc=$?; set -e
+    [ "$table_rc" = 0 ] || [ "$table_rc" = 1 ] || exit "$table_rc"
+    table_owner_ok() {
+        # Destructive work may proceed only when a live lock table is provably
+        # ours. Fail-loud: unreadable tags abort via set -e on the aws call.
+        local owner
+        owner="$(aws dynamodb list-tags-of-resource --resource-arn "arn:aws:dynamodb:{{OPENCI_TF_REGION}}:${ACCT}:table/${LOCK_TABLE}" --query "Tags[?Key=='ManagedBy'].Value" --output text)"
+        [ "$owner" = "openci-tf-bootstrap" ] || { echo "ERROR: lock table ${LOCK_TABLE} is owned by '${owner:-untagged}'; refusing to destroy" >&2; return 1; }
+    }
+    if [ -s infra/bootstrap/terraform.tfstate ]; then
+        # Crash-window recovery: local state is authoritative (a migrate never
+        # finished). Destroy from it ONLY if it provably tracks OUR bucket AND
+        # OUR lock table, and every live tracked resource passes ownership —
+        # ALL checks run BEFORE any destructive side effect (empty/destroy).
+        ./scripts/state_identity.sh infra/bootstrap/terraform.tfstate "$BUCKET" "$LOCK_TABLE" || exit 1
+        if [ "$table_rc" = 0 ]; then table_owner_ok || exit 1; fi
+        if [ "$bucket_rc" = 0 ]; then
+            OWNER="$(./scripts/bucket_owner.sh "$BUCKET")"
+            [ "$OWNER" = "openci-tf-bootstrap" ] || [ "$OWNER" = "untagged" ] || { echo "ERROR: bucket ${BUCKET} owned by '${OWNER}', refusing to destroy" >&2; exit 1; }
+            ./scripts/empty_bucket.sh "$BUCKET"
+        fi
+        rm -f infra/bootstrap/backend.tf
+        terraform -chdir=infra/bootstrap init -reconfigure -input=false
+        terraform -chdir=infra/bootstrap destroy -input=false -auto-approve
+        rm -f infra/bootstrap/terraform.tfstate infra/bootstrap/terraform.tfstate.backup
+    elif [ "$bucket_rc" = 0 ]; then
+        # Destructive teardown only on resources this installer provably owns
+        # (bucket AND lock table).
+        OWNER="$(./scripts/bucket_owner.sh "$BUCKET")"   # aborts on unreadable tags
+        if [ "$OWNER" != "openci-tf-bootstrap" ]; then
+            echo "ERROR: bucket ${BUCKET} exists but is not owned by openci-tf-bootstrap (owner: ${OWNER})." >&2
+            echo "Refusing to empty or destroy a bucket this installer cannot prove it created." >&2
+            exit 1
+        fi
+        if [ "$table_rc" = 0 ]; then table_owner_ok || exit 1; fi
+        ./scripts/generate_backend.sh "$BUCKET" bootstrap "{{OPENCI_TF_REGION}}" infra/bootstrap "$LOCK_TABLE"
+        terraform -chdir=infra/bootstrap init -reconfigure -input=false
+        # Move state OUT of the bucket being destroyed, then empty and destroy.
+        rm -f infra/bootstrap/backend.tf
+        terraform -chdir=infra/bootstrap init -migrate-state -force-copy -input=false
+        ./scripts/empty_bucket.sh "$BUCKET"
+        terraform -chdir=infra/bootstrap destroy -input=false -auto-approve
+        rm -f infra/bootstrap/terraform.tfstate infra/bootstrap/terraform.tfstate.backup
+    elif [ "$table_rc" = 0 ]; then
+        # No bucket, no local state, but the lock table survived. Delete it
+        # only if it is provably ours (ManagedBy tag).
+        TABLE_OWNER="$(aws dynamodb list-tags-of-resource --resource-arn "arn:aws:dynamodb:{{OPENCI_TF_REGION}}:${ACCT}:table/${LOCK_TABLE}" --query "Tags[?Key=='ManagedBy'].Value" --output text)"
+        if [ "$TABLE_OWNER" != "openci-tf-bootstrap" ]; then
+            echo "ERROR: lock table ${LOCK_TABLE} is not owned by openci-tf-bootstrap (owner: ${TABLE_OWNER:-untagged}); refusing to delete" >&2
+            exit 1
+        fi
+        echo "stranded lock table ${LOCK_TABLE} found without state; deleting directly"
+        aws dynamodb delete-table --table-name "$LOCK_TABLE" >/dev/null
+        aws dynamodb wait table-not-exists --table-name "$LOCK_TABLE"
+    else
+        echo "no state bucket, local state, or lock table; nothing to destroy"
+    fi
+    # Post-destroy verification on EVERY path: both resources must be gone,
+    # and an indeterminate probe (403/expired STS) must fail, not pass.
+    set +e; ./scripts/bucket_exists.sh "$BUCKET"; post_bucket_rc=$?; set -e
+    [ "$post_bucket_rc" = 1 ] || { echo "ERROR: ${BUCKET} still exists or is unverifiable (rc=${post_bucket_rc})" >&2; exit 1; }
+    set +e; ./scripts/table_exists.sh "$LOCK_TABLE"; post_table_rc=$?; set -e
+    [ "$post_table_rc" = 1 ] || { echo "ERROR: ${LOCK_TABLE} still exists or is unverifiable (rc=${post_table_rc})" >&2; exit 1; }
+
+foundation:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ACCT="$(aws sts get-caller-identity --query Account --output text)"
+    BUCKET="{{OPENCI_TF_PROJECT}}-state-${ACCT}"
+    TMP_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or tmp_lifecycle_days 3)"
+    PACKAGE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or package_lifecycle_days 30)"
+    DONE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or done_lifecycle_days 365)"
+    PLAN_RETENTION_DAYS="$(./scripts/ssm_config.sh get-or plan_retention_days 1)"
+    ./scripts/write_tfvars.sh infra/foundation "aws_region={{OPENCI_TF_REGION}}" "name_prefix={{OPENCI_TF_PROJECT}}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_expiration_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}"
+    ./scripts/generate_backend.sh "$BUCKET" foundation "{{OPENCI_TF_REGION}}" infra/foundation "{{OPENCI_TF_PROJECT}}-tf-locks"
+    terraform -chdir=infra/foundation init -reconfigure -input=false
+    terraform -chdir=infra/foundation apply -input=false -auto-approve
+    ./scripts/upload_source.sh "$BUCKET" foundation . infra/foundation
+
+foundation-destroy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ACCT="$(aws sts get-caller-identity --query Account --output text)"
+    BUCKET="{{OPENCI_TF_PROJECT}}-state-${ACCT}"
+    TMP_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or tmp_lifecycle_days 3)"
+    PACKAGE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or package_lifecycle_days 30)"
+    DONE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or done_lifecycle_days 365)"
+    PLAN_RETENTION_DAYS="$(./scripts/ssm_config.sh get-or plan_retention_days 1)"
+    ./scripts/write_tfvars.sh infra/foundation "aws_region={{OPENCI_TF_REGION}}" "name_prefix={{OPENCI_TF_PROJECT}}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_expiration_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}"
+    ./scripts/generate_backend.sh "$BUCKET" foundation "{{OPENCI_TF_REGION}}" infra/foundation "{{OPENCI_TF_PROJECT}}-tf-locks"
+    terraform -chdir=infra/foundation init -reconfigure -input=false
+    terraform -chdir=infra/foundation destroy -input=false -auto-approve
+
+engine:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ENGINE_ROOT="{{ENGINE_REPO_PATH}}"
+    if [ -f "${ENGINE_ROOT}/justfile" ]; then
+      ENGINE_PROJECT="{{OPENCI_TF_PROJECT}}" just --justfile "${ENGINE_ROOT}/justfile" --working-directory "${ENGINE_ROOT}" install
+    else
+      chmod +x ./scripts/engine_install.sh
+      ./scripts/engine_install.sh "${ENGINE_ROOT}"
+    fi
+
+engine-destroy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ENGINE_ROOT="{{ENGINE_REPO_PATH}}"
+    if [ -f "${ENGINE_ROOT}/justfile" ]; then
+      ENGINE_PROJECT="{{OPENCI_TF_PROJECT}}" just --justfile "${ENGINE_ROOT}/justfile" --working-directory "${ENGINE_ROOT}" uninstall
+    else
+      chmod +x ./scripts/engine_uninstall.sh
+      ./scripts/engine_uninstall.sh "${ENGINE_ROOT}"
+    fi
+
+# Build the openci-tf Lambda container image at the fixed IMAGE_VERSION and push it to ECR.
+docker-push:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ACCT="$(aws sts get-caller-identity --query Account --output text)"
+    REPO="${ACCT}.dkr.ecr.{{OPENCI_TF_REGION}}.amazonaws.com/{{OPENCI_TF_PROJECT}}"
+    IMAGE_TAG="$(./scripts/image_tag.sh)"
+    aws ecr get-login-password --region "{{OPENCI_TF_REGION}}" | docker login --username AWS --password-stdin "${ACCT}.dkr.ecr.{{OPENCI_TF_REGION}}.amazonaws.com"
+    # --provenance=false: Lambda cannot pull OCI attestation manifest lists.
+    docker build --platform linux/amd64 --provenance=false --build-arg EXTRA_CA_CERT="{{env_var_or_default('EXTRA_CA_CERT', 'docker/certs/extra-ca.crt.optional')}}" -f docker/Dockerfile -t "${REPO}:${IMAGE_TAG}" .
+    docker push "${REPO}:${IMAGE_TAG}"
+
+deploy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ACCT="$(aws sts get-caller-identity --query Account --output text)"
+    BUCKET="{{OPENCI_TF_PROJECT}}-state-${ACCT}"
+    TARGET_ACCOUNT_IDS="$(./scripts/ssm_config.sh get target_account_ids)" || { echo "ERROR: set target accounts first: just config set target_account_ids '[\"123456789012\"]'" >&2; exit 1; }
+    IMAGE_TAG="$(./scripts/image_tag.sh)"
+    RUN_HISTORY_RETENTION_DAYS="$(./scripts/ssm_config.sh get-or run_history_retention_days 90)"
+    TMP_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or tmp_lifecycle_days 3)"
+    PACKAGE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or package_lifecycle_days 30)"
+    DONE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or done_lifecycle_days 365)"
+    PLAN_RETENTION_DAYS="$(./scripts/ssm_config.sh get-or plan_retention_days 1)"
+    API_CALLER_POLICY_JSON="$(./scripts/ssm_config.sh get-or api_caller_policy_json '{}')"
+    PROVISION_LEGACY_EXECUTOR_LOCAL="$(./scripts/ssm_config.sh get-or provision_legacy_executor_local true)"
+    ENABLE_APPLY="$(./scripts/ssm_config.sh get-or enable_apply false)"
+    AWS_CONSOLE_START_URL="$(./scripts/ssm_config.sh get-or aws_console_start_url '')"
+    AWS_CONSOLE_ROLE_NAME="$(./scripts/ssm_config.sh get-or aws_console_role_name '')"
+    ./scripts/write_tfvars.sh infra/deploy "aws_region={{OPENCI_TF_REGION}}" "image_tag=${IMAGE_TAG}" "target_account_ids=${TARGET_ACCOUNT_IDS}" "run_history_retention_days=${RUN_HISTORY_RETENTION_DAYS}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_lifecycle_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}" "api_caller_policy_json=${API_CALLER_POLICY_JSON}" "provision_legacy_executor_local=${PROVISION_LEGACY_EXECUTOR_LOCAL}" "enable_apply=${ENABLE_APPLY}" "aws_console_start_url=${AWS_CONSOLE_START_URL}" "aws_console_role_name=${AWS_CONSOLE_ROLE_NAME}"
+    ./scripts/generate_backend.sh "$BUCKET" deploy "{{OPENCI_TF_REGION}}" infra/deploy "{{OPENCI_TF_PROJECT}}-tf-locks"
+    terraform -chdir=infra/deploy init -reconfigure -input=false
+    # Fresh installs need ECR before the image push. Upgrades skip the targeted
+    # apply because migration moved blocks require a complete, un-targeted plan.
+    set +e
+    ./scripts/ecr_repo_probe.sh "{{OPENCI_TF_PROJECT}}" "{{OPENCI_TF_REGION}}"
+    ECR_PROBE_RC=$?
+    set -e
+    case "$ECR_PROBE_RC" in
+      0) echo "ECR repository {{OPENCI_TF_PROJECT}} already exists; skipping bootstrap target apply" ;;
+      1) terraform -chdir=infra/deploy apply -input=false -auto-approve -target=module.ecr ;;
+      *) echo "ERROR: indeterminate ECR repository probe; aborting deploy" >&2; exit 1 ;;
+    esac
+    just docker-push
+    terraform -chdir=infra/deploy apply -input=false -auto-approve
+    ./scripts/upload_source.sh "$BUCKET" deploy . infra/deploy infra/modules/hub-setup
+
+deploy-destroy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ACCT="$(aws sts get-caller-identity --query Account --output text)"
+    BUCKET="{{OPENCI_TF_PROJECT}}-state-${ACCT}"
+    TARGET_ACCOUNT_IDS="$(./scripts/ssm_config.sh get-or target_account_ids '[]')"
+    IMAGE_TAG="$(./scripts/image_tag.sh)"
+    RUN_HISTORY_RETENTION_DAYS="$(./scripts/ssm_config.sh get-or run_history_retention_days 90)"
+    TMP_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or tmp_lifecycle_days 3)"
+    PACKAGE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or package_lifecycle_days 30)"
+    DONE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or done_lifecycle_days 365)"
+    PLAN_RETENTION_DAYS="$(./scripts/ssm_config.sh get-or plan_retention_days 1)"
+    API_CALLER_POLICY_JSON="$(./scripts/ssm_config.sh get-or api_caller_policy_json '{}')"
+    PROVISION_LEGACY_EXECUTOR_LOCAL="$(./scripts/ssm_config.sh get-or provision_legacy_executor_local true)"
+    ENABLE_APPLY="$(./scripts/ssm_config.sh get-or enable_apply false)"
+    AWS_CONSOLE_START_URL="$(./scripts/ssm_config.sh get-or aws_console_start_url '')"
+    AWS_CONSOLE_ROLE_NAME="$(./scripts/ssm_config.sh get-or aws_console_role_name '')"
+    ./scripts/write_tfvars.sh infra/deploy "aws_region={{OPENCI_TF_REGION}}" "image_tag=${IMAGE_TAG}" "target_account_ids=${TARGET_ACCOUNT_IDS}" "run_history_retention_days=${RUN_HISTORY_RETENTION_DAYS}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_lifecycle_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}" "api_caller_policy_json=${API_CALLER_POLICY_JSON}" "provision_legacy_executor_local=${PROVISION_LEGACY_EXECUTOR_LOCAL}" "enable_apply=${ENABLE_APPLY}" "aws_console_start_url=${AWS_CONSOLE_START_URL}" "aws_console_role_name=${AWS_CONSOLE_ROLE_NAME}"
+    ./scripts/generate_backend.sh "$BUCKET" deploy "{{OPENCI_TF_REGION}}" infra/deploy "{{OPENCI_TF_PROJECT}}-tf-locks"
+    terraform -chdir=infra/deploy init -reconfigure -input=false
+    terraform -chdir=infra/deploy destroy -input=false -auto-approve
+
+# Target account: provision or remove the executor-readonly role only.
+target-create-aws-readonly hub_account_id state_bucket="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    hub_account_id="${1:?Usage: just target-create-aws-readonly <hub_account_id> [state_bucket]}"
+    state_bucket="${2:-}"
+    args=(--action create --role readonly --hub-account-id "$hub_account_id")
+    if [ -n "$state_bucket" ]; then args+=(--state-bucket "$state_bucket"); fi
+    ./scripts/target_aws_role.sh "${args[@]}"
+
+target-delete-aws-readonly hub_account_id state_bucket="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    hub_account_id="${1:?Usage: just target-delete-aws-readonly <hub_account_id> [state_bucket]}"
+    state_bucket="${2:-}"
+    args=(--action destroy --role readonly --hub-account-id "$hub_account_id")
+    if [ -n "$state_bucket" ]; then args+=(--state-bucket "$state_bucket"); fi
+    ./scripts/target_aws_role.sh "${args[@]}"
+
+# Target account: provision or remove the executor-poweruser role only (opt-in kill switch).
+target-create-aws-poweruser hub_account_id state_bucket="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    hub_account_id="${1:?Usage: just target-create-aws-poweruser <hub_account_id> [state_bucket]}"
+    state_bucket="${2:-}"
+    args=(--action create --role poweruser --hub-account-id "$hub_account_id")
+    if [ -n "$state_bucket" ]; then args+=(--state-bucket "$state_bucket"); fi
+    ./scripts/target_aws_role.sh "${args[@]}"
+
+target-delete-aws-poweruser hub_account_id state_bucket="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    hub_account_id="${1:?Usage: just target-delete-aws-poweruser <hub_account_id> [state_bucket]}"
+    state_bucket="${2:-}"
+    args=(--action destroy --role poweruser --hub-account-id "$hub_account_id")
+    if [ -n "$state_bucket" ]; then args+=(--state-bucket "$state_bucket"); fi
+    ./scripts/target_aws_role.sh "${args[@]}"
+
+# Hub account: retire or restore legacy executor-local durably (install SSM + deploy apply).
+retire-legacy-executor-local:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ./scripts/retire_legacy_executor.sh --lane local
+
+restore-legacy-executor-local:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ./scripts/retire_legacy_executor.sh --lane local --restore
+
+# Target account: retire or restore legacy executor-remote durably (target-account SSM + target-connect apply).
+retire-legacy-executor-remote hub_account_id state_bucket="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    hub_account_id="${1:?Usage: just retire-legacy-executor-remote <hub_account_id> [state_bucket]}"
+    state_bucket="${2:-}"
+    args=(--lane remote --hub-account-id "$hub_account_id")
+    if [ -n "$state_bucket" ]; then args+=(--state-bucket "$state_bucket"); fi
+    ./scripts/retire_legacy_executor.sh "${args[@]}"
+
+restore-legacy-executor-remote hub_account_id state_bucket="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    hub_account_id="${1:?Usage: just restore-legacy-executor-remote <hub_account_id> [state_bucket]}"
+    state_bucket="${2:-}"
+    args=(--lane remote --restore --hub-account-id "$hub_account_id")
+    if [ -n "$state_bucket" ]; then args+=(--state-bucket "$state_bucket"); fi
+    ./scripts/retire_legacy_executor.sh "${args[@]}"
+
+# Deprecated: use target-create-aws-readonly (readonly role only).
+# Public Function URL with application-level bearer auth. The Lambda role must
+# also be present in deploy's api_caller_policy_json before operators use it.
+console:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ACCT="$(aws sts get-caller-identity --query Account --output text)"
+    BUCKET="{{OPENCI_TF_PROJECT}}-state-${ACCT}"
+    ./scripts/ssm_config.sh get console_token >/dev/null || {
+        echo "ERROR: set the console token first: just config set-stdin console_token" >&2
+        exit 1
+    }
+    ./scripts/write_tfvars.sh infra/console "aws_region={{OPENCI_TF_REGION}}"
+    ./scripts/generate_backend.sh "$BUCKET" console "{{OPENCI_TF_REGION}}" infra/console "{{OPENCI_TF_PROJECT}}-tf-locks"
+    npm --prefix frontend ci
+    npm --prefix frontend run package:lambda
+    terraform -chdir=infra/console init -reconfigure -input=false
+    terraform -chdir=infra/console apply -input=false -auto-approve
+    ./scripts/upload_source.sh "$BUCKET" console . infra/console
+    terraform -chdir=infra/console output -raw function_url
+    echo
+
+console-destroy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ACCT="$(aws sts get-caller-identity --query Account --output text)"
+    BUCKET="{{OPENCI_TF_PROJECT}}-state-${ACCT}"
+    ./scripts/ssm_config.sh get console_token >/dev/null || {
+        echo "ERROR: console_token must remain configured until console-destroy completes" >&2
+        exit 1
+    }
+    ./scripts/write_tfvars.sh infra/console "aws_region={{OPENCI_TF_REGION}}"
+    ./scripts/generate_backend.sh "$BUCKET" console "{{OPENCI_TF_REGION}}" infra/console "{{OPENCI_TF_PROJECT}}-tf-locks"
+    terraform -chdir=infra/console init -reconfigure -input=false
+    terraform -chdir=infra/console destroy -input=false -auto-approve
+
+# Same-account target connect; cross-account still uses the module with tfvars.
+target-connect:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "DEPRECATED: target-connect is an alias for target-create-aws-readonly; use the explicit recipe instead." >&2
+    HUB_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+    just target-create-aws-readonly "$HUB_ACCOUNT_ID"
+
+target-connect-destroy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "DEPRECATED: target-connect-destroy is an alias for target-delete-aws-readonly; use the explicit recipe instead." >&2
+    HUB_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+    just target-delete-aws-readonly "$HUB_ACCOUNT_ID"
+
+# --- journeys -----------------------------------------------------------------
+
+# Full install: bootstrap -> foundation -> engine -> deploy (hub readonly via hub-setup)
+install:
+    @just bootstrap
+    @just foundation
+    @just engine
+    @just deploy
+    @echo "install complete — hub readonly owned by deploy; run 'just verify'"
+
+# Exact reverse of install. Set OPENCI_TF_KEEP_STATE=yes|no to skip the prompt.
+uninstall:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    KEEP="${OPENCI_TF_KEEP_STATE:-}"
+    if [ -z "$KEEP" ]; then
+        if [ -t 0 ]; then
+            read -r -p "Keep the state bucket + source copies as the surviving record? [yes/no] " KEEP
+        else
+            echo "ERROR: set OPENCI_TF_KEEP_STATE=yes|no for non-interactive uninstall" >&2
+            exit 1
+        fi
+    fi
+    case "$KEEP" in yes|no) ;; *) echo "ERROR: OPENCI_TF_KEEP_STATE must be yes or no" >&2; exit 1 ;; esac
+    HUB_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+    set +e
+    ./scripts/poweruser_needs_destroy.sh
+    probe_rc=$?
+    set -e
+    case "$probe_rc" in
+      0)
+        just target-delete-aws-poweruser "$HUB_ACCOUNT_ID"
+        ;;
+      1)
+        ;;
+      *)
+        echo "ERROR: indeterminate probe for optional poweruser footprint; aborting uninstall" >&2
+        exit 1
+        ;;
+    esac
+    just deploy-destroy
+    just engine-destroy
+    just foundation-destroy
+    if [ "$KEEP" = "yes" ]; then
+        echo "keeping state bucket + lock table + source copies as the surviving record"
+    else
+        just bootstrap-destroy
+    fi
+    ./scripts/ssm_config.sh delete-all
+    SSM_CONFIG_PROJECT=engine ./scripts/ssm_config.sh delete-all
+    echo "uninstall complete — run 'just verify-clean'"
+
+verify:
+    ./scripts/verify.sh present
+
+verify-clean:
+    ./scripts/verify.sh clean
+
+# --- operator utilities ---------------------------------------------------------
+
+# Store a fine-grained GitHub control PAT from a file or stdin under /openci-tf/clone-token/<repo>-control.
+install-github-control-token *ARGS:
+    @if [ $# -gt 0 ]; then ./scripts/install_github_control_token.sh "$@"; else ./scripts/install_github_control_token.sh --help; fi
+
+# Register a repository after read-only GitHub control-token capability verification.
+register-repo *ARGS:
+    @if [ $# -gt 0 ]; then ./scripts/register_repo.sh "$@"; else ./scripts/register_repo.sh --help; fi
+register-account *ARGS:
+    @if [ $# -gt 0 ]; then ./scripts/register_account.sh "$@"; else ./scripts/register_account.sh --help; fi
+
+account-set-apply *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    alias="${1:?Usage: just account-set-apply <alias> true|false}"
+    value="${2:?Usage: just account-set-apply <alias> true|false}"
+    ./scripts/account_set_apply.sh --alias "$alias" --enable-apply "$value"
+
+# Target account: verify identity, existing state bucket, SSM tfvars, then readonly role.
+target-onboard *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    hub_account_id="${1:?Usage: just target-onboard <hub_account_id> [state_bucket]}"
+    state_bucket="${2:-}"
+    args=(--hub-account-id "$hub_account_id")
+    if [ -n "$state_bucket" ]; then args+=(--state-bucket "$state_bucket"); fi
+    ./scripts/target_onboard.sh "${args[@]}"
+
+# Hub account: append target_account_ids, redeploy IAM, then register alias.
+register-target *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    alias="${1:?Usage: just register-target <alias> <target_account_id>}"
+    target_account_id="${2:?Usage: just register-target <alias> <target_account_id>}"
+    ./scripts/register_target.sh --alias "$alias" --account-id "$target_account_id"
+create-webhook *ARGS:
+    @if [ $# -gt 0 ]; then ./scripts/create_webhook.sh "$@"; else ./scripts/create_webhook.sh --help; fi
+
+# Store the Infracost API key in /openci-tf/infracost/api_key (stdin or env file; never argv).
+configure-infracost env_file="/tmp/infracost/api.env":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    set -a
+    # shellcheck disable=SC1090
+    source "{{env_file}}"
+    set +a
+    : "${INFRACOST_API_KEY:?INFRACOST_API_KEY missing from env file}"
+    printf '%s' "$INFRACOST_API_KEY" | ./scripts/configure_infracost.sh
+
+# Install a dotenv file as a hub SSM SecureString under /openci-tf/env/.
+# Example for the shared VPC module credential:
+#   just install-ssm-env /openci-tf/env/github/example-org/private-module-repo ./github.env
+install-ssm-env *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "$#" -ne 2 ]; then
+        echo "Usage: just install-ssm-env <ssm_path> <dotenv_file>" >&2
+        exit 1
+    fi
+    ssm_path="${1:?Usage: just install-ssm-env <ssm_path> <dotenv_file>}"
+    dotenv_file="${2:?Usage: just install-ssm-env <ssm_path> <dotenv_file>}"
+    ./scripts/install_ssm_env.sh "$ssm_path" "$dotenv_file"
+
+# Trigger the registered smoke PR by posting `tf plan <folder>` and wait for the outer SFN.
+# Set SSM_CONFIG_PROJECT to the smoke namespace (for example openci-tf-smoke-YYYYmmddHHMMSS).
+smoke:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ./scripts/smoke.sh
+
+# IAM-authenticated core API helpers (see docs/API.md). Never prints credentials.
+api-create-run trigger_id sha idempotency_key folder="" pipeline="" action="plan":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    body="$(
+    python3 - "{{trigger_id}}" "{{sha}}" "{{idempotency_key}}" "{{folder}}" "{{pipeline}}" "{{action}}" <<'PY'
+    import json
+    import sys
+    trigger_id, sha, idempotency_key, folder, pipeline, action = sys.argv[1:]
+    if bool(folder) == bool(pipeline):
+        raise SystemExit("set exactly one of folder= or pipeline=")
+    body = {
+        "trigger_id": trigger_id,
+        "commit_hash": sha,
+        "action": action,
+        "idempotency_key": idempotency_key,
+        "notification_target": {"type": "registry"},
+    }
+    if folder:
+        body["folder_mode"] = "explicit"
+        body["folders"] = [folder]
+    else:
+        body["pipeline"] = pipeline
+    print(json.dumps(body))
+    PY
+    )"
+    ./scripts/api_invoke.sh POST "/runs" "$body"
+
+api-get-run run_id:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ./scripts/api_invoke.sh GET "/runs/{{run_id}}"
+
+api-list-runs trigger_id limit="25":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ./scripts/api_invoke.sh GET "/runs?trigger_id={{trigger_id}}&limit={{limit}}"
+
+update: engine deploy
+test:
+    cp "{{ENGINE_REPO_PATH}}/aws_exe_sys/common/payload.py" docker/engine_ref/payload.py && docker build --build-arg EXTRA_CA_CERT="{{env_var_or_default('EXTRA_CA_CERT', 'docker/certs/extra-ca.crt.optional')}}" -f docker/Dockerfile.test -t openci-tf-test . && docker run --rm openci-tf-test tests/ -v --tb=short

@@ -1,0 +1,69 @@
+.back-link { display: inline-block; margin-bottom: 2.5rem; font-weight: 900; letter-spacing: 0.06em; }
+.detail-heading { display: grid; grid-template-columns: minmax(12rem, auto) minmax(3rem, 1fr) auto; align-items: end; margin-bottom: 1rem; }
+.verdict-leader { width: 100%; margin-bottom: 0.75rem; border-bottom: 2px dotted var(--ink); transform-origin: left; animation: leader-draw var(--motion-clock) var(--motion-ease-draw) both; }
+.verdict-stamp { display: flex; align-items: center; gap: 0.55rem; animation: stamp-in var(--motion-clock) var(--motion-ease-stamp) var(--motion-clock) both; }
+.verdict-stamp b { font-size: var(--type-large); }
+.verdict-stamp[data-state="complete"] { color: var(--complete); border-color: var(--complete); }
+.verdict-stamp[data-state="failed"] { color: var(--warning); border-color: var(--warning); }
+.verdict-stamp[data-state="drift"], .verdict-stamp[data-state="in-progress"] { color: var(--caution); border-color: var(--caution); }
+.run-facts { max-width: 72rem; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 0 3.5rem; border-block: 1px solid var(--ink); }
+.run-facts div { min-width: 0; padding: 0.8rem; border-right: 1px solid var(--ink); }
+.run-facts div:last-child { border-right: 0; }
+.run-facts dt { font-weight: 900; letter-spacing: 0.06em; }
+.run-facts dd { overflow-wrap: anywhere; margin: 0.45rem 0 0; font-variant-numeric: tabular-nums; }
+.run-observation-note { max-width: 72rem; margin: -2.5rem 0 3.5rem; padding: 0.7rem 0.8rem; border-block: 1px solid var(--ink); font-weight: 900; letter-spacing: 0.05em; }
+.execution-timeline { --time-column: 10.5rem; position: relative; max-width: 76rem; margin: 0; padding: 0 0 0 var(--time-column); list-style: none; }
+.execution-timeline::before { content: ""; position: absolute; top: 0.4rem; bottom: 0.4rem; left: calc(var(--time-column) + 0.25rem); width: 1px; background: var(--ink); }
+.timeline-item { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); min-height: 3.2rem; padding: 0 0 1.8rem 2.2rem; }
+.timeline-item::before { content: ""; position: absolute; left: 0; top: 0.25rem; width: 0.55rem; height: 0.55rem; border: 1px solid var(--ink); background: var(--paper); transform: rotate(45deg); }
+.timeline-item > time { position: absolute; right: calc(100% + 2.2rem); top: 0; width: calc(var(--time-column) - 2.1rem); text-align: right; font-variant-numeric: tabular-nums; opacity: 0.75; }
+.timeline-item > div { min-width: 0; }
+.timeline-item strong { text-transform: uppercase; letter-spacing: 0.04em; }
+.timeline-item div > span { display: block; margin-top: 0.35rem; }
+.folder-item { min-height: 5rem; padding-top: 0.7rem; border-top: 2px solid var(--ink); }
+.folder-item::before { top: 0.95rem; width: 0.75rem; height: 0.75rem; background: var(--ink); }
+.folder-item > time { top: 0.7rem; }
+.folder-item > div { display: grid; grid-template-columns: 2.2rem minmax(0, 1fr); column-gap: 0.7rem; }
+.folder-item > div > span:not(.subprocedure-number) { grid-column: 2; }
+.folder-observation-note { font-weight: 900; letter-spacing: 0.04em; }
+.subprocedure-number { grid-row: 1 / span 2; margin: 0 !important; font-weight: 900; font-variant-numeric: tabular-nums; }
+.folder-item[data-state="failed"] { border-top-color: var(--warning); }
+.step-item { min-height: 2.7rem; padding-bottom: 1rem; }
+.step-item > div { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 0.8rem; }
+.step-item i { border-bottom: 2px dotted var(--ink); transform-origin: left; animation: leader-draw var(--motion-clock) var(--motion-ease-draw) both; }
+.step-item div > span { margin: 0; font-weight: 900; }
+.step-outcome { animation: stamp-in var(--motion-clock) var(--motion-ease-stamp) var(--motion-clock) both; }
+.step-outcome b { margin-right: 0.35rem; }
+.corrective-item { margin-bottom: 1.4rem; padding-top: 1rem; border-top: 1px solid var(--warning); }
+.corrective-item::before { border-color: var(--warning); background: var(--warning); }
+.corrective-item pre { margin-bottom: 0; overflow-wrap: anywhere; color: var(--warning); white-space: pre-wrap; }
+.artifact-item { padding-bottom: 2.2rem; }
+.artifact-item::before { border-radius: 50%; transform: none; }
+.artifact-item[data-expired]::before { border-color: var(--warning); }
+.s3-pointer, .expired-plan { overflow-wrap: anywhere; line-height: 1.5; }
+.expired-plan { padding-block: 0.65rem; color: var(--warning); border-block: 1px solid var(--warning); font-weight: 900; }
+.artifact-meta { display: grid; grid-template-columns: 7rem minmax(12rem, 1fr) minmax(10rem, auto); margin: 1rem 0 0; border-top: 1px dotted var(--ink); }
+.artifact-meta div { min-width: 0; padding: 0.55rem 0.7rem 0 0; }
+.artifact-meta dt { font-weight: 900; }
+.artifact-meta dd { overflow-wrap: anywhere; margin: 0.25rem 0 0; font-variant-numeric: tabular-nums; }
+.run-origin, .run-terminal { font-size: var(--type-large); font-weight: 900; }
+.run-terminal { margin-top: 1rem; padding-top: 1rem; border-top: 3px double var(--ink); }
+.run-terminal::before { top: 1.25rem; background: var(--ink); }
+.run-terminal > time { top: 1rem; }
+.detail-loading { display: grid; grid-template-columns: 12rem auto; align-items: center; gap: 1rem; font-weight: 900; }
+.detail-loading span { border-bottom: 2px dotted var(--ink); transform-origin: left; animation: leader-loading var(--motion-clock) var(--motion-ease-draw) infinite alternate; }
+
+@media (max-width: 760px) {
+  .run-facts { grid-template-columns: 1fr 1fr; }
+  .run-facts div:nth-child(2) { border-right: 0; }
+  .run-facts div:nth-child(-n + 2) { border-bottom: 1px solid var(--ink); }
+  .execution-timeline { --time-column: 0rem; padding-left: 0; }
+  .execution-timeline::before { left: 0.25rem; }
+  .timeline-item { padding-left: 1.8rem; }
+  .timeline-item > time { position: static; width: auto; margin-bottom: 0.45rem; text-align: left; }
+  .folder-item > time, .run-terminal > time { top: auto; }
+  .artifact-meta { grid-template-columns: 1fr; }
+  .page-heading.detail-heading { grid-template-columns: 1fr; }
+  .verdict-leader { margin-bottom: 0; }
+  .verdict-stamp { width: fit-content; }
+}

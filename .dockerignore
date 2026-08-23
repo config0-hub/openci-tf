@@ -1,0 +1,13 @@
+.git
+.shared-llm
+.original
+.lavish
+.pi-lens
+.pytest_cache
+**/__pycache__
+**/*.pyc
+**/.terraform
+**/*.tfstate
+**/*.tfstate.*
+**/backend.tf
+**/terraform.tfvars

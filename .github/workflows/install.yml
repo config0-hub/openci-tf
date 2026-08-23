@@ -1,0 +1,177 @@
+name: Install openci-tf
+
+# Deprecated apply path; the justfile is the canonical installer.
+on:
+  workflow_dispatch:
+    inputs:
+      aws_region:
+        description: AWS region to deploy into
+        required: true
+        default: us-east-1
+        type: string
+      project_name:
+        # ref 4353245 - openci-tf remote executor consistency naming
+        description: Project name prefix for all resources
+        required: true
+        default: openci-tf
+        type: string
+      target_account_ids:
+        description: Required Terraform HCL list of registered target AWS account IDs, e.g. ["123456789012"]
+        required: true
+        type: string
+      lock_table_arn:
+        description: Existing Terraform state lock table ARN for same-account execution
+        required: true
+        type: string
+      state_bucket_name:
+        description: Terraform state bucket name (leave empty to generate one)
+        required: false
+        default: ''
+        type: string
+      tmp_bucket_name:
+        description: Foundation temporary artifact bucket name
+        required: true
+        type: string
+      package_bucket_name:
+        description: Foundation encrypted package bucket name
+        required: true
+        type: string
+      done_bucket_name:
+        description: Foundation terminal-result bucket name
+        required: true
+        type: string
+      engine_repository:
+        description: aws-execution-engine repository in OWNER/REPOSITORY form
+        required: true
+        type: string
+      engine_ref:
+        description: Immutable aws-execution-engine commit SHA to deploy
+        required: true
+        type: string
+      engine_init_lambda_name:
+        description: Engine init_job Lambda name produced by the engine deployment
+        required: true
+        type: string
+      engine_init_lambda_arn:
+        description: Engine init_job Lambda ARN produced by the engine deployment
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  TF_VERSION: '1.9.0'
+  TF_INPUT: 'false'
+  TF_IN_AUTOMATION: 'true'
+
+jobs:
+  install:
+    name: Foundation, engine, and openci-tf deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout openci-tf
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned execution engine
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.engine_repository }}
+          ref: ${{ inputs.engine_ref }}
+          path: aws-execution-engine
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Determine state bucket name
+        id: state
+        run: |
+          bucket="${{ inputs.state_bucket_name }}"
+          if [ -z "$bucket" ]; then
+            suffix=$(tr -dc 'a-z0-9' </dev/urandom | head -c 5)
+            bucket="${{ inputs.project_name }}-state-$suffix"
+          fi
+          echo "bucket=$bucket" >> "$GITHUB_OUTPUT"
+
+      - name: Bootstrap Terraform state
+        id: bootstrap
+        working-directory: infra/bootstrap
+        run: |
+          terraform init
+          terraform apply -auto-approve \
+            -var="state_bucket_name=${{ steps.state.outputs.bucket }}" \
+            -var="aws_region=${{ inputs.aws_region }}" \
+            -var="project_name=${{ inputs.project_name }}"
+          echo "bucket_arn=$(terraform output -raw bucket_arn)" >> "$GITHUB_OUTPUT"
+
+      - name: Configure foundation and deploy state
+        run: |
+          ./scripts/generate_backend.sh "${{ steps.state.outputs.bucket }}" foundation "${{ inputs.aws_region }}" infra/foundation
+          ./scripts/generate_backend.sh "${{ steps.state.outputs.bucket }}" deploy "${{ inputs.aws_region }}" infra/deploy
+
+      - name: Deploy foundation
+        working-directory: infra/foundation
+        run: |
+          terraform init
+          terraform apply -auto-approve \
+            -var="aws_region=${{ inputs.aws_region }}" \
+            -var="name_prefix=${{ inputs.project_name }}" \
+            -var="tmp_bucket_name=${{ inputs.tmp_bucket_name }}" \
+            -var="package_bucket_name=${{ inputs.package_bucket_name }}" \
+            -var="done_bucket_name=${{ inputs.done_bucket_name }}"
+
+      - name: Delegate engine deployment
+        env:
+          ENGINE_REPO_PATH: aws-execution-engine
+        run: just engine
+
+      - name: Create ECR repository
+        id: ecr
+        working-directory: infra/deploy
+        run: |
+          terraform init
+          terraform apply -auto-approve -target=module.ecr \
+            -var="image_tag=${{ github.sha }}" \
+            -var="aws_region=${{ inputs.aws_region }}" \
+            -var="project_name=${{ inputs.project_name }}" \
+            -var='target_account_ids=${{ inputs.target_account_ids }}' \
+            -var="state_bucket_arn=${{ steps.bootstrap.outputs.bucket_arn }}" \
+            -var="lock_table_arn=${{ inputs.lock_table_arn }}"
+          echo "repo_url=$(terraform output -raw ecr_repo_url)" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push openci-tf image
+        run: |
+          aws ecr get-login-password --region "${{ inputs.aws_region }}" | docker login --username AWS --password-stdin "${{ steps.ecr.outputs.repo_url }}"
+          docker build -f docker/Dockerfile -t "${{ steps.ecr.outputs.repo_url }}:${{ github.sha }}" -t "${{ steps.ecr.outputs.repo_url }}:latest" .
+          docker push "${{ steps.ecr.outputs.repo_url }}:${{ github.sha }}"
+          docker push "${{ steps.ecr.outputs.repo_url }}:latest"
+
+      - name: Deploy openci-tf
+        working-directory: infra/deploy
+        run: |
+          terraform apply -auto-approve \
+            -var="image_tag=${{ github.sha }}" \
+            -var="aws_region=${{ inputs.aws_region }}" \
+            -var="project_name=${{ inputs.project_name }}" \
+            -var="kms_key_arn=$(terraform -chdir=../foundation output -raw kms_key_arn)" \
+            -var="tmp_bucket_name=$(terraform -chdir=../foundation output -raw tmp_bucket_name)" \
+            -var="tmp_bucket_arn=$(terraform -chdir=../foundation output -raw tmp_bucket_arn)" \
+            -var="package_bucket_name=$(terraform -chdir=../foundation output -raw package_bucket_name)" \
+            -var="package_bucket_arn=$(terraform -chdir=../foundation output -raw package_bucket_arn)" \
+            -var="done_bucket_name=$(terraform -chdir=../foundation output -raw done_bucket_name)" \
+            -var="done_bucket_arn=$(terraform -chdir=../foundation output -raw done_bucket_arn)" \
+            -var="engine_init_lambda_name=${{ inputs.engine_init_lambda_name }}" \
+            -var="engine_init_lambda_arn=${{ inputs.engine_init_lambda_arn }}" \
+            -var='target_account_ids=${{ inputs.target_account_ids }}' \
+            -var="state_bucket_arn=${{ steps.bootstrap.outputs.bucket_arn }}" \
+            -var="lock_table_arn=${{ inputs.lock_table_arn }}"

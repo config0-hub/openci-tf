@@ -1,0 +1,48 @@
+.new-procedure { max-width: var(--measure); display: flex; justify-content: space-between; gap: 2rem; margin-bottom: 2.5rem; padding: 1.05rem 1.25rem; font-weight: 900; letter-spacing: 0.07em; }
+.new-procedure-action { text-align: right; font-weight: 900; }
+.filter-strip { display: grid; grid-template-columns: minmax(10rem, 1fr) minmax(10rem, 1fr) auto; align-items: end; gap: 0.85rem; max-width: 60rem; margin-bottom: 2.5rem; padding-block: 1rem; border-block: 1px solid var(--ink); }
+.filter-strip label { display: grid; gap: 0.4rem; font-weight: 900; letter-spacing: 0.06em; }
+.run-list { max-width: 72rem; margin: 0; padding: 0; list-style: none; border-top: 2px solid var(--ink); }
+.run-row { border-bottom: 1px solid var(--ink); border-left: 1px solid transparent; }
+.run-row[data-state="drift"] { border-left-color: var(--caution); }
+.run-row[data-state="failed"] { border-left-color: var(--warning); }
+.run-row a { display: grid; grid-template-columns: 2.5rem minmax(12rem, auto) minmax(3rem, 1fr) auto; grid-template-areas: "number subject leader state" ". retention retention retention"; align-items: center; column-gap: 0.8rem; min-height: 5.3rem; padding: 0.7rem 1rem 0.65rem 0.8rem; text-decoration: none; }
+.run-row a:hover { background: color-mix(in srgb, var(--ink) 6%, var(--paper)); }
+.row-number { grid-area: number; align-self: start; padding-top: 0.15rem; font-variant-numeric: tabular-nums; font-weight: 900; }
+.run-subject { grid-area: subject; display: grid; gap: 0.28rem; min-width: 0; }
+.run-subject strong { overflow: hidden; text-overflow: ellipsis; font-size: var(--type-large); text-transform: uppercase; white-space: nowrap; }
+.run-subject small { font: inherit; font-weight: 700; letter-spacing: 0.05em; }
+.leader { grid-area: leader; width: 100%; border-bottom: 2px dotted var(--ink); transform-origin: left; animation: leader-draw var(--motion-clock) var(--motion-ease-draw) both; }
+.state-evidence { grid-area: state; display: grid; justify-items: end; gap: 0.25rem; min-width: 8rem; }
+.state-word { display: flex; align-items: center; gap: 0.5rem; min-width: 7.5rem; justify-content: flex-end; font-size: var(--type-large); font-weight: 900; letter-spacing: 0.04em; animation: stamp-in var(--motion-clock) var(--motion-ease-stamp) var(--motion-clock) both; }
+.drift-result-note { max-width: 16rem; font-style: normal; font-weight: 700; line-height: 1.2; text-align: right; letter-spacing: 0.03em; }
+.state-word b { display: inline-grid; min-width: 1.2rem; place-items: center; border: 1px solid currentColor; line-height: 1; }
+.run-row[data-state="drift"] .state-word { color: var(--caution); }
+.run-row[data-state="failed"] .state-word { color: var(--warning); }
+.run-row[data-state="complete"] .state-word { color: var(--complete); }
+.run-retention { grid-area: retention; margin-top: 0.5rem; opacity: 0.72; font-variant-numeric: tabular-nums; letter-spacing: 0.03em; }
+.loading-list { padding: 0; }
+.loading-row { min-height: 4.8rem; display: grid; grid-template-columns: 2.5rem 1fr auto; align-items: center; gap: 0.8rem; padding: 0.8rem; border-bottom: 1px solid var(--ink); font-weight: 900; }
+.loading-row i { border-bottom: 2px dotted var(--ink); transform-origin: left; animation: leader-loading var(--motion-clock) var(--motion-ease-draw) infinite alternate; }
+.loading-row > span:last-child::after { content: "▌"; margin-left: 0.4rem; animation: caret var(--motion-clock) var(--motion-ease-step) infinite; }
+.next-page { margin-top: 2rem; }
+
+@keyframes leader-draw { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes leader-loading { from { transform: scaleX(0.15); } to { transform: scaleX(1); } }
+@keyframes stamp-in {
+  0% { visibility: hidden; transform: scale(1.12); }
+  0.01% { visibility: visible; transform: scale(1.12); }
+  100% { visibility: visible; transform: scale(1); }
+}
+@keyframes caret { 50% { visibility: hidden; } }
+
+@media (max-width: 760px) {
+  .filter-strip { grid-template-columns: 1fr; }
+  .new-procedure { display: grid; gap: 0.4rem; }
+  .new-procedure-action { text-align: left; }
+  .run-row a { grid-template-columns: 2rem minmax(0, 1fr) auto; grid-template-areas: "number subject subject" ". leader state" ". retention retention"; row-gap: 0.65rem; }
+  .run-subject strong { white-space: normal; }
+  .state-evidence { min-width: 6.8rem; }
+  .state-word { min-width: 6.8rem; }
+  .drift-result-note { max-width: 12rem; }
+}

@@ -1,0 +1,29 @@
+version: 1
+
+settings:
+  destroy_wait_seconds: 120
+  apply_wait_seconds: 60
+  default_timeout: 300
+  job_timeout: 1800
+  poll_interval: 30
+  tf_runtime: "tofu:1.8"
+
+pipelines:
+  update_irsa_argocd:
+    - terraform/irsa
+    - terraform/argocd
+
+  full_network_stack:
+    - terraform/vpc
+    - terraform/subnets
+    - terraform/nat
+
+reports:
+  costs:
+    all_prod_rds:
+      filter:
+        tags:
+          Environment: production
+          Project: config0
+      group_by:
+        - dimension: SERVICE

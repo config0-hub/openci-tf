@@ -1,0 +1,261 @@
+{
+  "apply": {
+    "ConfirmApplyIntent": [
+      "FailConfirmApplyIntent",
+      "RouteAfterConfirm"
+    ],
+    "Done": [],
+    "FailConfirmApplyIntent": [
+      "RenderPipelineFailure"
+    ],
+    "FailParseCommand": [
+      "RenderPipelineFailure"
+    ],
+    "FailRouteAction": [
+      "RenderPipelineFailure"
+    ],
+    "FailRunFolders": [
+      "RenderPipelineFailure"
+    ],
+    "FailValidateAndResolve": [
+      "RenderPipelineFailure"
+    ],
+    "FinalizeAfterRenderFailure": [
+      "FinalizeRunFailed",
+      "RenderPRFailed"
+    ],
+    "FinalizeRun": [
+      "FinalizeRunFailed",
+      "RouteAfterFinalize"
+    ],
+    "FinalizeRunFailed": [],
+    "IntentFailed": [],
+    "NormalizeConfigError": [
+      "RenderPR"
+    ],
+    "ParseCommand": [
+      "FailParseCommand",
+      "RouteAction"
+    ],
+    "PipelineFailed": [],
+    "RenderEarlyPlaceholder": [
+      "ValidateAndResolve"
+    ],
+    "RenderPR": [
+      "FinalizeAfterRenderFailure",
+      "RouteAfterRender"
+    ],
+    "RenderPRFailed": [],
+    "RenderPipelineFailure": [
+      "FinalizeRun"
+    ],
+    "RenderPlaceholder": [
+      "RunFoldersSequential"
+    ],
+    "RouteAction": [
+      "ConfirmApplyIntent",
+      "FailRouteAction"
+    ],
+    "RouteAfterConfirm": [
+      "IntentFailed",
+      "RenderEarlyPlaceholder"
+    ],
+    "RouteAfterFinalize": [
+      "PipelineFailed"
+    ],
+    "RouteAfterRender": [
+      "Done",
+      "FinalizeRun"
+    ],
+    "RunFoldersSequential": [
+      "FailRunFolders",
+      "RenderPR"
+    ],
+    "ValidateAndResolve": [
+      "FailValidateAndResolve",
+      "NormalizeConfigError",
+      "RenderPlaceholder"
+    ]
+  },
+  "destroy": {
+    "ConfirmDestroyIntent": [
+      "FailConfirmDestroyIntent",
+      "RouteAfterConfirm"
+    ],
+    "Done": [],
+    "FailConfirmDestroyIntent": [
+      "RenderPipelineFailure"
+    ],
+    "FailParseCommand": [
+      "RenderPipelineFailure"
+    ],
+    "FailRouteAction": [
+      "RenderPipelineFailure"
+    ],
+    "FailRunFolders": [
+      "RenderPipelineFailure"
+    ],
+    "FailValidateAndResolve": [
+      "RenderPipelineFailure"
+    ],
+    "FinalizeAfterRenderFailure": [
+      "FinalizeRunFailed",
+      "RenderPRFailed"
+    ],
+    "FinalizeRun": [
+      "FinalizeRunFailed",
+      "RouteAfterFinalize"
+    ],
+    "FinalizeRunFailed": [],
+    "IntentFailed": [],
+    "NormalizeConfigError": [
+      "RenderPR"
+    ],
+    "ParseCommand": [
+      "FailParseCommand",
+      "RouteAction"
+    ],
+    "PipelineFailed": [],
+    "RenderEarlyPlaceholder": [
+      "ValidateAndResolve"
+    ],
+    "RenderPR": [
+      "FinalizeAfterRenderFailure",
+      "RouteAfterRender"
+    ],
+    "RenderPRFailed": [],
+    "RenderPipelineFailure": [
+      "FinalizeRun"
+    ],
+    "RenderPlaceholder": [
+      "RunFoldersSequential"
+    ],
+    "RouteAction": [
+      "ConfirmDestroyIntent",
+      "FailRouteAction"
+    ],
+    "RouteAfterConfirm": [
+      "IntentFailed",
+      "RenderEarlyPlaceholder"
+    ],
+    "RouteAfterFinalize": [
+      "PipelineFailed"
+    ],
+    "RouteAfterRender": [
+      "Done",
+      "FinalizeRun"
+    ],
+    "RunFoldersSequential": [
+      "FailRunFolders",
+      "RenderPR"
+    ],
+    "ValidateAndResolve": [
+      "FailValidateAndResolve",
+      "NormalizeConfigError",
+      "RenderPlaceholder"
+    ]
+  },
+  "read": {
+    "ConfigResolutionFailed": [],
+    "CreateApplyIntent": [
+      "FailCreateApplyIntent",
+      "RouteAfterIntent"
+    ],
+    "CreateDestroyIntent": [
+      "FailCreateDestroyIntent",
+      "RouteAfterIntent"
+    ],
+    "Done": [],
+    "FailCreateApplyIntent": [
+      "RenderPipelineFailure"
+    ],
+    "FailCreateDestroyIntent": [
+      "RenderPipelineFailure"
+    ],
+    "FailParseCommand": [
+      "RenderPipelineFailure"
+    ],
+    "FailRenderNoOp": [
+      "RenderPipelineFailure"
+    ],
+    "FailRouteAction": [
+      "RenderPipelineFailure"
+    ],
+    "FailRunFolders": [
+      "RenderPipelineFailure"
+    ],
+    "FailValidateAndResolve": [
+      "RenderPipelineFailure"
+    ],
+    "FinalizeAfterRenderFailure": [
+      "FinalizeRunFailed",
+      "RenderPRFailed"
+    ],
+    "FinalizeRun": [
+      "FinalizeRunFailed",
+      "RouteAfterFinalize"
+    ],
+    "FinalizeRunFailed": [],
+    "IntentFailed": [],
+    "NormalizeConfigError": [
+      "RenderPR"
+    ],
+    "ParseCommand": [
+      "FailParseCommand",
+      "RouteAction"
+    ],
+    "PipelineFailed": [],
+    "RenderEarlyPlaceholder": [
+      "ValidateAndResolve"
+    ],
+    "RenderNoOp": [
+      "Done",
+      "FailRenderNoOp"
+    ],
+    "RenderPR": [
+      "FinalizeAfterRenderFailure",
+      "RouteAfterRender"
+    ],
+    "RenderPRFailed": [],
+    "RenderPipelineFailure": [
+      "FinalizeRun"
+    ],
+    "RenderPlaceholder": [
+      "RouteFolderConcurrency"
+    ],
+    "RouteAction": [
+      "CreateApplyIntent",
+      "CreateDestroyIntent",
+      "FailRouteAction",
+      "RenderEarlyPlaceholder"
+    ],
+    "RouteAfterFinalize": [
+      "ConfigResolutionFailed",
+      "PipelineFailed"
+    ],
+    "RouteAfterIntent": [
+      "Done",
+      "IntentFailed"
+    ],
+    "RouteAfterRender": [
+      "Done",
+      "FinalizeRun"
+    ],
+    "RouteFolderConcurrency": [
+      "RunFolders"
+    ],
+    "RouteResolved": [
+      "RenderNoOp",
+      "RenderPlaceholder"
+    ],
+    "RunFolders": [
+      "FailRunFolders",
+      "RenderPR"
+    ],
+    "ValidateAndResolve": [
+      "FailValidateAndResolve",
+      "NormalizeConfigError",
+      "RouteResolved"
+    ]
+  }
+}
