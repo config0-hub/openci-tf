@@ -1,4 +1,6 @@
-"""Tests for changed-folder resolution ported from .original."""
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Tests for changed-folder resolution."""
 
 from typing import Any, cast
 
@@ -54,10 +56,17 @@ def test_resolve_affected_folders_matches_paths_renames_and_global_config():
     configured = ["infra/vpc", "infra/rds"]
     changed_files = [
         {"filename": "infra/vpc/main.tf", "status": "modified"},
-        {"filename": "infra/rds/main.tf", "status": "renamed", "previous_filename": "infra/rds/old.tf"},
+        {
+            "filename": "infra/rds/main.tf",
+            "status": "renamed",
+            "previous_filename": "infra/rds/old.tf",
+        },
         {"filename": ".openci_tf/config.yaml", "status": "modified"},
     ]
-    assert resolve_affected_folders(changed_files, configured) == ["infra/rds", "infra/vpc"]
+    assert resolve_affected_folders(changed_files, configured) == [
+        "infra/rds",
+        "infra/vpc",
+    ]
 
 
 def test_resolve_affected_folders_returns_empty_when_nothing_matches():
@@ -68,7 +77,9 @@ def test_resolve_affected_folders_returns_empty_when_nothing_matches():
 
 def test_changed_files_limit_fails_loud():
     with pytest.raises(ConfigResolutionError, match=str(MAX_PR_CHANGED_FILES)):
-        enforce_changed_files_limit([{"filename": f"f{i}.tf"} for i in range(MAX_PR_CHANGED_FILES + 1)])
+        enforce_changed_files_limit(
+            [{"filename": f"f{i}.tf"} for i in range(MAX_PR_CHANGED_FILES + 1)]
+        )
 
 
 class _Response:
@@ -103,10 +114,12 @@ def _client_with_session(session: _Session) -> GitHubClient:
 
 
 def test_changed_files_pagination_fails_boundedly_at_cap():
-    session = _Session([
-        _Response([{"filename": "a.tf"}, {"filename": "b.tf"}]),
-        _Response([{"filename": "c.tf"}]),
-    ])
+    session = _Session(
+        [
+            _Response([{"filename": "a.tf"}, {"filename": "b.tf"}]),
+            _Response([{"filename": "c.tf"}]),
+        ]
+    )
     client = _client_with_session(session)
 
     with pytest.raises(GitHubChangedFilesLimitExceeded, match="more than 2"):

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Fetch and merge hub SSM dotenv parameters into execution secrets."""
 
 from __future__ import annotations

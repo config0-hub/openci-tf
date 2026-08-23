@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Binary plan artifact metadata validation for the run-scoped layout."""
 from __future__ import annotations
 

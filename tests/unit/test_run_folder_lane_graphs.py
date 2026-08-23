@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Structural isolation checks for the three physical run-folder graphs."""
 from __future__ import annotations
 

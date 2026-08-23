@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """CodeBuild links must identify the hub account required by the AWS console."""
 
 from __future__ import annotations

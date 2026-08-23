@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Config0, Inc.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { advanceCursor, CursorPagination, retreatCursor } from "./Pagination";

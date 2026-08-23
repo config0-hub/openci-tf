@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Payload bound leaves headroom for both dispatch paths."""
 from src.core.errors import PayloadTooLargeError
 MAX_SERIALIZED_PAYLOAD_BYTES = 131072

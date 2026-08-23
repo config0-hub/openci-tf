@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Parse repo-root .openci_tf/config.yaml into GlobalConfig."""
 
 from __future__ import annotations

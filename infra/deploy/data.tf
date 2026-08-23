@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Cross-stack wiring via data-source lookups on deterministic names.
 # Foundation, engine, and bootstrap resources are discovered — not hand-threaded.
 

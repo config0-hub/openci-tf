@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Authorization-bounded cross-trigger run-list adapter coverage."""
 from __future__ import annotations
 

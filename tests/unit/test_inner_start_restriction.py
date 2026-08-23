@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 from pathlib import Path
 
 OPENCI_TF_MAIN = Path("infra/deploy/modules/openci_tf/main.tf").read_text()

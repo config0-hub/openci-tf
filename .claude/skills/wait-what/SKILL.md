@@ -1,7 +1,0 @@
----
-name: wait-what
-description: 'Stop. That last message did not land: re-pitch it in plain speech.'
----
-
-Wait, I don't understand where you've got to here. Re-pitch that: give me a little bit of context, then restate it through the `plain-speech` skill — ASD-STE100 Simplified Technical English, the ubiquitous language from `CONTEXT.md` (follow `CONTEXT-MAP.md` to the right one if the repo has more than one), and the unslop checklist. Shorter and plainer, not longer.
-<!-- Vendored from matt-pocock-skills (MIT, (c) 2026 Matt Pocock), adapted for the shared-llm kit. -->

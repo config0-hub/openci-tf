@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Constant tables defining the bounded manifest schema (entry names, sets, bounds)."""
 from __future__ import annotations
 

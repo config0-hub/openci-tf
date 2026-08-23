@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Intent create/confirm Lambda handlers for the outer state machine."""
 from __future__ import annotations
 

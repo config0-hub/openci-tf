@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Run listing, pagination, and folder-gate queries for the run registry."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # hub-lambda-exec role — assumed by openci-tf Lambdas to perform cross-account AssumeRole
 
 data "aws_caller_identity" "current" {}

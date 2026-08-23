@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Phase B Milestone 3 mutation config, grace wait, links, and plan show tests."""
 
 from __future__ import annotations

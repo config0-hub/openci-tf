@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # ref 4353245 - openci-tf remote executor consistency naming
 locals {
   executor_readonly_role_name  = "${var.project_name}-executor-readonly"

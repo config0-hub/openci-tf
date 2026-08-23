@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Registry step-index validation and ASL-to-API conversion."""
 
 from __future__ import annotations

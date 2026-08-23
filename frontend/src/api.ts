@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Config0, Inc.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { adminEndpoints, type AccountsResponse, type GatesResponse, type LocksResponse, type ReposResponse } from "./admin-contract";
 import type { CreateRunRequest, CreateRunResponse, FolderRecord, Manifest, RunRecord, RunRegistryDetailData, RunsResponse } from "./types";
 

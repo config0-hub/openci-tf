@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Config0, Inc.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
 import { loadConsoleToken } from "./token.js";
 import type { AwsFetchClient } from "./proxy.js";

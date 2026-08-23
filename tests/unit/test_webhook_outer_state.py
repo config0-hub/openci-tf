@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """End-to-end outer-input coverage for the webhook's safe lane."""
 
 from __future__ import annotations

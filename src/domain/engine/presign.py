@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Presign lifetime cannot outlive the signing credentials."""
 from src.core.errors import SignerHorizonExceededError
 SIGNER_CREDENTIAL_HORIZON_SECONDS = 3600  # Human may lower before real-AWS use.

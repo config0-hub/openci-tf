@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 output "kms_key_arn" { value = aws_kms_key.foundation.arn }
 output "kms_alias" { value = aws_kms_alias.foundation.name }
 output "tmp_bucket_name" { value = aws_s3_bucket.foundation["tmp"].bucket }

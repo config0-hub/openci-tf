@@ -1,0 +1,27 @@
+{
+  "files": {
+    "src/domain/command/affected_folders.py": {
+      "modifiedRanges": [
+        {
+          "start": 1,
+          "end": 121
+        }
+      ],
+      "importsChanged": false,
+      "lastEdit": "2026-08-23T13:55:12.674Z"
+    },
+    "tests/unit/test_affected_folders.py": {
+      "modifiedRanges": [
+        {
+          "start": 1,
+          "end": 136
+        }
+      ],
+      "importsChanged": true,
+      "lastEdit": "2026-08-23T13:55:12.691Z"
+    }
+  },
+  "turnCycles": 0,
+  "maxCycles": 3,
+  "lastUpdated": "2026-08-23T13:55:12.691Z"
+}

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Frozen target-account bindings carried from resolution into execution."""
 from __future__ import annotations
 

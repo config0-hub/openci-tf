@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Resolve configured Terraform folders affected by a pinned PR diff."""
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ def changed_paths(files: list[dict]) -> list[str]:
 
 
 def changed_directories(paths: list[str], *, include_root: bool = False) -> list[str]:
-    """Port of ``.original/src/openci_tf/common/github_pr.py::get_changed_dirs``."""
+    """Return sorted parent directories for changed file paths."""
     dirs: set[str] = set()
     for filepath in paths:
         if filepath in {"", "~"} or (filepath.startswith(".") and len(filepath) == 1):
@@ -52,20 +54,30 @@ def changed_directories(paths: list[str], *, include_root: bool = False) -> list
 
 
 def normalize_changed_directories(changed_dirs: list[str]) -> list[str]:
-    """Port of ``.original/src/main_webhook.py::_get_openci_tf_folder`` dir normalization."""
-    matched_dirs = list({
-        changed_dir.split("/.openci_tf")[0] if "/.openci_tf" in changed_dir else changed_dir
-        for changed_dir in changed_dirs
-    })
+    """Collapse changed directories to configured folder candidates."""
+    matched_dirs = list(
+        {
+            changed_dir.split("/.openci_tf")[0]
+            if "/.openci_tf" in changed_dir
+            else changed_dir
+            for changed_dir in changed_dirs
+        }
+    )
     return sorted(
         path
         for path in matched_dirs
-        if not any(path.startswith(other + "/") for other in matched_dirs if other != path)
+        if not any(
+            path.startswith(other + "/") for other in matched_dirs if other != path
+        )
     )
 
 
 def _longest_configured_prefix(path: str, configured: set[str]) -> str | None:
-    matches = [folder for folder in configured if path == folder or path.startswith(folder + "/")]
+    matches = [
+        folder
+        for folder in configured
+        if path == folder or path.startswith(folder + "/")
+    ]
     if not matches:
         return None
     return max(matches, key=len)

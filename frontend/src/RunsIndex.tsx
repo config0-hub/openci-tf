@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Config0, Inc.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";

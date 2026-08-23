@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """S3 head_object semantics for done-marker baseline reads."""
 
 from __future__ import annotations

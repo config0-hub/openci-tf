@@ -13,7 +13,7 @@ validation. The successful folders were:
 `sample-target-repo.snapshot.json` records the source repository, commit, live
 folders, and SHA-256 digest of every copied file. The openci-tf unit suite verifies
 that manifest and runs the live folders through the current discovery and plan
-configuration resolver. The snapshot also retains its original contract test.
+configuration resolver. The snapshot also includes a fixture-local contract test.
 
 This fixture makes the branch self-contained for review and regression testing.
 It does not make live AWS tests hermetic: a new live API run still requires a

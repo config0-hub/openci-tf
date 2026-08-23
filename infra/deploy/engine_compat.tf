@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Compatibility policy for the unmodified execution engine: foundation buckets use
 # the openci-tf KMS key, so engine roles that touch foundation SSE-KMS objects need
 # narrowly scoped foundation-key permissions in addition to their engine defaults.

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Golden tests for the artifact-driven Phase-2 PR formatter contract."""
 from pathlib import Path
 

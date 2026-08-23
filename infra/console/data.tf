@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Cross-stack wiring follows the deploy root's deterministic-name convention.
 data "aws_apigatewayv2_apis" "core" {
   name          = "${var.project_name}-webhook"

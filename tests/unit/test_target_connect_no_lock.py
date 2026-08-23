@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Target-connect installer state is S3-only; its executor gets scoped target locks."""
 from __future__ import annotations
 

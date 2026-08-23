@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Config0, Inc.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { AppShell } from "./AppShell";
 import { NewRun } from "./NewRun";

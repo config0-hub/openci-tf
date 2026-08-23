@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 locals {
   names       = ["prepare-and-submit", "poll-done", "collect", "persist-retry-attempt", "write-failure-manifest"]
   lane_suffix = var.lane == "read" ? "" : "-${var.lane}"

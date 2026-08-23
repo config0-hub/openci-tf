@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Config0, Inc.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";

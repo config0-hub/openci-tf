@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Outer ValidateAndResolve Step Functions state budgeting and compaction."""
 from __future__ import annotations
 

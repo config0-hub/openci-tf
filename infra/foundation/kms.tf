@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 data "aws_iam_policy_document" "foundation_key" {
   statement {
     sid       = "AccountRootOnly"

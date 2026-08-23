@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 resource "aws_sfn_state_machine" "this" {
   name     = local.state_machine_name
   role_arn = aws_iam_role.sfn.arn

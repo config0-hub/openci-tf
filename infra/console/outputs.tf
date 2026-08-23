@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 output "function_url" {
   description = "Public console shell URL; API requests require the application bearer token"
   value       = aws_lambda_function_url.console.function_url

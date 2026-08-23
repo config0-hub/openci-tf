@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Run-level writes and reads for the DynamoDB run registry."""
 
 from __future__ import annotations

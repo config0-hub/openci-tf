@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Lambda handler: openci-tf-parse-command
 
 First Step Function state. Parses the command from the webhook event and

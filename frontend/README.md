@@ -1,6 +1,6 @@
 # openci-tf console
 
-Phase 1 is a Vite/React console plus a small Hono Node server. The server serves
+The console is a Vite/React app plus a small Hono Node server. The server serves
 the static login shell and assets publicly, protects every `/api/*` request with
 the shared console bearer token, SigV4-signs those requests for API Gateway,
 serves `dist/`, and exports `handler` from `server-dist/lambda.js` for
@@ -49,7 +49,7 @@ views:
 - `/runs/run-failed` — failure with corrective evidence
 - `/runs/run-drift` — authoritative drift-detected procedure
 - `/runs/run-drift-clean` — authoritative clean drift procedure
-- `/runs/run-drift-unknown` — migration-safe unknown drift result
+- `/runs/run-drift-unknown` — unknown drift result
 - `/runs/run-expired-plan` — explicit expired binary-plan state
 
 ## Local real API mode
@@ -121,12 +121,11 @@ static files without auth and enforces `Authorization: Bearer <token>` on every
   per-step outcomes. The UI renders an em dash for an unavailable count and
   labels artifact presence as `FILED`; it never converts output existence into a
   successful step outcome.
-- Drift classification comes only from `drift_detected`. A successful legacy row
+- Drift classification comes only from `drift_detected`. A successful run
   without that field remains `COMPLETE` with a visible unknown-result note.
 - Gate folder rows are retained latest-run observations of pinned repository
   config. Their SHA/run/time provenance is visible and absence is not rendered as
   an opt-out.
 
-No dependencies beyond those authorized in the Phase 1 task are used. The
-self-hosted Barlow Condensed font files are licensed under the OFL included at
-`public/fonts/OFL.txt`.
+The self-hosted Barlow Condensed font files are licensed under the OFL included
+at `public/fonts/OFL.txt`.

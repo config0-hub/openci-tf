@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Config0, Inc.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, probeAuthorization, TOKEN_CHANGED, TOKEN_KEY, TOKEN_REJECTED } from "./api";

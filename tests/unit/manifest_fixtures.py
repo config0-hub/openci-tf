@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Shared helpers for complete successful plan/report manifest tests."""
 
 from __future__ import annotations

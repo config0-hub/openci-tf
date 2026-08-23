@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Static tests for split executor-readonly and executor-poweruser roles."""
 
 from __future__ import annotations
@@ -6,7 +8,6 @@ import re
 import subprocess
 from pathlib import Path
 
-import pytest  # type: ignore[import-not-found]
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _READONLY_MODULE = _REPO_ROOT / "infra/modules/executor-readonly/main.tf"
@@ -15,7 +16,7 @@ _READONLY_ROOT = _REPO_ROOT / "infra/target-connect/main.tf"
 _POWERUSER_ROOT = _REPO_ROOT / "infra/target-connect-poweruser/main.tf"
 _HUB_READONLY = _REPO_ROOT / "infra/modules/hub-setup/local_executor_readonly.tf"
 _JUSTFILE = _REPO_ROOT / "justfile"
-_MIGRATION_DOC = _REPO_ROOT / "docs/MIGRATION_EXECUTOR_ROLES.md"
+_EXECUTOR_ROLES_DOC = _REPO_ROOT / "docs/EXECUTOR_ROLES.md"
 
 
 def test_readonly_and_poweruser_use_distinct_role_resource_names():
@@ -133,12 +134,13 @@ def test_target_aws_role_readonly_destroy_uses_targeted_module_only():
     )
 
 
-def test_migration_doc_describes_durable_legacy_retirement():
-    text = _MIGRATION_DOC.read_text(encoding="utf-8")
-    assert "provision_legacy_executor_local" in text
-    assert "provision_legacy_executor_remote" in text
-    assert "retire-legacy-executor-local" in text
-    assert "retire-legacy-executor-remote" in text
+def test_executor_roles_doc_describes_current_role_ownership():
+    text = _EXECUTOR_ROLES_DOC.read_text(encoding="utf-8")
+    assert "openci-tf-executor-readonly" in text
+    assert "openci-tf-executor-poweruser" in text
+    assert "hub-setup" in text
+    assert "target-create-aws-readonly" in text
+    assert "target-create-aws-poweruser" in text
 
 
 def test_hub_setup_declares_provision_legacy_variable():
@@ -210,13 +212,13 @@ def test_justfile_lists_legacy_retirement_recipes():
         assert recipe in text
 
 
-def test_migration_doc_describes_safe_sequence_and_honest_uninstall():
-    text = _MIGRATION_DOC.read_text(encoding="utf-8")
-    assert "hub-setup" in text
-    assert "target-create-aws-readonly" in text
-    assert "openci-tf-executor-remote" in text
-    assert "deploy-destroy" in text
-    assert "target-delete-aws-readonly" in text
+def test_executor_roles_doc_describes_lane_binding_and_state_contract():
+    text = _EXECUTOR_ROLES_DOC.read_text(encoding="utf-8")
+    assert "role_name" in text
+    assert "poweruser_role_name" in text
+    assert "enable_apply" in text
+    assert "targets/<repo>/<folder>.tfstate" in text
+    assert "source snapshots" in text
 
 
 def test_justfile_install_does_not_invoke_target_create_on_hub():

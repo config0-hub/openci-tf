@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """DynamoDB helpers for repository settings and target-account aliases."""
 from __future__ import annotations
 

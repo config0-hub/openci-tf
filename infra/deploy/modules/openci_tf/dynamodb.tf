@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # openci-tf-settings stores both repository and account-alias rows.  Keeping a
 # composite key makes the row kinds explicit and lets account aliases share the
 # same audited settings table.

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Behavior tests for safe resolution, bounded artifact reads, and render cleanup."""
 from io import BytesIO
 from types import SimpleNamespace

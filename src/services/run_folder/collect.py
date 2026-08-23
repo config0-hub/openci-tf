@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Collect Lambda returns bounded state-machine-safe data and writes manifest."""
 from __future__ import annotations
 

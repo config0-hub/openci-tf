@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Fresh mocked hub-setup plans assert executor address stability only.
 
 These tests do not load Terraform state or assert pre-split plan actions; see

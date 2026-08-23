@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Update mutation in-progress PR comments with CodeBuild links."""
 
 from __future__ import annotations

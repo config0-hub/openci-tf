@@ -93,7 +93,7 @@ Run and folder registry responses can include `drift_detected: true|false` for
 field is absent when no authoritative drift artifact was observed. The run field
 is `true` when any folder authoritatively detected drift, `false` only when every
 folder has an authoritative false result, and absent when the aggregate is
-unknown. This is migration-safe for rows written before the field existed.
+unknown. Consumers must treat an absent field as an unknown drift result.
 
 Terminal execution status has precedence over the drift result: a failed or
 `infrastructure_error` run remains failed even if one completed folder recorded

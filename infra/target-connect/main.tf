@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 terraform {
   required_version = ">= 1.5"
   required_providers {
@@ -49,7 +51,7 @@ resource "terraform_data" "remote_account_only" {
   lifecycle {
     precondition {
       condition     = local.hub_account_id != "" && local.hub_account_id != local.account_id
-      error_message = "target-connect is for remote target accounts only; same-account hub readonly is owned by hub-setup deploy (just deploy). See docs/MIGRATION_EXECUTOR_ROLES.md."
+      error_message = "target-connect is for remote target accounts only; same-account hub readonly is owned by hub-setup deploy (just deploy). See docs/EXECUTOR_ROLES.md."
     }
   }
 }

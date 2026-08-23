@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Static IAM policy tests for run-folder Lambda roles."""
 
 from __future__ import annotations

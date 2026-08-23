@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Normalize DynamoDB resource items into JSON-safe Python values."""
 from __future__ import annotations
 

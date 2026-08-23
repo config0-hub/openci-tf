@@ -1,5 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # executor-readonly role — assumed by hub-lambda-exec for same-account read execution.
-# Hub deploy state owns this role alongside legacy executor-local; see docs/MIGRATION_EXECUTOR_ROLES.md.
+# Hub deploy state owns this role; see docs/EXECUTOR_ROLES.md.
 
 locals {
   executor_readonly_boundary_policy_name = "${var.role_prefix}-executor-readonly-permissions-boundary"

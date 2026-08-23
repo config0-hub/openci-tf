@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Production-shaped tests for acceptance-v6 blockers C1-C4."""
 from __future__ import annotations
 

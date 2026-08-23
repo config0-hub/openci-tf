@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 variable "project_name" {
   description = "Project name used for ECR repository name"
   type        = string

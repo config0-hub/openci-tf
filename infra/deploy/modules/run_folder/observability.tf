@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 resource "aws_cloudwatch_log_group" "step_function" {
   name              = "/aws/vendedlogs/states/${local.state_machine_name}"
   retention_in_days = var.log_retention_days

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Atomically construct retry evidence, persist attempt zero, and resubmit once."""
 from __future__ import annotations
 

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 resource "aws_cloudwatch_event_rule" "apply_execution_failures" {
   name        = "${var.project_name}-apply-execution-failures"
   description = "Finalize registry runs after uncatchable apply Step Functions failures"

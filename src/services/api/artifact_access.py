@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Presign and URI-confinement security helpers for artifact access."""
 from __future__ import annotations
 

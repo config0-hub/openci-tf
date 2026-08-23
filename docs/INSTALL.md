@@ -74,8 +74,8 @@ just verify      # aws CLI checks: buckets, KMS, lambdas, SFNs, roles, SSM, sour
 in each account that should allow apply/destroy. Deploy creates three outer state machines
 (`openci-tf`, `openci-tf-apply`, `openci-tf-destroy`) and three inner run-folder machines
 (`openci-tf-run-folder`, `openci-tf-run-folder-apply`, `openci-tf-run-folder-destroy`).
-`just account-set-apply` write to hub DynamoDB (`openci-tf-settings`) and must run
-with hub credentials — not target credentials. Use them (or
+`just account-set-apply` writes to hub DynamoDB (`openci-tf-settings`) and must run
+with hub credentials — not target credentials. Use it (or
 `just account-set-apply <alias> true` later) so apply/destroy intents are
 allowed for each registered account alias.
 
@@ -100,25 +100,19 @@ What each component does:
    Lambda, lock table); only true config remains in tfvars. The recipe applies
    `module.ecr` first, builds and pushes the Lambda container image at the fixed
    version in `IMAGE_VERSION` (`just docker-push`), then applies the rest.
-5. **target-create-aws-readonly** — **remote target accounts only** (refuses
-   same-account/hub mode). Run `just target-onboard` or
-   `just target-create-aws-readonly <hub_account_id>` from target credentials.
-4. **deploy** — the hub stack. Cross-stack values are discovered with
-   data-source lookups on deterministic names (foundation KMS alias and
-   buckets, engine `openci-tf-init-job` Lambda, lock table); only true config
-   remains in tfvars. The recipe applies `module.ecr` first, builds and pushes
-   the Lambda container image (`just docker-push <tag>`), then applies the rest.
-5. **target-connect** — same-account executor-remote role using a data lookup
-   of `openci-tf-hub-lambda-exec`. For cross-account targets apply
-   `infra/target-connect` in the target account with
-   `hub_lambda_exec_role_arn` and `state_bucket_arn` tfvars
-   (data sources cannot cross accounts). Terraform derives the required
-   `sts:ExternalId` as `openci-tf-` plus the first 16 lowercase hex chars of
-   SHA-256 over `openci-tf:<hub-account-id>:<target-account-id>`. Target
-   onboarding requires the existing S3 state bucket and account-local
-   `<project>-tf-locks` DynamoDB table used by repository backends. The
-   target-connect install's own Terraform backend remains S3-only.
-6. **console** (optional) — one Node 20 Lambda and a Function URL. It discovers
+5. **target-create-aws-readonly** — creates `openci-tf-executor-readonly` in a
+   remote target account and records the trust relationship back to the hub.
+   Run `just target-onboard` or `just target-create-aws-readonly <hub_account_id>`
+   from target credentials. Terraform derives the required `sts:ExternalId` as
+   `openci-tf-` plus the first 16 lowercase hex chars of SHA-256 over
+   `openci-tf:<hub-account-id>:<target-account-id>`. Target onboarding requires
+   the existing S3 state bucket and account-local `<project>-tf-locks` DynamoDB
+   table used by repository backends. The target install's own Terraform backend
+   remains S3-only.
+6. **target-create-aws-poweruser** — optional mutation IAM for accounts that can
+   run confirmed apply/destroy jobs. The role is separate from the readonly role
+   and is assumed only by the apply/destroy lanes.
+7. **console** (optional) — one Node 20 Lambda and a Function URL. It discovers
    the existing `<project>-webhook` HTTP API by name, serves the built SPA, and
    SigV4-proxies `/api/*`. The Function URL uses `NONE` authorization so a
    browser can load the static login shell and assets; the app checks the shared
@@ -225,8 +219,11 @@ For each cross-account target, split work by credential scope:
 Then opt in each eligible folder in `.openci_tf/config.yaml`:
 
 ```yaml
-apply: true
-destroy: true
+apply:
+  allow: true
+
+destroy:
+  allow: true
 ```
 
 Set either flag independently when a folder should support only one mutation.
@@ -299,10 +296,9 @@ collaborator.
 ### Same-account target
 
 `just deploy` (hub-setup in deploy state) provisions `openci-tf-executor-readonly` in the
-hub account alongside legacy `openci-tf-executor-local` when install SSM
-`provision_legacy_executor_local` is true (default during upgrade). `just
-target-create-aws-readonly` **refuses same-account mode** — do not use it on the hub.
-Add `just target-create-aws-poweruser` when mutation IAM is required.
+hub account. `just target-create-aws-readonly` **refuses same-account mode** — do
+not use it on the hub. Add `just target-create-aws-poweruser` when mutation IAM
+is required.
 
 ### Cross-account target (two-command journey)
 
@@ -326,35 +322,26 @@ Add `just target-create-aws-poweruser` when mutation IAM is required.
    ```
 
    Resolves the hub account from the authenticated AWS identity, stores the same
-   derived ExternalId in the DynamoDB alias row (replacing any legacy value),
-   appends the account id to `target_account_ids` (without duplicates), and runs
-   `just deploy` to refresh hub IAM. Runtime recomputes the value and fails loud
-   if the stored row does not match.
+   derived ExternalId in the DynamoDB alias row, appends the account id to
+   `target_account_ids` (without duplicates), and runs `just deploy` to refresh
+   hub IAM. Runtime recomputes the value and fails loud if the stored row does
+   not match.
 
 Lower-level recipes (`just register-account`, `just config set target_account_ids …`,
 `just target-create-aws-readonly`, `just target-create-aws-poweruser`) remain
 available for manual or recovery flows.
 
-**Migration from pre-split installs:** See [MIGRATION_EXECUTOR_ROLES.md](MIGRATION_EXECUTOR_ROLES.md).
-Summary: provision new `openci-tf-executor-readonly` alongside legacy roles (never via
-`moved` rename), update DynamoDB `role_name` when ready, verify safe lane, then
-explicitly retire legacy roles. Legacy `openci-tf-executor-remote` registrations
-continue to work until updated. Accounts that previously used SSM `enable_apply=true`
-for legacy IAM must keep that install SSM value through migration: `just deploy` and
-`just target-create-aws-readonly` read it and pass it to retained legacy roles so the
-first readonly provisioning does not swap `PowerUserAccess` for `ReadOnlyAccess`.
-Runtime mutation still requires DynamoDB `enable_apply` plus
-`just target-create-aws-poweruser` in the **target** account.
+**Executor roles:** See [EXECUTOR_ROLES.md](EXECUTOR_ROLES.md) for role ownership,
+lane binding, and state access rules.
 
-**Executor state contract:** PR-plan execution roles (`executor-readonly` and
-legacy `executor-local` / `executor-remote`) can only read/write Terraform state under the `targets/`
-prefix of the state bucket. Executors scope DynamoDB lock items to `LockID` values matching
-`<bucket>/targets/*`; broad reads and non-target lock keys are denied. Registered
-repositories MUST configure their backend state keys as
-`targets/<repo>/<folder>.tfstate`. Target role installs keep an
-S3-only backend; the lock table is required by repository execution. The
-install control-plane state, the `source/` record, and `engine/` artifacts in
-the same bucket are explicitly denied to executors.
+**Executor state contract:** PR-plan execution roles can only read/write Terraform
+state under the `targets/` prefix of the state bucket. Executors scope DynamoDB
+lock items to `LockID` values matching `<bucket>/targets/*`; broad reads and
+non-target lock keys are denied. Registered repositories MUST configure their
+backend state keys as `targets/<repo>/<folder>.tfstate`. Target role installs
+keep an S3-only backend; the lock table is required by repository execution.
+The install control-plane state, the `source/` record, and `engine/` artifacts
+in the same bucket are explicitly denied to executors.
 
 Open a same-repository PR and comment `tf plan` or `tf plan <folder>` for the
 first safe run. With the account and folder gates enabled, use `tf apply`

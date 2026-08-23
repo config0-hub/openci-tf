@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 resource "aws_sfn_state_machine" "openci_tf" {
   name     = var.project_name
   role_arn = aws_iam_role.stepfunction.arn

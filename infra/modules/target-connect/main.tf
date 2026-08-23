@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # executor-remote role — deployed in target accounts, assumed by hub-lambda-exec
 
 # ref 4353245 - openci-tf remote executor consistency naming

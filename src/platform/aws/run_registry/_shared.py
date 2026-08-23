@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Shared constants, table helpers, and exception types for the run registry.
 
 Sibling modules in this package (``runs``, ``folders``, ``queries``) import

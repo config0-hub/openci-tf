@@ -47,7 +47,7 @@ Workload roots in TEST depend on their regional VPC root via `terraform_remote_s
 
 | Action | Who runs it | Notes |
 |--------|-------------|-------|
-| `plan`, `drift`, `validate`, `report` | **openci-tf** (PR comment) | Only supported CI verbs per current contract |
+| `plan`, `drift`, `report` | **openci-tf** (PR comment) | Supported PR verbs per current contract |
 | `init`, `apply`, `destroy` | **Operator** (`just` recipes) | Requires explicit account confirmation; destroy also requires typing `DESTROY` |
 | AWS credential sourcing | Operator environment | Never committed; source `/tmp/test.env` (TEST) or `/tmp/test2.env` (TEST2) before operator recipes |
 
@@ -62,7 +62,7 @@ Running `tofu init`, `tofu plan`, `tofu apply`, or `tofu destroy` directly insid
 Before the first credentialed openci-tf plan, operators must complete hub-side setup outside this repository:
 
 1. Bootstrap hub state bucket `openci-tf-state-REPLACE_MAIN_ACCOUNT` and lock table `openci-tf-tf-locks` (see openci-tf `docs/INSTALL.md`).
-2. Bootstrap TEST2 state bucket `openci-tf-state-REPLACE_SECONDARY_ACCOUNT` and lock table `openci-tf-tf-locks` in TEST2; deploy `openci-tf-executor-remote` via target-connect.
+2. Bootstrap TEST2 state bucket `openci-tf-state-REPLACE_SECONDARY_ACCOUNT` and lock table `openci-tf-tf-locks` in TEST2; deploy `openci-tf-executor-readonly` with `just target-create-aws-readonly`.
 3. Register account aliases `REPLACE_MAIN_ALIAS` → `REPLACE_MAIN_ACCOUNT` and `REPLACE_SECONDARY_ALIAS` → `REPLACE_SECONDARY_ACCOUNT`.
 4. Register this repository and create the GitHub webhook.
 5. Ensure hub `target_account_ids` includes both `REPLACE_MAIN_ACCOUNT` and `REPLACE_SECONDARY_ACCOUNT`.
@@ -115,7 +115,7 @@ After hub registration (see Preconditions), on a PR comment:
 tf plan all
 ```
 
-Supported verbs: `plan`, `drift`, `validate`, `report`. Apply and destroy are **not** available through openci-tf. `tf plan all` discovers exactly six reportable folders across both accounts.
+Supported verbs: `plan`, `drift`, `report`. Apply and destroy use the gated confirmation flow documented in openci-tf `docs/APPLY.md`. `tf plan all` discovers exactly six reportable folders across both accounts.
 
 ### Teardown (reverse order)
 

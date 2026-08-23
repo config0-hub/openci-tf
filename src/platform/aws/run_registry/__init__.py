@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Public DynamoDB run-registry API.
 
 The package facade exposes registry operations, registry exceptions, retention

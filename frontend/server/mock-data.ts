@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Config0, Inc.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 const HOUR = 3_600;
 const DAY = 86_400;
 const now = Math.floor(Date.now() / 1_000);

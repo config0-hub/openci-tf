@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Canonical target-role ExternalId derivation for openci-tf.
 
 The value is implementation-owned, not a secret, and is derived identically by

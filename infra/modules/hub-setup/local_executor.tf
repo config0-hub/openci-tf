@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # executor-local role — legacy same-account executor retained for pre-split state upgrades.
 
 resource "aws_iam_role" "executor_local" {

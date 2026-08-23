@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Write deterministic failure manifests and persist registry dimensions."""
 from __future__ import annotations
 

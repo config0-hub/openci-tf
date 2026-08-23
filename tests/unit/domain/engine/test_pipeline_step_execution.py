@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 from dataclasses import asdict
 
 from src.domain.config.folder_config import compact_folder_config_for_outer_state, parse_folder_config

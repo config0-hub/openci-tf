@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for engine done-marker error derivation."""
 from src.domain.engine.result import derive_error_from_steps, parse_result
 

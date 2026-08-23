@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Pure S3 artifact key builders for the openci-tf/<repo>/<run_id>/<folder>/ layout.
 
 Binary plan uploads use plain presigned PUT (not create-only If-None-Match) so

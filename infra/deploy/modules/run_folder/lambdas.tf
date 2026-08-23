@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 locals {
   handlers = {
     "prepare-and-submit"     = "src.services.run_folder.prepare_and_submit.handler"

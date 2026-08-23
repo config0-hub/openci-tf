@@ -19,11 +19,17 @@ terraform.tfvars
 # Local CA certificates used only by Docker test builds behind TLS interception.
 docker/certs/*.crt
 .memsearch
+
+# Agent scratch (local only — never commit)
+WORKLOG.md
 work-log
+REVIEW-*.md
+review/
 
 # LLM kit (never commit)
 .shared-llm/
 PLANS
 .lavish
+.claude
 .claude/worktrees/
 .impeccable/

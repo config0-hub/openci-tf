@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Structural state-address compatibility for pre-split executor role upgrades.
 
 These tests compare checked-in pre-split state schema fixtures to current Terraform

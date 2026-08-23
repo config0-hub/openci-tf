@@ -16,13 +16,12 @@ execution keys. `PollDone` rejects done markers that predate engine submission.
 The inner run-folder state machine performs PrepareAndSubmit, PollDone, and Collect, with one credential-expiry
 retry using a fresh immutable execution id.
 
-Rebrand budget note: Step Functions caps serialized state at 262,144 bytes.
-The outer post-Map soft budget stays at 261,000 bytes, preserving the original
-1,144-byte hard-limit headroom. The longer `openci-tf` artifact prefixes make a
-256-character repository name serialize the fifty-folder worst failure shape to
-261,706 bytes, so the repository-name cap is now 251 characters. At 251
-characters the same shape serializes to 260,951 bytes; at 252 it serializes to
-261,102 bytes and violates the unchanged soft budget.
+Step Functions caps serialized state at 262,144 bytes. The outer post-Map soft
+budget stays at 261,000 bytes, leaving 1,144 bytes of hard-limit headroom. A
+256-character repository name serializes the fifty-folder worst failure shape to
+261,706 bytes, so the repository-name cap is 251 characters. At 251 characters
+the same shape serializes to 260,951 bytes; at 252 it serializes to 261,102
+bytes and violates the soft budget.
 
 Engine submissions use the eight-field SimplePayload contract: `trigger_id`,
 `s3_package_uri`, `sops_type`, `sops_path`, `commands_b64`, `done_endpoint`,

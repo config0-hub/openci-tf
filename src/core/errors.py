@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Domain errors that callers must handle explicitly."""
 
 class BudgetUnmintableError(RuntimeError): pass

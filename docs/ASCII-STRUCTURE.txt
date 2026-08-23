@@ -1,78 +1,23 @@
 ================================================================================
- *** PHASE B ARCHITECTURE — IMPLEMENTED ON feat/isolated-mutation-lanes ***
+ openci-tf — EXECUTION LANES, STATE MACHINES, AND ROLES
 ================================================================================
 
-This document describes the implementation on the local Phase B branch. AWS
-deployment and live verification remain pending refreshed hub and TEST2
-credentials and a human-pushed live-test commit.
-
-================================================================================
- CURRENT PHASE B IMPLEMENTATION
-================================================================================
-
-* Per-folder `apply` / `destroy` blocks with independent `allow` and `grace_seconds`.
-* Mutation outer machines wait the resolved grace period (Step Functions Wait) before each folder.
-* Mutation CodeBuild jobs run `tofu show` on the pinned plan artifact before apply/destroy.
-* In-progress and terminal PR comments include Step Functions and CodeBuild console links.
-
-================================================================================
- CURRENT AFTER PR B MILESTONE 2 (feat/isolated-mutation-lanes)
-================================================================================
-
-* Three isolated outer Step Functions are deployed:
-  `openci-tf` (read), `openci-tf-apply` (apply confirm only), `openci-tf-destroy` (destroy confirm only).
-* Three isolated inner Step Functions are deployed:
-  `openci-tf-run-folder` (read verbs), `openci-tf-run-folder-apply` (apply/CodeBuild only),
-  `openci-tf-run-folder-destroy` (destroy/CodeBuild only).
-* Read lane assumes registered readonly `role_name`; mutation lanes assume registered
-  `poweruser_role_name` only (missing role fails loudly).
-* Intent create stays on the read outer machine; confirmed apply/destroy starts the
-  dedicated mutation outer machine selected by resolved safe command.
-* Mutation inners submit through the engine CodeBuild state machine only (no init-job
-  Lambda invoke permission on mutation lane IAM).
-* Account registration stores optional `poweruser_role_name`; DynamoDB `enable_apply`
-  remains the intent gate. SSM `enable_apply` is Milestone 1 IAM migration only.
-
---------------------------------------------------------------------------------
- PREVIOUS (PR B MILESTONE 1)
---------------------------------------------------------------------------------
-
-* Executor IAM split into readonly and poweruser roles per account.
-* Outer/inner state machines were still shared across verbs.
-
---------------------------------------------------------------------------------
- PREVIOUS (PR A)
---------------------------------------------------------------------------------
-
-* One outer Step Function (`openci-tf`) routes plan, validate, drift, report,
-  apply, and destroy through the same `run_folder_state_machine_arn`.
-* The inner Step Function (`openci-tf-run-folder`) prepares credentials by
-  assuming the registered alias role (`openci-tf-executor-remote` by default);
-  role selection is not split by verb yet.
-* Folder `execution_target` (Lambda vs CodeBuild) still applies to all verbs,
-  including apply/destroy; there is no mutation-only CodeBuild path, no grace
-  sleep, and no `tofu show` echo in the pipeline.
-* Intent gating uses per-account `enable_apply` in DynamoDB.
-
-================================================================================
- openci-tf — EXECUTION LANES, STATE MACHINES, AND ROLES  (IMPLEMENTED)
-================================================================================
-
-Three isolated lanes. Read work never shares a state machine, an execution
-path, or an AWS role with apply/destroy. Each state machine's execution list
-is its own audit log.
+openci-tf separates read-only review work from apply/destroy mutation work.
+Read work never shares a state machine, execution path, or AWS role with the
+mutation lanes. Each state machine has its own execution list for auditability.
 
 Registration data lives in DynamoDB:
-  * per REPOSITORY : require_approval  (Enterprise repos: PR must be approved
-                                        before apply/destroy intents pass)
-  * per ACCOUNT    : enable_apply      (whether mutations are allowed there)
+  * per REPOSITORY : require_approval  (PR approval required before mutation intent)
+  * per ACCOUNT    : enable_apply      (whether mutation intents are allowed)
+  * per ACCOUNT    : role_name         (readonly role for plan/drift/report)
+  * per ACCOUNT    : poweruser_role_name (mutation role for apply/destroy)
 
---------------------------------------------------------------------------------
+================================================================================
 HUB ACCOUNT (where openci-tf is installed)
---------------------------------------------------------------------------------
+================================================================================
 
 ├── Step Function: openci-tf                        ◄── READ LANE
-│   │   verbs: plan · validate · drift · report
+│   │   verbs: plan · drift · report
 │   │   audit: execution list = every read-only run
 │   │
 │   ├── PR comment "In progress" posted immediately
@@ -84,19 +29,18 @@ HUB ACCOUNT (where openci-tf is installed)
 │   │            ├── create temporary credentials by assuming:
 │   │            │        ***  OPENCI-TF-EXECUTOR-READONLY  ***
 │   │            └── engine executes in: LAMBDA
-│   │                 (or CodeBuild if the folder's config says so;
+│   │                 (or CodeBuild if the folder config requests it;
 │   │                  if CodeBuild ➜ LINK to the build added to the comment)
 │   │
 │   └── RenderPR (results) ─ FinalizeRun
 │
 ├── Step Function: openci-tf-apply                  ◄── APPLY LANE
 │   │   verb: apply ONLY — started only by the confirm-token flow
-│   │   audit: execution list = everything ever applied
+│   │   audit: execution list = everything applied through openci-tf
 │   │
 │   ├── PR comment "Apply in progress" posted immediately
 │   │       ├── includes ➜ LINK to this Step Function execution
 │   │       └── includes ➜ LINK to the CodeBuild job once it starts
-│   │           (user clicks → sees the pinned-plan echo and mutation output)
 │   │
 │   ├── VerifyIntent (token · head SHA · pinned plan)
 │   ├── Step Functions Wait (apply grace; stop the outer execution to abort)
@@ -105,7 +49,7 @@ HUB ACCOUNT (where openci-tf is installed)
 │   │            ├── create temporary credentials by assuming:
 │   │            │        ***  OPENCI-TF-EXECUTOR-POWERUSER  ***
 │   │            │        └─ role missing? ➜ FAIL LOUDLY, apply impossible
-│   │            └── engine executes in: CODEBUILD ONLY (no Lambda path exists)
+│   │            └── engine executes in: CODEBUILD ONLY
 │   │                 ├── download and verify the pinned plan artifact
 │   │                 └── run `tofu show` on the pinned plan, then `tofu apply`
 │   │
@@ -114,12 +58,11 @@ HUB ACCOUNT (where openci-tf is installed)
 │
 └── Step Function: openci-tf-destroy                ◄── DESTROY LANE
     │   verb: destroy ONLY — started only by the confirm-token flow
-    │   audit: execution list = everything ever destroyed
+    │   audit: execution list = everything destroyed through openci-tf
     │
     ├── PR comment "Destroy in progress" posted immediately
     │       ├── includes ➜ LINK to this Step Function execution
     │       └── includes ➜ LINK to the CodeBuild job once it starts
-    │           (user clicks → sees the pinned-plan echo and mutation output)
     │
     ├── VerifyIntent (token · head SHA · pinned destroy plan)
     ├── Step Functions Wait (destroy grace; stop the outer execution to abort)
@@ -135,47 +78,45 @@ HUB ACCOUNT (where openci-tf is installed)
     └── RenderPR ("Destroy succeeded" + destroy output + CodeBuild link)
         ─ FinalizeRun
 
---------------------------------------------------------------------------------
+================================================================================
 TARGET ACCOUNT (each registered account)
---------------------------------------------------------------------------------
+================================================================================
 
 ├── ***  OPENCI-TF-EXECUTOR-READONLY  ***
-│       created by: just target-create-aws-readonly <hub-id>   (every account)
+│       created by: just deploy                         (hub account)
+│                or just target-create-aws-readonly <hub-id> (remote account)
 │       permissions: ReadOnlyAccess + state-bucket/lock read-write
 │       assumable by: READ lane only
 │
 └── ***  OPENCI-TF-EXECUTOR-POWERUSER  ***
-        created by: just target-create-aws-poweruser <hub-id>  (opt-in accounts)
+        created by: just target-create-aws-poweruser <hub-id>  (opt-in)
         removed by: just target-delete-aws-poweruser <hub-id>
-        permissions: PowerUserAccess + IAM/CloudFormation escalation Denies
+        permissions: PowerUserAccess + IAM/CloudFormation escalation denies
         assumable by: APPLY and DESTROY lanes only
         role absent  ⇒  apply/destroy physically impossible in this account
-                        (like a disabled key — the ultimate off switch)
 
---------------------------------------------------------------------------------
+================================================================================
 CROSS-LANE ISOLATION GUARANTEES
---------------------------------------------------------------------------------
+================================================================================
 
-* The read lane's credential code only knows the READONLY role name; the
-  mutation lanes only know the POWERUSER role name. No verb parameter picks
-  a role — using the wrong role is structurally impossible, not validated
-  away.
-* The apply/destroy state machines have no Lambda submit path at all;
-  execution_target in .openci_tf/config.yaml applies to read verbs only.
-* Apply consumes only tf/plan.tfplan; destroy consumes only
-  tf/destroy.plan.tfplan. Cross-application is structurally impossible.
-* Two-step confirmation: `tf apply <folders>` creates an intent (gates:
-  account enable_apply → folder config allow → repo require_approval →
-  fresh pinned plan → head SHA) and posts a single-use token with a 10-minute
-  expiry; `tf apply confirm <token>` re-checks the head SHA and starts the
-  mutation state machine. Same for destroy.
+* The read lane assumes only the configured READONLY role name; mutation lanes
+  assume only the configured POWERUSER role name. No verb parameter chooses a
+  role at runtime.
+* The apply/destroy state machines have no Lambda submit path; mutation runs
+  execute through CodeBuild only.
+* Apply consumes only `tf/plan.tfplan`; destroy consumes only
+  `tf/destroy.plan.tfplan`.
+* Two-step confirmation: `tf apply <folders>` or `tf destroy <folders>` creates
+  an intent after account, folder, repository, pinned-plan, and head-SHA checks.
+  The matching `tf apply confirm <token>` or `tf destroy confirm <token>` then
+  re-checks the head SHA and starts exactly one mutation state machine.
 
---------------------------------------------------------------------------------
+================================================================================
 PER-FOLDER CONFIG (.openci_tf/config.yaml)
---------------------------------------------------------------------------------
+================================================================================
 
-  account_alias: test2
-  execution_target: lambda      # plan/validate/drift only
+  account_alias: prod
+  execution_target: lambda      # read verbs only
 
   apply:
     allow: true                 # default false

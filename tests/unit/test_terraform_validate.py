@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Terraform validate checks for executor-role modules and roots."""
 from __future__ import annotations
 

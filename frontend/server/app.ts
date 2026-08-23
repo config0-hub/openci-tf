@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Config0, Inc.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";

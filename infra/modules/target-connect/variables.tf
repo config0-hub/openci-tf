@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 variable "role_prefix" {
   description = "Prefix for IAM role names (e.g. 'openci-tf')"
   type        = string

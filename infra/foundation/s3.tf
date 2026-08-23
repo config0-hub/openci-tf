@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 locals {
   # ref 4353245 - openci-tf remote executor consistency naming
   # Deterministic names: <prefix>-{tmp,package,done}-<account-id>. Downstream
