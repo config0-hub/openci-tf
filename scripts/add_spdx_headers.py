@@ -11,7 +11,7 @@ LICENSE = "AAGPL-3.0-or-later"
 MARKER = "SPDX-License-Identifier"
 
 SKIP_PARTS = {
-    "tests/fixtures/live-smoke/sample-target-repo",
+    "tests/fixtures/sample-repo/sample-target-repo",
     "node_modules",
     ".git",
 }

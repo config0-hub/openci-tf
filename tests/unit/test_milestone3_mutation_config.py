@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Config0, Inc.
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Phase B Milestone 3 mutation config, grace wait, links, and plan show tests."""
+"""Mutation config, grace wait, links, and plan show tests."""
 
 from __future__ import annotations
 
@@ -11,12 +11,12 @@ import pytest  # type: ignore[import-not-found]
 
 from src.core.errors import ConfigValidationError
 from src.core.models import FolderConfig, MutationVerbConfig
+from src.domain.cmd_builder.script_generator import ScriptParams, render
+from src.domain.config.folder_config import parse_folder_config
 from src.domain.formatters.console_urls import (
     codebuild_build_url,
     step_functions_execution_url,
 )
-from src.domain.cmd_builder.script_generator import ScriptParams, render
-from src.domain.config.folder_config import parse_folder_config
 
 MUTATION_OUTER = Path(
     "infra/deploy/modules/openci_tf/step_function_mutation_outer.tf"

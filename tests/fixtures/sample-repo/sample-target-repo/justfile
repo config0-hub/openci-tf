@@ -1,0 +1,155 @@
+# Operator helpers for the disposable multi-region tracer.
+# openci-tf remains plan-only; apply/destroy are manual operator flows.
+
+primary_account_id := "111111111111"
+target_account_id := "222222222222"
+repo_slug := "<REPO_ORG>/<REPO_NAME>"
+
+# Six reportable Terraform roots: four primary-account roots plus two remote-target VPC-only roots.
+primary_roots := "eu-west-1/01-vpc eu-west-1/02-ec2 ap-northeast-1/01-vpc ap-northeast-1/02-ec2"
+target_roots := "target-eu-west-1/01-vpc target-us-east-1/01-vpc"
+all_roots := "eu-west-1/01-vpc eu-west-1/02-ec2 ap-northeast-1/01-vpc ap-northeast-1/02-ec2 target-eu-west-1/01-vpc target-us-east-1/01-vpc"
+
+default:
+    @just --list
+
+confirm-primary-account:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    read -r -p "Type primary hub account ID to confirm ({{primary_account_id}}): " acct
+    if [[ "$acct" != "{{primary_account_id}}" ]]; then
+      echo "account confirmation failed" >&2
+      exit 1
+    fi
+
+confirm-target-account:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    read -r -p "Type target account ID to confirm ({{target_account_id}}): " acct
+    if [[ "$acct" != "{{target_account_id}}" ]]; then
+      echo "account confirmation failed" >&2
+      exit 1
+    fi
+
+confirm-destroy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    read -r -p "Type DESTROY to confirm destructive teardown: " ans
+    if [[ "$ans" != "DESTROY" ]]; then
+      echo "destroy confirmation failed" >&2
+      exit 1
+    fi
+
+fmt-check:
+    tofu fmt -check -recursive terraform/
+
+fmt:
+    tofu fmt -recursive terraform/
+
+validate-offline root:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="terraform/{{root}}"
+    tf_data_dir="$(mktemp -d)"
+    cleanup() {
+      rm -rf "$tf_data_dir"
+    }
+    trap cleanup EXIT
+    TF_DATA_DIR="$tf_data_dir" tofu -chdir="$root" init -backend=false -input=false
+    TF_DATA_DIR="$tf_data_dir" tofu -chdir="$root" validate
+
+validate-all:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for root in {{all_roots}}; do
+      just validate-offline "$root"
+    done
+
+test:
+    python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+show-backend root:
+    @grep -A8 'backend "s3"' "terraform/{{root}}/versions.tf"
+
+init-primary root: confirm-primary-account
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tofu -chdir="terraform/{{root}}" init
+
+init-target root: confirm-target-account
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tofu -chdir="terraform/{{root}}" init
+
+plan-primary root: confirm-primary-account
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tofu -chdir="terraform/{{root}}" plan
+
+plan-target root: confirm-target-account
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tofu -chdir="terraform/{{root}}" plan
+
+apply-primary root: confirm-primary-account
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tofu -chdir="terraform/{{root}}" apply
+
+apply-target root: confirm-target-account
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tofu -chdir="terraform/{{root}}" apply
+
+destroy-primary root: confirm-primary-account confirm-destroy
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tofu -chdir="terraform/{{root}}" destroy
+
+destroy-target root: confirm-target-account confirm-destroy
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tofu -chdir="terraform/{{root}}" destroy
+
+# Short aliases for primary-account roots (account {{primary_account_id}}).
+init root: confirm-primary-account
+    @just init-primary {{root}}
+
+plan root: confirm-primary-account
+    @just plan-primary {{root}}
+
+apply root: confirm-primary-account
+    @just apply-primary {{root}}
+
+destroy root: confirm-primary-account confirm-destroy
+    @just destroy-primary {{root}}
+
+apply-primary-all: confirm-primary-account
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for root in {{primary_roots}}; do
+      just apply-primary "$root"
+    done
+
+apply-target-all: confirm-target-account
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for root in {{target_roots}}; do
+      just apply-target "$root"
+    done
+
+destroy-primary-all: confirm-primary-account confirm-destroy
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for root in ap-northeast-1/02-ec2 ap-northeast-1/01-vpc eu-west-1/02-ec2 eu-west-1/01-vpc; do
+      just destroy-primary "$root"
+    done
+
+destroy-target-all: confirm-target-account confirm-destroy
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for root in target-us-east-1/01-vpc target-eu-west-1/01-vpc; do
+      just destroy-target "$root"
+    done
+
+ci-check: fmt-check validate-all test

@@ -26,10 +26,20 @@ work-log
 REVIEW-*.md
 review/
 
-# LLM kit (never commit)
-.shared-llm/
+# LLM kit: public/ is kit-synced and disposable. this_repo/ is this
+# repo's overlay (CLAUDE.md / AGENTS.md / python skill sources) — keep it.
+.shared-llm/public/
+.shared-llm
+AGENTS.md
+CLAUDE.md
 PLANS
 .lavish
 .claude
 .claude/worktrees/
 .impeccable/
+.pi-skills
+.pi-skills/
+.pi-skills/*
+.pi-lens
+.pi-lens/
+.pi-lens/*

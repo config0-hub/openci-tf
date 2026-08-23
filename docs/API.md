@@ -63,8 +63,8 @@ Run-registry items carry `expire_ttl` epoch seconds. Default retention is **90 d
 ## Example (SigV4)
 
 ```bash
-just api-create-run registered-trigger-id 0123456789abcdef0123456789abcdef01234567 smoke-1 infra/example
-just api-create-run registered-trigger-id 0123456789abcdef0123456789abcdef01234567 smoke-2 "" data/primary drift
+just api-create-run registered-trigger-id 0123456789abcdef0123456789abcdef01234567 run-key-1 infra/example
+just api-create-run registered-trigger-id 0123456789abcdef0123456789abcdef01234567 run-key-2 "" data/primary drift
 just api-get-run run-123
 ```
 
@@ -119,7 +119,7 @@ merge rows that could carry different approval policies:
 actually stored in each `pk=account` row:
 
 ```json
-{"accounts":[{"alias":"production","account_id":"123456789012","role_name":"openci-tf-executor-remote"}]}
+{"accounts":[{"alias":"production","account_id":"123456789012","role_name":"openci-tf-executor-readonly"}]}
 ```
 
 Account rows do not store resolved hub or target role ARNs, so the API does not
@@ -138,7 +138,7 @@ checks it again before returning data:
 
 `GET /gates` reads `ENABLE_APPLY`, the same runtime source used by mutation gate
 checks. The apply/destroy gate itself reads each pinned checkout's
-`.openci_tf/config.yaml` at PR intent time. Because there is no authoritative live
+`.openci_tf/config.yaml` at PR intent time. Because there is no authoritative
 central copy of those files, validation records a bounded projection of each
 folder's parsed `apply` and `destroy` flags whenever a run observes a pinned
 commit. One latest-observed row per repository/folder is retained in the run
@@ -164,7 +164,7 @@ registry:
 `folders_source: "latest-run-observation"` means exactly that: each row is the
 newest pinned configuration this installation observed while validating a run,
 not a claim about the repository's current branch contents. `source_sha`,
-`run_id`, and `observed_at` provide provenance. Rows use run-history retention;
+`run_id`, and `observed_at` identify where the row came from. Rows use run-history retention;
 a folder with no retained observation is unavailable/unknown. An empty
 `folders` page therefore never means that every folder opted out, and an absent
 folder must not be rendered as `apply: false` or `destroy: false`.

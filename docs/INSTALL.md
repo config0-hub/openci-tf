@@ -1,7 +1,7 @@
 # Install openci-tf
 
-`just` recipes are the canonical operator interface. The journey below is the
-one actually tested end to end in a real AWS account:
+`just` recipes are the canonical operator interface. The standard install and
+removal journey is:
 `just install` → `just verify` → `just uninstall` → `just verify-clean`.
 
 ## Prerequisites
@@ -23,7 +23,7 @@ under `/openci-tf/install/<project>/…` (`openci-tf` for this repo, `engine` fo
 engine repo). Manage it with:
 
 ```sh
-just config set target_account_ids '["REPLACE_MAIN_ACCOUNT"]'   # REQUIRED before deploy
+just config set target_account_ids '["<hub-account-id>"]'   # REQUIRED before deploy
 just config get target_account_ids
 ```
 
@@ -350,10 +350,5 @@ the confirmation command posted by openci-tf. See [APPLY.md](APPLY.md).
 (`just uninstall` destroying the installation itself remains operator tooling,
 not a CI verb.)
 
-The two-account smoke test remains a human-gated step; see
-[docs/ACCOUNTS.md](ACCOUNTS.md) for the completed live cross-account evidence
-(2026-08-09).
-
-**Phase B live operations — hard region rule:** Phase B live tests and smoke
-validation run only in **`us-east-1`** and **`eu-west-1`**. Never use
-`us-west-1` or `ap-northeast-1` for Phase B live operations.
+For cross-account operation, repeat the target onboarding and registration flow
+for each target account; see [docs/ACCOUNTS.md](ACCOUNTS.md).

@@ -1,0 +1,5 @@
+version: 1
+account_alias: primary
+execution_target: lambda
+tf_runtime: tofu:1.8.0
+timeout: 900

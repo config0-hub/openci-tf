@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Config0, Inc.
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Hermetic tests for target onboarding helpers."""
+
 from __future__ import annotations
 
 import json
@@ -26,7 +27,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _run(script: Path, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+    script: Path, *args: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     import os
 
     merged = os.environ.copy()
@@ -45,34 +48,36 @@ def _run(script: Path, *args: str, env: dict[str, str] | None = None) -> subproc
 @pytest.mark.parametrize(
     ("hub_account_id", "target_account_id"),
     [
-        ("", "REPLACE_SECONDARY_ACCOUNT"),
-        ("123", "REPLACE_SECONDARY_ACCOUNT"),
-        ("abcdefghijkl", "REPLACE_SECONDARY_ACCOUNT"),
-        ("REPLACE_MAIN_ACCOUNT", ""),
-        ("REPLACE_MAIN_ACCOUNT", "123"),
-        ("REPLACE_MAIN_ACCOUNT", "abcdefghijkl"),
-        ("REPLACE_MAIN_ACCOUNT", "1234567890123"),
+        ("", "222222222222"),
+        ("123", "222222222222"),
+        ("abcdefghijkl", "222222222222"),
+        ("111111111111", ""),
+        ("111111111111", "123"),
+        ("111111111111", "abcdefghijkl"),
+        ("111111111111", "1234567890123"),
     ],
 )
-def test_derive_external_id_rejects_invalid_account_ids(hub_account_id: str, target_account_id: str):
+def test_derive_external_id_rejects_invalid_account_ids(
+    hub_account_id: str, target_account_id: str
+):
     result = _run(_DERIVE, hub_account_id, target_account_id)
     assert result.returncode != 0
     assert "12 decimal digits" in result.stderr or "Usage" in result.stderr
 
 
 def test_derive_external_id_known_vector_and_script_parity():
-    expected = "openci-tf-a6e196030e40a73e"
-    assert derive_external_id("REPLACE_MAIN_ACCOUNT", "REPLACE_SECONDARY_ACCOUNT") == expected
-    result = _run(_DERIVE, "REPLACE_MAIN_ACCOUNT", "REPLACE_SECONDARY_ACCOUNT")
+    expected = "openci-tf-b3b391e562bd71b6"
+    assert derive_external_id("111111111111", "222222222222") == expected
+    result = _run(_DERIVE, "111111111111", "222222222222")
     assert result.returncode == 0
     assert result.stdout.strip() == expected
     assert re.fullmatch(r"openci-tf-[0-9a-f]{16}", result.stdout.strip())
 
 
 def test_bucket_from_s3_arn_extracts_bucket_name():
-    result = _run(_BUCKET_FROM_ARN, "arn:aws:s3:::openci-tf-state-REPLACE_SECONDARY_ACCOUNT")
+    result = _run(_BUCKET_FROM_ARN, "arn:aws:s3:::openci-tf-state-222222222222")
     assert result.returncode == 0
-    assert result.stdout.strip() == "openci-tf-state-REPLACE_SECONDARY_ACCOUNT"
+    assert result.stdout.strip() == "openci-tf-state-222222222222"
 
 
 def test_justfile_lists_onboarding_recipes():
@@ -116,7 +121,7 @@ def test_register_account_has_no_external_id_user_input():
 def test_register_account_writes_enable_apply_bool_default_false():
     text = (_REPO_ROOT / "scripts/register_account.sh").read_text()
     assert "--enable-apply" in text
-    assert 'Error: --enable-apply must be true or false' in text
+    assert "Error: --enable-apply must be true or false" in text
     assert '"enable_apply": {"BOOL": enable_apply == "true"}' in text
 
 
@@ -129,17 +134,16 @@ def test_account_set_apply_requires_existing_item_and_strict_bool():
     text = (_REPO_ROOT / "scripts/account_set_apply.sh").read_text()
     assert "attribute_exists(pk)" in text
     assert "update-item" in text
-    assert 'Error: --enable-apply must be true or false' in text
+    assert "Error: --enable-apply must be true or false" in text
     assert "SET enable_apply = :val" in text
     assert "validate_account_alias.sh" in text
     assert "json.dumps" in text
 
 
 def test_account_set_apply_rejects_invalid_alias_contract(tmp_path):
-    captured_key = tmp_path / "captured-key.json"
     aws = tmp_path / "aws"
     aws.write_text(
-        f"""#!/usr/bin/env bash
+        """#!/usr/bin/env bash
 case "$1" in
 dynamodb)
   exit 0
@@ -271,7 +275,9 @@ esac
 """
     )
     aws.chmod(0o755)
-    alias_payload = 'qa"alias\\with{braces}\n,"account_id":{"S":"000000000000"},"sk":{"S":"pwn"}'
+    alias_payload = (
+        'qa"alias\\with{braces}\n,"account_id":{"S":"000000000000"},"sk":{"S":"pwn"}'
+    )
     result = _run(
         _ACCOUNT_SET_APPLY,
         "--alias",
@@ -341,7 +347,7 @@ esac
 """
     )
     aws.chmod(0o755)
-    alias_payload = "REPLACE_MAIN_ALIAS"
+    alias_payload = "primary"
     result = _run(
         _ACCOUNT_SET_APPLY,
         "--alias",
@@ -380,13 +386,25 @@ def test_target_connect_terraform_derives_trust_external_id():
     module = _TARGET_CONNECT_MODULE.read_text()
     root_variables = (_TARGET_CONNECT_ROOT / "variables.tf").read_text()
     root_main = (_TARGET_CONNECT_ROOT / "main.tf").read_text()
-    assert 'try(regex("^arn:aws:iam::([0-9]{12}):role/[^:/]+$", var.hub_lambda_exec_role_arn)[0], "")' in module
-    assert 'expected_hub_lambda_exec_role_arn = "arn:aws:iam::${local.hub_account_id}:role/${var.role_prefix}-hub-lambda-exec"' in module
-    assert 'external_id                       = "openci-tf-${substr(sha256("openci-tf:${local.hub_account_id}:${local.target_account_id}"), 0, 16)}"' in module
+    assert (
+        'try(regex("^arn:aws:iam::([0-9]{12}):role/[^:/]+$", var.hub_lambda_exec_role_arn)[0], "")'
+        in module
+    )
+    assert (
+        'expected_hub_lambda_exec_role_arn = "arn:aws:iam::${local.hub_account_id}:role/${var.role_prefix}-hub-lambda-exec"'
+        in module
+    )
+    assert (
+        'external_id                       = "openci-tf-${substr(sha256("openci-tf:${local.hub_account_id}:${local.target_account_id}"), 0, 16)}"'
+        in module
+    )
     assert '"sts:ExternalId"   = local.external_id' in module
     assert 'AWS = "arn:aws:iam::${local.hub_account_id}:root"' in module
     assert '"aws:PrincipalArn" = local.hub_role_prefix_arns' in module
-    assert 'var.hub_lambda_exec_role_arn == local.expected_hub_lambda_exec_role_arn' in module
-    assert 'var.hub_lambda_exec_role_arn,' not in module
-    assert "variable \"external_id\"" not in root_variables
+    assert (
+        "var.hub_lambda_exec_role_arn == local.expected_hub_lambda_exec_role_arn"
+        in module
+    )
+    assert "var.hub_lambda_exec_role_arn," not in module
+    assert 'variable "external_id"' not in root_variables
     assert "external_id" not in root_main

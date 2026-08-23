@@ -62,7 +62,7 @@ resources first.
 ## Product Principles
 
 - Keep read-only plan work and mutation work structurally isolated.
-- Make failure evidence actionable without exposing secrets or unbounded output.
+- Make failure details actionable without exposing secrets or unbounded output.
 - Treat retention as real: views should show when artifacts are bounded or
   expired instead of implying permanence.
 - Keep the console a thin operator view over the documented core API.

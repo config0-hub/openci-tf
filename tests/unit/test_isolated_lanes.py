@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Config0, Inc.
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Phase B Milestone 2 isolated lane architecture tests."""
+"""Isolated lane architecture tests."""
 
 from __future__ import annotations
 
@@ -103,8 +103,9 @@ def test_mutation_outer_sequential_fail_fast():
 
 
 def test_engine_payload_fields_unchanged():
-    from src.domain.engine.payload import EnginePayload
     import base64
+
+    from src.domain.engine.payload import EnginePayload
 
     payload = EnginePayload(
         "id",
@@ -181,7 +182,9 @@ def test_mutation_prepare_iam_includes_codebuild_lookup():
 
 
 def test_mutation_inner_probe_and_collect_keep_build_id_optional():
-    from tests.helpers.rendered_run_folder_asl import load_rendered_run_folder_definition
+    from tests.helpers.rendered_run_folder_asl import (
+        load_rendered_run_folder_definition,
+    )
 
     states = load_rendered_run_folder_definition("apply")["States"]
     assert "Parameters" not in states["ProbeDone"]

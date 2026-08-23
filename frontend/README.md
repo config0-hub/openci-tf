@@ -46,7 +46,7 @@ views:
 - `/?trigger_id=empty` — empty registry
 - `/runs/run-progress` — polling/in-progress detail
 - `/runs/run-complete` — complete folders and artifacts
-- `/runs/run-failed` — failure with corrective evidence
+- `/runs/run-failed` — failure with corrective diagnostics
 - `/runs/run-drift` — authoritative drift-detected procedure
 - `/runs/run-drift-clean` — authoritative clean drift procedure
 - `/runs/run-drift-unknown` — unknown drift result
@@ -124,8 +124,8 @@ static files without auth and enforces `Authorization: Bearer <token>` on every
 - Drift classification comes only from `drift_detected`. A successful run
   without that field remains `COMPLETE` with a visible unknown-result note.
 - Gate folder rows are retained latest-run observations of pinned repository
-  config. Their SHA/run/time provenance is visible and absence is not rendered as
-  an opt-out.
+  config. Their SHA/run/time source fields are visible and absence is not rendered
+  as an opt-out.
 
 The self-hosted Barlow Condensed font files are licensed under the OFL included
 at `public/fonts/OFL.txt`.

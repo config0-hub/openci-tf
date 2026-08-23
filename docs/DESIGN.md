@@ -29,7 +29,7 @@ Engine submissions use the eight-field SimplePayload contract: `trigger_id`,
 responses are bounded summaries and S3 artifact pointers. Every terminal error
 path uses one recursive redaction-and-bounding policy before manifest/registry
 persistence, Step Functions output, or PR rendering. Raw permitted engine output
-stays behind its S3 pointer; compact evidence is limited by string, field,
+stays behind its S3 pointer; compact diagnostics are limited by string, field,
 collection-count, and nesting-depth bounds.
 
 For `plan` and `report`, the encrypted package also carries presigned PUT URLs

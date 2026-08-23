@@ -6,7 +6,7 @@ set -euo pipefail
 # Usage: generate_backend.sh <bucket_name> <state_key> <region> <target_dir> [lock_table]
 #
 # Example:
-#   ./scripts/generate_backend.sh openci-tf-state-REPLACE_MAIN_ACCOUNT deploy us-east-1 infra/deploy/ openci-tf-tf-locks
+#   ./scripts/generate_backend.sh openci-tf-state-111111111111 deploy us-east-1 infra/deploy/ openci-tf-tf-locks
 
 BUCKET_NAME="${1:?Usage: generate_backend.sh <bucket_name> <state_key> <region> <target_dir> [lock_table]}"
 STATE_KEY="${2:?Usage: generate_backend.sh <bucket_name> <state_key> <region> <target_dir> [lock_table]}"

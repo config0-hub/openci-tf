@@ -22,7 +22,7 @@ requirements. Current GitHub REST docs for "Get repository permissions for a
 user" require repository Metadata read for fine-grained tokens; Administration
 read is not required for openci-tf's collaborator-permission check.
 
-Official GitHub REST permission evidence:
+Relevant GitHub REST permission references:
 
 - Get a repository — Metadata read:
   <https://docs.github.com/rest/repos/repos#get-a-repository>
@@ -84,22 +84,22 @@ runtime version your repo uses (for example both `terraform:1.8.5` and
 `terraform:1.9.8` when folders use both). Existing rows with a bare `terraform`
 or `tofu` key are accepted only when resolving one version of that binary.
 
-The verifier uses only `GET` endpoints. Required registration checks always
-prove authenticated access (`/user`), repository metadata, root contents,
-repository PR listing (`state=all&per_page=1`), repository-wide issue comments
-(`per_page=1`), and collaborator-permission lookup. A 404 from the contents
-endpoint is fail-loud; initialize the repository/default branch before
-registration. A 404 from collaborator permission lookup is also fail-loud. By
-default the collaborator check uses the authenticated token owner's login; if the
-token owner is not a direct collaborator, pass one known direct collaborator with
+The verifier uses only `GET` endpoints. Required registration checks validate
+authenticated access (`/user`), repository metadata, root contents, repository PR listing
+(`state=all&per_page=1`), repository-wide issue comments (`per_page=1`), and
+collaborator-permission lookup. A 404 from the contents endpoint is fail-loud;
+initialize the repository/default branch before registration. A 404 from
+collaborator permission lookup is also fail-loud. By default the collaborator
+check uses the authenticated token owner's login; if the token owner is not a
+direct collaborator, pass one known direct collaborator with
 `--github-capability-collaborator`. The username is validated before URL path
 interpolation.
 
 `--github-capability-pr-number` is optional because repository registration often
-precedes PRs. When supplied, it additionally verifies exact PR metadata, changed
-files, and that PR's issue comments. It is not required for normal registration.
+precedes PRs. When supplied, it additionally verifies exact PR metadata,
+changed-files, and that PR's issue comments. It is not required for normal registration.
 The verifier never creates, updates, deletes comments, or changes repository
-settings. Therefore **Issues write cannot be proven safely at registration
+settings. Therefore **Issues write cannot be checked safely at registration
 time**; a missing Issues write permission fails loud on the first real PR comment
 attempt with a bounded non-secret GitHub API error. There is no public skip or
 break-glass flag for this registration check.
@@ -110,7 +110,7 @@ break-glass flag for this registration check.
    permissions.
 2. Overwrite the same SSM SecureString path using `just install-github-control-token`.
 3. Re-run `just register-repo ... --github-capability-pr-number <existing-pr>` to
-   prove read capabilities before the next PR comment.
+   validate read capabilities before the next PR comment.
 4. Revoke the old PAT in GitHub.
 
 Token values must not appear in shell tracing, Terraform state, generated source,

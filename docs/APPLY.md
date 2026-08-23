@@ -61,8 +61,6 @@ Set `enable_apply` when registering an account (`just register-account ... --ena
 
 Intent creation (`tf apply <folders>` / `tf destroy <folders>`) still enters the read outer machine only. Confirmation (`tf apply confirm <token>`) atomically revalidates token, head SHA, and pinned plan, then starts exactly one mutation outer machine.
 
-**Phase B live operations — hard region rule:** Phase B live tests and smoke validation run only in **`us-east-1`** and **`eu-west-1`**. Never use `us-west-1` or `ap-northeast-1` for Phase B live operations.
-
 ## Token semantics
 
 - 6–8 hex characters, crypto-random

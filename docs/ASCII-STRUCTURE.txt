@@ -22,7 +22,7 @@ HUB ACCOUNT (where openci-tf is installed)
 │   │
 │   ├── PR comment "In progress" posted immediately
 │   │       └── includes ➜ LINK to this Step Function execution
-│   │           (user clicks → watches live, can stop it in the console)
+│   │           (user clicks → watches progress, can stop it in the console)
 │   │
 │   ├── ValidateAndResolve ─ folder locks ─ RunFolders (Map)
 │   │       └── inner SFN: openci-tf-run-folder
