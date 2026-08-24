@@ -63,6 +63,7 @@ bootstrap:
         fi
         echo "local bootstrap state survives and tracks ${BUCKET}/${LOCK_TABLE}: resuming interrupted bootstrap"
         rm -f infra/bootstrap/backend.tf
+        ./scripts/clear_stale_bootstrap_backend_cache.sh "$BUCKET"
         terraform -chdir=infra/bootstrap init -reconfigure -input=false
         terraform -chdir=infra/bootstrap apply -input=false -auto-approve
         ./scripts/generate_backend.sh "$BUCKET" bootstrap "{{OPENCI_TF_REGION}}" infra/bootstrap "{{OPENCI_TF_PROJECT}}-tf-locks"
@@ -77,10 +78,12 @@ bootstrap:
             exit 1
         fi
         ./scripts/generate_backend.sh "$BUCKET" bootstrap "{{OPENCI_TF_REGION}}" infra/bootstrap "{{OPENCI_TF_PROJECT}}-tf-locks"
+        ./scripts/clear_stale_bootstrap_backend_cache.sh "$BUCKET"
         terraform -chdir=infra/bootstrap init -reconfigure -input=false
         terraform -chdir=infra/bootstrap apply -input=false -auto-approve
     else
         rm -f infra/bootstrap/backend.tf
+        ./scripts/clear_stale_bootstrap_backend_cache.sh "$BUCKET"
         terraform -chdir=infra/bootstrap init -reconfigure -input=false
         terraform -chdir=infra/bootstrap apply -input=false -auto-approve
         ./scripts/generate_backend.sh "$BUCKET" bootstrap "{{OPENCI_TF_REGION}}" infra/bootstrap "{{OPENCI_TF_PROJECT}}-tf-locks"
