@@ -91,7 +91,7 @@ resource "aws_sfn_state_machine" "openci_tf" {
       RunFolders = {
         Type           = "Map"
         ItemsPath      = "$.map_items"
-        MaxConcurrency = 40
+        MaxConcurrency = var.run_folder_max_concurrency
         ResultPath     = "$.outcomes"
         ItemSelector = {
           "run_id.$"                     = "$$.Map.Item.Value.run_id"
@@ -139,7 +139,7 @@ resource "aws_sfn_state_machine" "openci_tf" {
       RunStepFolders = {
         Type           = "Map"
         ItemsPath      = "$.current_step_items"
-        MaxConcurrency = 40
+        MaxConcurrency = var.run_folder_max_concurrency
         ResultPath     = "$.step_outcomes"
         ItemSelector = {
           "run_id.$"                     = "$$.Map.Item.Value.run_id"

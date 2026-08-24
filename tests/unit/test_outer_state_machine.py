@@ -26,7 +26,7 @@ def test_outer_definition_has_safe_and_intent_lanes():
     assert "CreateApplyIntent" not in SOURCE
     assert "CreateDestroyIntent" not in SOURCE
     assert "IntentFailed" in SOURCE
-    assert "MaxConcurrency = 40" in SOURCE
+    assert "MaxConcurrency = var.run_folder_max_concurrency" in SOURCE
     MUTATION_OUTER = Path("infra/deploy/modules/openci_tf/step_function_mutation_outer.tf").read_text()
     assert "MaxConcurrency = 1" in MUTATION_OUTER
     assert "states:startExecution.sync:2" in SOURCE

@@ -820,9 +820,9 @@ def test_outer_state_machine_propagates_run_id():
     assert "notification_target.$" in source and "$.notification_target" in source
 
 
-def test_outer_state_machine_concurrency_is_forty():
+def test_outer_state_machine_concurrency_is_configurable():
     source = Path("infra/deploy/modules/openci_tf/step_function.tf").read_text(encoding="utf-8")
-    assert "MaxConcurrency = 40" in source
+    assert source.count("MaxConcurrency = var.run_folder_max_concurrency") == 2
 
 
 def test_api_gateway_routes_use_aws_iam_authorizer():

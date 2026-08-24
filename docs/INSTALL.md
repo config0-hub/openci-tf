@@ -32,6 +32,7 @@ The openci-tf Lambda image tag is the fixed release version in the checked-in
 ECR keeps this tag mutable so rebuilding the release replaces it; Terraform resolves
 that known tag to its current immutable digest so Lambda reliably receives the update.
 Optional key: `run_history_retention_days` (defaults to `90`; controls run-registry TTL).
+Optional key: `run_folder_max_concurrency` (defaults to `40`; caps read-lane folder Map fan-out in the outer state machine; lower it when the hub account Lambda concurrency quota is tight).
 Intent gating uses the per-account `enable_apply` flag on each DynamoDB account registration;
 provision the optional `openci-tf-executor-poweruser` role separately when mutations are desired.
 See [APPLY.md](APPLY.md).

@@ -130,6 +130,7 @@ module "openci_tf" {
   package_bucket_name                  = data.aws_s3_bucket.package.bucket
   kms_key_arn                          = data.aws_kms_alias.foundation.target_key_arn
   run_history_retention_days           = var.run_history_retention_days
+  run_folder_max_concurrency           = var.run_folder_max_concurrency
   tmp_lifecycle_days                   = var.tmp_lifecycle_days
   package_lifecycle_days               = var.package_lifecycle_days
   done_lifecycle_days                  = var.done_lifecycle_days

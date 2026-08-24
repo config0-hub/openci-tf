@@ -29,6 +29,7 @@ def _substitute_tf_expressions(inner: str) -> str:
         "var.run_folder_destroy_state_machine_arn", _MOCK_DESTROY_SFN
     )
     inner = inner.replace("var.run_folder_state_machine_arn", _MOCK_READ_SFN)
+    inner = inner.replace("var.run_folder_max_concurrency", "40")
     return inner
 
 

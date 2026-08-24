@@ -47,6 +47,17 @@ variable "run_history_retention_days" {
   default     = 90
 }
 
+variable "run_folder_max_concurrency" {
+  description = "MaxConcurrency for read-lane folder Map states in the outer state machine"
+  type        = number
+  default     = 40
+
+  validation {
+    condition     = var.run_folder_max_concurrency >= 1 && var.run_folder_max_concurrency <= 40
+    error_message = "run_folder_max_concurrency must be between 1 and 40."
+  }
+}
+
 variable "done_bucket_name" {
   type = string
 }

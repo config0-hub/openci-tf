@@ -239,6 +239,7 @@ deploy:
     TARGET_ACCOUNT_IDS="$(./scripts/ssm_config.sh get target_account_ids)" || { echo "ERROR: set target accounts first: just config set target_account_ids '[\"123456789012\"]'" >&2; exit 1; }
     IMAGE_TAG="$(./scripts/image_tag.sh)"
     RUN_HISTORY_RETENTION_DAYS="$(./scripts/ssm_config.sh get-or run_history_retention_days 90)"
+    RUN_FOLDER_MAX_CONCURRENCY="$(./scripts/ssm_config.sh get-or run_folder_max_concurrency 40)"
     TMP_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or tmp_lifecycle_days 3)"
     PACKAGE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or package_lifecycle_days 30)"
     DONE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or done_lifecycle_days 365)"
@@ -248,7 +249,7 @@ deploy:
     ENABLE_APPLY="$(./scripts/ssm_config.sh get-or enable_apply false)"
     AWS_CONSOLE_START_URL="$(./scripts/ssm_config.sh get-or aws_console_start_url '')"
     AWS_CONSOLE_ROLE_NAME="$(./scripts/ssm_config.sh get-or aws_console_role_name '')"
-    ./scripts/write_tfvars.sh infra/deploy "aws_region={{OPENCI_TF_REGION}}" "image_tag=${IMAGE_TAG}" "target_account_ids=${TARGET_ACCOUNT_IDS}" "run_history_retention_days=${RUN_HISTORY_RETENTION_DAYS}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_lifecycle_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}" "api_caller_policy_json=${API_CALLER_POLICY_JSON}" "provision_legacy_executor_local=${PROVISION_LEGACY_EXECUTOR_LOCAL}" "enable_apply=${ENABLE_APPLY}" "aws_console_start_url=${AWS_CONSOLE_START_URL}" "aws_console_role_name=${AWS_CONSOLE_ROLE_NAME}"
+    ./scripts/write_tfvars.sh infra/deploy "aws_region={{OPENCI_TF_REGION}}" "image_tag=${IMAGE_TAG}" "target_account_ids=${TARGET_ACCOUNT_IDS}" "run_history_retention_days=${RUN_HISTORY_RETENTION_DAYS}" "run_folder_max_concurrency=${RUN_FOLDER_MAX_CONCURRENCY}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_lifecycle_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}" "api_caller_policy_json=${API_CALLER_POLICY_JSON}" "provision_legacy_executor_local=${PROVISION_LEGACY_EXECUTOR_LOCAL}" "enable_apply=${ENABLE_APPLY}" "aws_console_start_url=${AWS_CONSOLE_START_URL}" "aws_console_role_name=${AWS_CONSOLE_ROLE_NAME}"
     ./scripts/generate_backend.sh "$BUCKET" deploy "{{OPENCI_TF_REGION}}" infra/deploy "{{OPENCI_TF_PROJECT}}-tf-locks"
     terraform -chdir=infra/deploy init -reconfigure -input=false
     # Fresh installs need ECR before the image push. Upgrades skip the targeted
@@ -274,6 +275,7 @@ deploy-destroy:
     TARGET_ACCOUNT_IDS="$(./scripts/ssm_config.sh get-or target_account_ids '[]')"
     IMAGE_TAG="$(./scripts/image_tag.sh)"
     RUN_HISTORY_RETENTION_DAYS="$(./scripts/ssm_config.sh get-or run_history_retention_days 90)"
+    RUN_FOLDER_MAX_CONCURRENCY="$(./scripts/ssm_config.sh get-or run_folder_max_concurrency 40)"
     TMP_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or tmp_lifecycle_days 3)"
     PACKAGE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or package_lifecycle_days 30)"
     DONE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or done_lifecycle_days 365)"
@@ -283,7 +285,7 @@ deploy-destroy:
     ENABLE_APPLY="$(./scripts/ssm_config.sh get-or enable_apply false)"
     AWS_CONSOLE_START_URL="$(./scripts/ssm_config.sh get-or aws_console_start_url '')"
     AWS_CONSOLE_ROLE_NAME="$(./scripts/ssm_config.sh get-or aws_console_role_name '')"
-    ./scripts/write_tfvars.sh infra/deploy "aws_region={{OPENCI_TF_REGION}}" "image_tag=${IMAGE_TAG}" "target_account_ids=${TARGET_ACCOUNT_IDS}" "run_history_retention_days=${RUN_HISTORY_RETENTION_DAYS}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_lifecycle_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}" "api_caller_policy_json=${API_CALLER_POLICY_JSON}" "provision_legacy_executor_local=${PROVISION_LEGACY_EXECUTOR_LOCAL}" "enable_apply=${ENABLE_APPLY}" "aws_console_start_url=${AWS_CONSOLE_START_URL}" "aws_console_role_name=${AWS_CONSOLE_ROLE_NAME}"
+    ./scripts/write_tfvars.sh infra/deploy "aws_region={{OPENCI_TF_REGION}}" "image_tag=${IMAGE_TAG}" "target_account_ids=${TARGET_ACCOUNT_IDS}" "run_history_retention_days=${RUN_HISTORY_RETENTION_DAYS}" "run_folder_max_concurrency=${RUN_FOLDER_MAX_CONCURRENCY}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_lifecycle_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}" "api_caller_policy_json=${API_CALLER_POLICY_JSON}" "provision_legacy_executor_local=${PROVISION_LEGACY_EXECUTOR_LOCAL}" "enable_apply=${ENABLE_APPLY}" "aws_console_start_url=${AWS_CONSOLE_START_URL}" "aws_console_role_name=${AWS_CONSOLE_ROLE_NAME}"
     ./scripts/generate_backend.sh "$BUCKET" deploy "{{OPENCI_TF_REGION}}" infra/deploy "{{OPENCI_TF_PROJECT}}-tf-locks"
     terraform -chdir=infra/deploy init -reconfigure -input=false
     terraform -chdir=infra/deploy destroy -input=false -auto-approve

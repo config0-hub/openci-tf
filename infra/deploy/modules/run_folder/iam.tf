@@ -55,6 +55,11 @@ locals {
       "kms:ViaService" = "s3.${data.aws_region.current.name}.amazonaws.com"
     }
   }
+  foundation_kms_via_ssm = {
+    StringEquals = {
+      "kms:ViaService" = "ssm.${data.aws_region.current.name}.amazonaws.com"
+    }
+  }
   direct_sops_kms = {
     Null = {
       "kms:ViaService" = "true"
@@ -72,6 +77,8 @@ resource "aws_iam_role_policy" "prepare" {
     { Effect = "Allow", Action = ["kms:Decrypt"], Resource = var.kms_key_arn, Condition = merge(local.package_kms_context, local.foundation_kms_via_s3) },
     { Effect = "Allow", Action = ["kms:GenerateDataKey", "kms:Encrypt"], Resource = var.kms_key_arn, Condition = merge(local.package_kms_context, local.foundation_kms_via_s3) },
     { Effect = "Allow", Action = ["kms:Decrypt"], Resource = var.kms_key_arn, Condition = merge(local.tmp_kms_context, local.foundation_kms_via_s3) },
+    # /openci-tf/env/* SecureString parameters are encrypted with the foundation KMS key via SSM.
+    { Effect = "Allow", Action = ["kms:Decrypt"], Resource = var.kms_key_arn, Condition = local.foundation_kms_via_ssm },
     { Effect = "Allow", Action = ["kms:GenerateDataKey", "kms:Encrypt"], Resource = var.kms_key_arn, Condition = merge(local.tmp_kms_context, local.foundation_kms_via_s3) },
     { Effect = "Allow", Action = "sts:AssumeRole", Resource = local.prepare_assumable_role_arns },
     # ListBucket on the done bucket is required so absent keys return 404 (not 403);
