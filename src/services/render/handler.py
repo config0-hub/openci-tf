@@ -28,6 +28,7 @@ from src.domain.formatters.artifacts import (
 from src.domain.formatters.console_urls import step_functions_execution_url
 from src.domain.locks import run_lock
 from src.domain.run.outcome import normalize_map_outcome as _outcome
+from src.domain.engine.outer_map_state import _items_for_step
 from src.domain.engine.summary import (
     build_outer_map_outcome,
     validate_outer_map_outcome,
@@ -550,11 +551,13 @@ def _collect_step_outcomes(event: dict[str, Any]) -> dict[str, Any]:
     map_items = state.get("map_items")
     if not isinstance(map_items, list):
         raise TypeError("state.map_items must be a list")
-    next_items = [
-        item
-        for item in map_items
-        if isinstance(item, dict) and item.get("step_index") == next_step_index
-    ]
+    raw_steps = state.get("steps")
+    steps = raw_steps if isinstance(raw_steps, list) else None
+    next_items = _items_for_step(
+        [item for item in map_items if isinstance(item, dict)],
+        next_step_index,
+        steps=steps,
+    )
     skipped = list(state.get("skipped") or [])
     if step_failed:
         for item in map_items:

@@ -397,7 +397,9 @@ def build_compact_resolve_result(
         steps = _resolved_steps(event, compact_items)
         result["steps"] = steps
         result["step_count"] = len(steps)
-        result["current_step_items"] = _items_for_step(compact_items, 0)
+        result["current_step_items"] = _items_for_step(
+            compact_items, 0, steps=steps
+        )
     else:
         result["steps"] = []
     validate_outer_resolve_result(result)
@@ -414,8 +416,19 @@ def _resolved_steps(event: dict[str, Any], items: list[dict[str, Any]]) -> list[
     return [folders]
 
 
-def _items_for_step(items: list[dict[str, Any]], step_index: int) -> list[dict[str, Any]]:
-    return [item for item in items if item.get("step_index") == step_index]
+def _items_for_step(
+    items: list[dict[str, Any]],
+    step_index: int,
+    *,
+    steps: list[list[str]] | None = None,
+) -> list[dict[str, Any]]:
+    """Return compact map items for one pipeline step with the cursor step_index stamped."""
+    if steps is not None and 0 <= step_index < len(steps):
+        folders = frozenset(steps[step_index])
+        selected = [item for item in items if item.get("folder") in folders]
+    else:
+        selected = [item for item in items if item.get("step_index") == step_index]
+    return [{**item, "step_index": step_index} for item in selected]
 
 
 def outer_state_budget_summary() -> dict[str, int]:

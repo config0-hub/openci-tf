@@ -4,8 +4,9 @@ from dataclasses import asdict
 
 from src.domain.config.folder_config import compact_folder_config_for_outer_state, parse_folder_config
 from src.domain.engine.execution_id import compose_execution_id
-from src.domain.engine.outer_map_state import build_compact_resolve_result
+from src.domain.engine.outer_map_state import build_compact_resolve_result, merge_map_item
 from src.domain.engine.summary import build_outer_map_outcome
+from src.platform.aws.run_registry.step_index import registry_step_index_from_state
 from src.domain.formatters.artifacts import summary
 from src.services.render import handler as render_handler
 
@@ -142,3 +143,62 @@ def test_pipeline_summary_renders_per_step_status_table() -> None:
     assert "Step 2/3 · infra/rds, infra/ec2 · failed" in rendered
     assert "Step 3/3 · infra/app · not run" in rendered
     assert "| `infra/app` | `123456789012` | not run | not run | n/a |" in rendered
+
+
+def test_pipeline_step_index_matches_between_inner_collect_and_final_replay() -> None:
+    """2-step pipeline: inner collect and RenderPR replay must agree on registry step_index."""
+    step_one_folder = "terraform/primary/ap-northeast-1/01-vpc"
+    step_two_folder = "terraform/primary/ap-northeast-1/03-sqs"
+    steps = [[step_one_folder], [step_two_folder]]
+    full_items = [_full_item(step_one_folder, 0), _full_item(step_two_folder, 1)]
+    resolved = build_compact_resolve_result(
+        {
+            "run_id": "r" * 32,
+            "webhook_info": {"repo_name": "org/repo", "commit_hash": "a" * 40},
+            "settings": {"ssm_openci_tf_github_token": "/openci-tf/github/token"},
+            "action": "plan",
+            "folders": [step_one_folder, step_two_folder],
+            "steps": steps,
+            "notification_target": {"type": "github_pr"},
+            "pipeline": "primary-msg",
+        },
+        run_id="r" * 32,
+        full_items=full_items,
+        skipped=[],
+    )
+    # Simulate a stale map item step_index on step 2 while steps remain authoritative.
+    resolved["map_items"][1]["step_index"] = 0
+
+    stored: list[int] = []
+    for step_cursor in (0, 1):
+        current_items = resolved["current_step_items"]
+        assert [item["folder"] for item in current_items] == [steps[step_cursor][0]]
+        for item in current_items:
+            inner_event = merge_map_item(resolved["map_shared"], item)
+            stored.append(registry_step_index_from_state(inner_event.get("step_index")))
+        step_outcomes = [
+            build_outer_map_outcome(
+                folder=item["folder"],
+                account_id="123456789012",
+                execution_id=str(item["e"]),
+                output={"exec_id": str(item["e"]), "succeeded": True},
+                step_index=item.get("step_index") if isinstance(item.get("step_index"), int) else None,
+            )
+            for item in current_items
+        ]
+        resolved = render_handler.handler(
+            {
+                "collect_step_outcomes": True,
+                "state": resolved,
+                "step_outcomes": step_outcomes,
+            },
+            object(),
+        )
+
+    replayed: list[int] = []
+    for outcome in resolved["outcomes"]:
+        replayed.append(registry_step_index_from_state(outcome.get("step_index")))
+
+    assert stored == [1, 2]
+    assert replayed == [1, 2]
+    assert stored == replayed
