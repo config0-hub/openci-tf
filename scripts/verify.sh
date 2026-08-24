@@ -244,6 +244,28 @@ ssm_params_exist() {
   [ "$total" != "0" ] || { echo "ParameterNotFound: no parameters under /openci-tf/install/{openci-tf,engine}" >&2; return 1; }
 }
 source_copy_exists() { aws s3api head-object --bucket "$STATE_BUCKET" --key "source/$1/manifest.json"; }
+state_object_status() {
+  local key="$1" error_file rc
+  error_file="$(mktemp)"
+  set +e
+  aws s3api head-object --bucket "$STATE_BUCKET" --key "$key" >/dev/null 2>"$error_file"
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ]; then
+    rm -f "$error_file"
+    printf 'present'
+    return 0
+  fi
+  if grep -Eq '(404|Not Found|NoSuchKey)' "$error_file"; then
+    rm -f "$error_file"
+    printf 'absent'
+    return 0
+  fi
+  cat "$error_file" >&2
+  rm -f "$error_file"
+  echo "ERROR: could not determine state object status for s3://${STATE_BUCKET}/${key}" >&2
+  return 1
+}
 # batch-get-projects exits 0 even for missing projects (reported via
 # projectsNotFound) — assert on the returned name, not the CLI status.
 codebuild_exists() {
@@ -276,9 +298,26 @@ else
   check "lock table ${PROJECT}-tf-locks" "$WANT" table_exists "${PROJECT}-tf-locks"
   # engine-00-bootstrap is skipped: in a combined install the engine adopts the
   # shared state bucket and never applies its own bootstrap root.
-  for root in bootstrap foundation deploy target-connect engine; do
+  for root in bootstrap foundation deploy engine; do
     check "source copy ${root}" "$WANT" source_copy_exists "$root"
   done
+  target_connect_state_status=""
+  if target_connect_state_status="$(state_object_status "target-connect/terraform.tfstate")"; then
+    case "$target_connect_state_status" in
+      present) target_connect_copy_want="$WANT" ;;
+      absent) target_connect_copy_want=0 ;;
+      *)
+        echo "FAIL target-connect state object (indeterminate — unexpected probe status: ${target_connect_state_status})"
+        FAILURES=$((FAILURES + 1))
+        target_connect_copy_want="" ;;
+    esac
+    if [ -n "${target_connect_copy_want:-}" ]; then
+      check "source copy target-connect" "$target_connect_copy_want" source_copy_exists "target-connect"
+    fi
+  else
+    echo "FAIL target-connect state object (indeterminate — probe error, not a not-found):"
+    FAILURES=$((FAILURES + 1))
+  fi
 fi
 
 # Foundation

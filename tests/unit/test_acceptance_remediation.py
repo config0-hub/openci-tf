@@ -1050,7 +1050,10 @@ def test_engine_uninstall_script_reverses_ecr_then_deploy():
 
 def test_verify_uses_canonical_engine_source_and_bucket_names():
     script = (Path(__file__).parents[2] / "scripts/verify.sh").read_text()
-    assert "bootstrap foundation deploy target-connect engine" in script
+    assert "bootstrap foundation deploy engine" in script
+    assert "target-connect/terraform.tfstate" in script
+    assert "source copy target-connect" in script
+    assert "bootstrap foundation deploy target-connect engine" not in script
     assert "bootstrap foundation deploy target-connect engine-02-deploy" not in script
     assert 'for b in internal "done"; do' in script
     assert "engine bucket ${PROJECT}-${b}-${ACCOUNT_ID}" not in script

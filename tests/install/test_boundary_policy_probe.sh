@@ -39,6 +39,8 @@ test_probe "exact absent" 254 \
   "An error occurred (NoSuchEntity) when calling the GetPolicy operation: Policy not found" 1
 test_probe "AWS CLI v2 exact absent" 254 \
   "aws: [ERROR]: An error occurred (NoSuchEntity) when calling the GetPolicy operation: Policy not found" 1
+test_probe "AWS CLI v1 exact absent" 255 \
+  "An error occurred (NoSuchEntity) when calling the GetPolicy operation: Policy not found" 1
 test_probe "generic 404 indeterminate" 1 \
   "404 Not Found from intermediary endpoint" 2
 test_probe "access denied indeterminate" 254 \

@@ -37,6 +37,8 @@ test_probe "exact absent" "openci-tf-executor-poweruser" 254 \
   "An error occurred (NoSuchEntity) when calling the GetRole operation: Role not found" 1
 test_probe "AWS CLI v2 exact absent" "openci-tf-executor-poweruser" 254 \
   "aws: [ERROR]: An error occurred (NoSuchEntity) when calling the GetRole operation: Role not found" 1
+test_probe "AWS CLI v1 exact absent" "openci-tf-executor-poweruser" 255 \
+  "An error occurred (NoSuchEntity) when calling the GetRole operation: Role not found" 1
 test_probe "generic 404 indeterminate" "openci-tf-executor-poweruser" 1 \
   "404 Not Found from intermediary endpoint" 2
 test_probe "bare not found indeterminate" "openci-tf-executor-poweruser" 1 "Not Found" 2
@@ -58,7 +60,7 @@ test_probe "truncated nosuchentity indeterminate" "openci-tf-executor-poweruser"
   "An error occurred (NoSuchEntity) when calling the GetRole operation" 2
 test_probe "multiline nosuchentity indeterminate" "openci-tf-executor-poweruser" 254 \
   $'An error occurred (NoSuchEntity) when calling the GetRole operation: Role not found\nextra diagnostic line' 2
-test_probe "nosuchentity wrong rc indeterminate" "openci-tf-executor-poweruser" 255 \
+test_probe "nosuchentity wrong rc indeterminate" "openci-tf-executor-poweruser" 1 \
   "An error occurred (NoSuchEntity) when calling the GetRole operation: Role not found" 2
 
 if [ "$failures" -gt 0 ]; then

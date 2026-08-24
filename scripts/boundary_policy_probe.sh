@@ -18,13 +18,13 @@ if [ "$probe_rc" -eq 0 ]; then
   exit 0
 fi
 
-# Only AWS CLI IAM service errors (exit 254) with a single stderr line matching
-# the complete GetPolicy NoSuchEntity signature are treated as absent. Wrappers,
-# wrong operations, generic tokens, other exit codes, and multiline stderr are
-# indeterminate — callers must not treat them as absence.
+# Only AWS CLI IAM service errors (exit 254 on v2, 255 on v1) with a single
+# stderr line matching the complete GetPolicy NoSuchEntity signature are treated
+# as absent. Wrappers, wrong operations, generic tokens, other exit codes, and
+# multiline stderr are indeterminate — callers must not treat them as absence.
 NOSUCH_LINE_RE='^(aws: \[ERROR\]: )?An error occurred \(NoSuchEntity\) when calling the GetPolicy operation: .+$'
 
-if [ "$probe_rc" -ne 254 ]; then
+if [ "$probe_rc" -ne 254 ] && [ "$probe_rc" -ne 255 ]; then
   cat "$err" >&2
   rm -f "$err"
   exit 2
