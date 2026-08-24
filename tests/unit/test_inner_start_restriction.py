@@ -56,6 +56,19 @@ def test_outer_lambda_policy_grants_only_report_all_pointer_tmp_write():
     )
 
 
+def test_outer_lambda_policy_grants_pipeline_apply_step_index_query():
+    lambda_policy = OPENCI_TF_IAM.split('resource "aws_iam_role_policy" "lambda"')[1].split(
+        'resource "aws_iam_role_policy" "api_lambda"'
+    )[0]
+    assert (
+        '"${aws_dynamodb_table.run_registry.arn}/index/pipeline_apply_step"' in lambda_policy
+    )
+    assert (
+        '"${aws_dynamodb_table.run_registry.arn}/index/pipeline_apply_step"'
+        not in OPENCI_TF_IAM.split('resource "aws_iam_role_policy" "api_lambda"')[1]
+    )
+
+
 def test_outer_lambda_policy_grants_only_report_all_pointer_kms_data_key():
     assert "report_all_pointer_kms_context" in OPENCI_TF_MAIN
     assert (

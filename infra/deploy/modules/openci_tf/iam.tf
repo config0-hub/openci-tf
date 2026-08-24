@@ -68,6 +68,7 @@ resource "aws_iam_role_policy" "lambda" {
             aws_dynamodb_table.locks.arn,
             aws_dynamodb_table.run_registry.arn,
             "${aws_dynamodb_table.run_registry.arn}/index/repo_created",
+            "${aws_dynamodb_table.run_registry.arn}/index/pipeline_apply_step",
           ]
         },
         {
