@@ -7,6 +7,8 @@ from typing import Any
 
 from boto3.dynamodb.types import TypeSerializer
 
+from src.platform.aws.dynamo_resource import dynamo_client
+
 _serializer = TypeSerializer()
 
 
@@ -18,7 +20,7 @@ def serialize_values(values: dict[str, Any]) -> dict[str, Any]:
     return {key: _serializer.serialize(value) for key, value in values.items()}
 
 
-def transact_write_items(client: Any, *, transact_items: list[dict[str, Any]]) -> None:
+def transact_write_items(*, transact_items: list[dict[str, Any]]) -> None:
     """Execute transact_write_items with native Python attribute values."""
     encoded: list[dict[str, Any]] = []
     for item in transact_items:
@@ -31,4 +33,4 @@ def transact_write_items(client: Any, *, transact_items: list[dict[str, Any]]) -
         if "ExpressionAttributeValues" in payload:
             payload["ExpressionAttributeValues"] = serialize_values(payload["ExpressionAttributeValues"])
         encoded.append({operation: payload})
-    client.transact_write_items(TransactItems=encoded)
+    dynamo_client().transact_write_items(TransactItems=encoded)

@@ -146,7 +146,7 @@ def test_lock_lease_covers_max_grace_and_fifty_folder_sequential_queue(
     table = _DurableLockTable()
     captured: list[dict] = []
 
-    def transact(_client, *, transact_items):
+    def transact(*, transact_items):
         captured.extend(transact_items)
 
     monkeypatch.setattr(run_lock, "transact_write_items", transact)
@@ -220,11 +220,10 @@ def test_deadline_persists_with_run_and_each_folder_attempt(
     writes: list[dict] = []
     table.update_item = lambda **kwargs: updates.append(kwargs)
     monkeypatch.setattr(run_registry._shared, "_table", lambda: table)
-    monkeypatch.setattr(run_registry._shared, "dynamo_client", lambda: object())
     monkeypatch.setattr(
         run_registry._shared,
         "transact_write_items",
-        lambda _client, *, transact_items: writes.extend(transact_items),
+        lambda *, transact_items: writes.extend(transact_items),
     )
     run_registry.set_run_deadline("run-a", deadline_at)
     run_registry.put_folder_attempt(

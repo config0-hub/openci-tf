@@ -236,7 +236,6 @@ def put_folder_attempt(
     )
     try:
         _shared.transact_write_items(
-            _shared.dynamo_client(),
             transact_items=[
                 {
                     "Put": {

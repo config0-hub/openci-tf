@@ -86,7 +86,6 @@ def acquire(
     table_name = table.name
     try:
         transact_write_items(
-            table.meta.client,
             transact_items=[
                 {
                     "Put": {

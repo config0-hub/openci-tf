@@ -48,7 +48,7 @@ def _run_record(run_id: str = "run-1") -> dict:
 
 
 @patch("src.platform.aws.run_registry.runs.get_idempotency", return_value=None)
-@patch("src.platform.aws.run_registry._shared.dynamo_client")
+@patch("src.platform.aws.dynamo_transactions.dynamo_client")
 @patch("src.platform.aws.run_registry._shared._table")
 def test_claim_idempotent_run_executes_transaction(mock_table, mock_client, _mock_get):
     table = MagicMock()
@@ -75,7 +75,7 @@ def test_claim_idempotent_run_executes_transaction(mock_table, mock_client, _moc
 
 
 @patch("src.platform.aws.run_registry.runs.get_idempotency")
-@patch("src.platform.aws.run_registry._shared.dynamo_client")
+@patch("src.platform.aws.dynamo_transactions.dynamo_client")
 @patch("src.platform.aws.run_registry._shared._table")
 def test_claim_idempotent_run_returns_existing_on_race(mock_table, mock_client, mock_get):
     table = MagicMock()
@@ -113,7 +113,7 @@ def test_claim_idempotent_run_rejects_conflicting_fingerprint(mock_get):
 
 
 @patch("src.platform.aws.run_registry.runs.get_idempotency", return_value=None)
-@patch("src.platform.aws.run_registry._shared.dynamo_client")
+@patch("src.platform.aws.dynamo_transactions.dynamo_client")
 @patch("src.platform.aws.run_registry._shared._table")
 def test_claim_idempotent_run_allows_expired_replacement(mock_table, mock_client, _mock_get):
     table = MagicMock()
@@ -134,7 +134,7 @@ def test_claim_idempotent_run_allows_expired_replacement(mock_table, mock_client
 
 
 @patch("src.platform.aws.run_registry.runs.get_idempotency")
-@patch("src.platform.aws.run_registry._shared.dynamo_client")
+@patch("src.platform.aws.dynamo_transactions.dynamo_client")
 @patch("src.platform.aws.run_registry._shared._table")
 def test_claim_idempotent_run_propagates_unexpected_transaction_errors(mock_table, mock_client, mock_get):
     table = MagicMock()
@@ -259,7 +259,7 @@ def test_find_latest_successful_pipeline_apply_uses_indexed_query(mock_table):
     table.scan.assert_not_called()
 
 
-@patch("src.platform.aws.run_registry._shared.dynamo_client")
+@patch("src.platform.aws.dynamo_transactions.dynamo_client")
 @patch("src.platform.aws.run_registry._shared._table")
 def test_put_folder_attempt_replay_allows_equivalent_terminal_failure_status(mock_table, mock_client):
     table = MagicMock()
@@ -301,7 +301,7 @@ def test_put_folder_attempt_replay_allows_equivalent_terminal_failure_status(moc
     table.get_item.assert_called_once()
 
 
-@patch("src.platform.aws.run_registry._shared.dynamo_client")
+@patch("src.platform.aws.dynamo_transactions.dynamo_client")
 @patch("src.platform.aws.run_registry._shared._table")
 def test_put_folder_attempt_replay_rejects_success_failure_status_mismatch(mock_table, mock_client):
     table = MagicMock()

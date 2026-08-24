@@ -17,7 +17,7 @@ from src.platform.aws.run_registry.keys import (
 from src.platform.aws.run_registry import get_folder_attempt, put_folder_attempt
 
 
-@patch("src.platform.aws.run_registry._shared.dynamo_client")
+@patch("src.platform.aws.dynamo_transactions.dynamo_client")
 @patch("src.platform.aws.run_registry._shared._table")
 def test_put_folder_attempt_serializes_update_key(mock_table, mock_client):
     table = MagicMock()
@@ -96,22 +96,69 @@ def test_get_folder_attempt_reads_exact_attempt_consistently(mock_table):
 
 def test_transact_write_items_serializes_key_directly():
     client = MagicMock()
-    transact_write_items(
-        client,
-        transact_items=[
-            {
-                "Update": {
-                    "TableName": "registry",
-                    "Key": {"pk": "run#1", "sk": "folder#infra"},
-                    "UpdateExpression": "SET #status = :status",
-                    "ExpressionAttributeNames": {"#status": "status"},
-                    "ExpressionAttributeValues": {":status": "failed"},
+    with patch("src.platform.aws.dynamo_transactions.dynamo_client", return_value=client):
+        transact_write_items(
+            transact_items=[
+                {
+                    "Update": {
+                        "TableName": "registry",
+                        "Key": {"pk": "run#1", "sk": "folder#infra"},
+                        "UpdateExpression": "SET #status = :status",
+                        "ExpressionAttributeNames": {"#status": "status"},
+                        "ExpressionAttributeValues": {":status": "failed"},
+                    }
                 }
-            }
-        ],
-    )
+            ],
+        )
     encoded = client.transact_write_items.call_args.kwargs["TransactItems"][0][
         "Update"
     ]["Key"]
     assert encoded["pk"]["S"] == "run#1"
     assert encoded["sk"]["S"] == "folder#infra"
+
+
+def test_transact_write_items_serializes_int_condition_value_once():
+    client = MagicMock()
+    now = 1_700_000_000
+    with patch("src.platform.aws.dynamo_transactions.dynamo_client", return_value=client):
+        transact_write_items(
+            transact_items=[
+                {
+                    "Put": {
+                        "TableName": "locks",
+                        "Item": {"pk": "lock", "sk": "org/repo/infra"},
+                        "ConditionExpression": "attribute_not_exists(pk) OR expires_at < :now",
+                        "ExpressionAttributeValues": {":now": now},
+                    }
+                }
+            ],
+        )
+    values = client.transact_write_items.call_args.kwargs["TransactItems"][0]["Put"][
+        "ExpressionAttributeValues"
+    ]
+    assert values[":now"] == {"N": str(now)}
+
+
+@patch("src.platform.aws.dynamo_transactions.dynamo_client")
+def test_run_lock_acquire_builds_single_serialized_now(mock_client):
+    client = MagicMock()
+    mock_client.return_value = client
+    table = MagicMock()
+    table.name = "locks"
+    now = 1_700_000_000
+    from src.domain.locks import run_lock
+
+    run_lock.acquire(
+        table,
+        "org/repo",
+        "infra/a",
+        "exec-1",
+        now,
+        3600,
+        "run-1",
+        "2999-01-01T00:00:00Z",
+    )
+    values = client.transact_write_items.call_args.kwargs["TransactItems"][0]["Put"][
+        "ExpressionAttributeValues"
+    ]
+    assert values[":now"] == {"N": str(now)}
