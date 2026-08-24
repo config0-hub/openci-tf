@@ -1012,10 +1012,18 @@ def test_justfile_passes_lifecycle_variables_to_foundation_and_deploy():
 def test_engine_install_script_targets_adjacent_engine_tree():
     script = (Path(__file__).parents[2] / "scripts/engine_install.sh").read_text()
     assert "build-release-zip.sh" in script
+    assert "infra/01-ecr" in script
     assert "infra/02-deploy" in script
     assert "--query KeyMetadata.Arn" in script
+    assert 'ECR_CANONICAL_STATE_KEY="engine-ecr/terraform.tfstate"' in script
     assert 'CANONICAL_STATE_KEY="engine/terraform.tfstate"' in script
     assert 'LEGACY_STATE_KEY="engine-02-deploy/terraform.tfstate"' in script
+    assert 'generate_backend.sh" "$STATE_BUCKET" engine-ecr' in script
+    assert "mirror-image.sh" in script
+    assert 'rev-parse --short=7 HEAD' in script
+    assert "engine_image_uri" in script
+    assert 'tofu -chdir="$ECR_DIR" output -raw repository_url' in script
+    assert "generate_tfvars.sh" in script
     assert "init -migrate-state -force-copy -input=false" in script
     assert "state list)" in script
     assert 'delete-object --bucket "$STATE_BUCKET" --key "$LEGACY_STATE_KEY"' in script
@@ -1027,6 +1035,17 @@ def test_engine_install_script_targets_adjacent_engine_tree():
         'upload_source.sh" "$STATE_BUCKET" engine "$ENGINE_ROOT" infra/02-deploy'
         in script
     )
+
+
+def test_engine_uninstall_script_reverses_ecr_then_deploy():
+    script = (Path(__file__).parents[2] / "scripts/engine_uninstall.sh").read_text()
+    deploy_index = script.index('generate_backend.sh" "$STATE_BUCKET" engine')
+    ecr_index = script.index('generate_backend.sh" "$STATE_BUCKET" engine-ecr')
+    assert deploy_index < ecr_index
+    assert "infra/02-deploy" in script
+    assert "infra/01-ecr" in script
+    assert "tofu destroy -input=false -auto-approve" in script
+    assert "batch-delete-image" not in script
 
 
 def test_verify_uses_canonical_engine_source_and_bucket_names():

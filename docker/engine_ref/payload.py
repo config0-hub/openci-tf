@@ -1,5 +1,3 @@
-# SPDX-FileCopyrightText: 2026 Config0, Inc.
-# SPDX-License-Identifier: AGPL-3.0-or-later
 """SimplePayload — lightweight validated payload for the simplified execution path."""
 
 from __future__ import annotations

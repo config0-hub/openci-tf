@@ -20,6 +20,10 @@ if [ ! -f "${ENGINE_ROOT}/scripts/build-release-zip.sh" ]; then
   echo "ERROR: engine checkout missing scripts/build-release-zip.sh: ${ENGINE_ROOT}" >&2
   exit 1
 fi
+if ! command -v tofu >/dev/null 2>&1; then
+  echo "ERROR: tofu is required but not found in PATH" >&2
+  exit 1
+fi
 
 (
   cd "$ENGINE_ROOT"
@@ -43,7 +47,9 @@ export AWS_REGION="$REGION"
 export ADDITIONAL_PACKAGE_BUCKET_ARNS_JSON="[\"arn:aws:s3:::${PACKAGE_BUCKET}\"]"
 export ADDITIONAL_RESULT_BUCKET_ARNS_JSON="[\"arn:aws:s3:::${DONE_BUCKET}\"]"
 
+ECR_DIR="${ENGINE_ROOT}/infra/01-ecr"
 DEPLOY_DIR="${ENGINE_ROOT}/infra/02-deploy"
+ECR_CANONICAL_STATE_KEY="engine-ecr/terraform.tfstate"
 CANONICAL_STATE_KEY="engine/terraform.tfstate"
 LEGACY_STATE_KEY="engine-02-deploy/terraform.tfstate"
 
@@ -85,6 +91,31 @@ PY
     --condition-expression 'attribute_not_exists(Info)' >/dev/null
 }
 
+echo "applying engine infra/01-ecr (state key ${ECR_CANONICAL_STATE_KEY})"
+"${ROOT_DIR}/scripts/generate_backend.sh" "$STATE_BUCKET" engine-ecr "$REGION" "$ECR_DIR" "$LOCK_TABLE"
+(
+  cd "$ECR_DIR"
+  cat >terraform.tfvars <<EOF
+aws_region = "${REGION}"
+EOF
+  tofu init -reconfigure -input=false
+  tofu apply -input=false -auto-approve
+)
+
+ENGINE_SHORT_SHA="$(git -C "$ENGINE_ROOT" rev-parse --short=7 HEAD)"
+if [ ! -x "${ENGINE_ROOT}/scripts/mirror-image.sh" ]; then
+  echo "ERROR: engine checkout missing scripts/mirror-image.sh: ${ENGINE_ROOT}" >&2
+  exit 1
+fi
+bash "${ENGINE_ROOT}/scripts/mirror-image.sh" "$ENGINE_SHORT_SHA"
+
+ECR_REPOSITORY_URL="$(tofu -chdir="$ECR_DIR" output -raw repository_url)"
+[[ "$ECR_REPOSITORY_URL" == *".amazonaws.com/"* ]] || {
+  echo "ERROR: infra/01-ecr produced an invalid repository_url output" >&2
+  exit 1
+}
+export ENGINE_IMAGE_URI="${ECR_REPOSITORY_URL}:${ENGINE_SHORT_SHA}"
+
 canonical_status="$(state_object_status "$CANONICAL_STATE_KEY")"
 legacy_status="$(state_object_status "$LEGACY_STATE_KEY")"
 if [ "$canonical_status" = absent ] && [ "$legacy_status" = present ]; then
@@ -111,6 +142,9 @@ fi
 (
   cd "$DEPLOY_DIR"
   "${ENGINE_ROOT}/scripts/generate_tfvars.sh"
+  cat >>terraform.tfvars <<EOF
+engine_image_uri                 = "${ENGINE_IMAGE_URI}"
+EOF
   terraform apply -input=false -auto-approve
 )
 "${ROOT_DIR}/scripts/upload_source.sh" "$STATE_BUCKET" engine "$ENGINE_ROOT" infra/02-deploy

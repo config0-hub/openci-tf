@@ -12,6 +12,12 @@ LOCK_TABLE="${PROJECT_PREFIX}-tf-locks"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENGINE_ROOT="$(cd "$ENGINE_ROOT" && pwd)"
 DEPLOY_DIR="${ENGINE_ROOT}/infra/02-deploy"
+ECR_DIR="${ENGINE_ROOT}/infra/01-ecr"
+
+if ! command -v tofu >/dev/null 2>&1; then
+  echo "ERROR: tofu is required but not found in PATH" >&2
+  exit 1
+fi
 
 if [ ! -d "$DEPLOY_DIR" ]; then
   echo "ERROR: engine checkout missing infra/02-deploy: ${ENGINE_ROOT}" >&2
@@ -26,6 +32,22 @@ fi
     terraform destroy -input=false -auto-approve
   else
     echo "no engine terraform.tfvars; skipping destroy"
+  fi
+)
+
+if [ ! -d "$ECR_DIR" ]; then
+  echo "ERROR: engine checkout missing infra/01-ecr: ${ENGINE_ROOT}" >&2
+  exit 1
+fi
+
+"${ROOT_DIR}/scripts/generate_backend.sh" "$STATE_BUCKET" engine-ecr "$REGION" "$ECR_DIR" "$LOCK_TABLE"
+(
+  cd "$ECR_DIR"
+  if [ -f terraform.tfvars ]; then
+    tofu init -reconfigure -input=false
+    tofu destroy -input=false -auto-approve
+  else
+    echo "no engine ecr terraform.tfvars; skipping destroy"
   fi
 )
 

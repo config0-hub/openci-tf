@@ -92,8 +92,10 @@ What each component does:
    sources) and are deliberately NOT overridable.
 3. **engine** — runs `just install` in the engine repo: adopts the shared state
    bucket (or creates its own when standalone), builds `engine.zip` +
-   `sops-age-layer.zip`, uploads them to `s3://…/engine/artifacts/`, and applies
-   `infra/02-deploy` with `project_prefix=openci-tf`.
+   `sops-age-layer.zip`, uploads them to `s3://…/engine/artifacts/`, applies
+   `infra/01-ecr`, mirrors the published GHCR engine image into tenant ECR, and
+   applies `infra/02-deploy` with `project_prefix=openci-tf` and
+   `engine_image_uri` set to that mirrored tag.
 4. **deploy** — the hub stack including same-account `openci-tf-executor-readonly`
    (hub-setup module). Cross-stack values are discovered with data-source lookups
    on deterministic names (foundation KMS alias and buckets, engine `openci-tf-init-job`
