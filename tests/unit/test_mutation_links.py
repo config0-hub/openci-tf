@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest  # type: ignore[import-not-found]
 
+from src.core.errors import EngineAckError
 from src.domain.formatters.console_urls import (
     codebuild_build_url,
     is_valid_codebuild_build_id,
@@ -48,11 +49,30 @@ def test_start_codebuild_execution_never_fabricates_build_id(monkeypatch):
 
     ack = engine.start_codebuild_execution(
         "arn:aws:states:us-east-1:123456789012:stateMachine:engine-codebuild",
-        {"trigger_id": "run.infra.0"},
+        {
+            "trigger_id": "run.infra.0",
+            "timeout_seconds": 900,
+            "s3_package_uri": "s3://bucket/pkg",
+            "commands_b64": "YQ==",
+            "done_endpoint": "s3://bucket/done",
+            "execution_target": "codebuild",
+        },
     )
 
     assert "codebuild_build_id" not in ack
     assert ack["engine_execution_arn"].endswith(":exec")
+    sfn_input = json.loads(sfn.start_execution.call_args.kwargs["input"])
+    assert sfn_input["build_timeout_minutes"] == 18
+    assert sfn_input["sfn_timeout_seconds"] == 1500
+
+
+def test_start_codebuild_execution_rejects_missing_timeout(monkeypatch):
+    monkeypatch.setattr(engine.boto3, "client", lambda name: MagicMock())
+    with pytest.raises(EngineAckError, match="timeout_seconds"):
+        engine.start_codebuild_execution(
+            "arn:aws:states:us-east-1:123456789012:stateMachine:engine-codebuild",
+            {"trigger_id": "run.infra.0"},
+        )
 
 
 def test_resolve_codebuild_build_id_matches_trigger_env(monkeypatch):

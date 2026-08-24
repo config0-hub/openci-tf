@@ -258,7 +258,7 @@ def test_prepare_handler_keeps_engine_acceptance_when_comment_fails(
         lambda credentials=None: "123456789012" if credentials else "999999999999",
     )
     monkeypatch.setattr(prepare_and_submit.s3, "presign_get", lambda *_args: "get")
-    monkeypatch.setattr(prepare_and_submit.s3, "presign_put", lambda *_args: "put")
+    monkeypatch.setattr(prepare_and_submit.s3, "presign_put", lambda *_args, **_kwargs: "put")
     monkeypatch.setattr(prepare_and_submit.s3, "head_object", lambda *_args: None)
     monkeypatch.setattr(
         prepare_and_submit, "_pinned_plan_secrets", lambda **_kwargs: {}
