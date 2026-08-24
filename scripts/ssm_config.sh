@@ -45,6 +45,13 @@ put_param_from_stdin() { # <key>
     echo "ERROR: empty value on stdin" >&2
     exit 1
   }
+  if [ "$(tail -c 1 "$value_file" | od -An -tx1 | tr -d ' \n')" = "0a" ]; then
+    truncate -s -1 "$value_file"
+  fi
+  [ -s "$value_file" ] || {
+    echo "ERROR: empty value after stripping trailing newline" >&2
+    exit 1
+  }
   jq -Rs --arg name "$parameter_name" \
     '{Name: $name, Value: ., Type: "SecureString", Overwrite: true}' \
     <"$value_file" >"$input_file"

@@ -1178,6 +1178,29 @@ def test_upload_source_rejects_escaping_roots_and_git_failures(tmp_path):
     assert not aws_called.exists()
 
 
+def test_get_repo_settings_strips_webhook_secret_trailing_whitespace(monkeypatch):
+    item = {
+        "sk": "trigger",
+        "repo_name": "org/repo",
+        "git_url": "https://example.invalid/org/repo.git",
+        "webhook_secret_ssm": "/openci-tf/webhook/secret",
+    }
+
+    class Table:
+        def get_item(self, *, Key):
+            assert Key == {"pk": "repo", "sk": "trigger"}
+            return {"Item": item}
+
+    monkeypatch.setattr(dynamo, "_table", lambda _: Table())
+    monkeypatch.setattr(
+        dynamo,
+        "get_parameter",
+        lambda path, **_kwargs: f"  webhook-secret-value\n",
+    )
+    settings = dynamo.get_repo_settings("trigger")
+    assert settings.secret == "webhook-secret-value"
+
+
 def test_api_repository_lookup_does_not_decrypt_webhook_secret(monkeypatch):
     item = {
         "sk": "trigger",

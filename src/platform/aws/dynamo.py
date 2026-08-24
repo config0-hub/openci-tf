@@ -33,7 +33,7 @@ def get_repo_settings(
         ssm_openci_tf_github_token=item.get("ssm_openci_tf_github_token", ""),
         s3_bucket_tmp=item.get("s3_bucket_tmp", ""), remote_stateful_bucket=item.get("remote_stateful_bucket", ""),
         secret=(
-            get_parameter(item["webhook_secret_ssm"])
+            get_parameter(item["webhook_secret_ssm"]).strip()
             if with_webhook_secret and item.get("webhook_secret_ssm")
             else ""
         ),
