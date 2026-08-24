@@ -58,6 +58,11 @@ def test_report_script_uses_tfsec_soft_fail_out_and_silent_curl():
     script = render(ScriptParams("report", "lambda", folder="infra"))
     assert "tfsec . --format json --soft-fail --out" in script
     assert "curl -sS --fail-with-body --retry 3" in script
+    assert 'curl --fail-with-body --show-error --location "$upstream_url" -o "$archive"' in script
+    assert 'curl --fail-with-body --show-error --upload-file "$archive" "$cache_put_url"' in script
+    put_lines = [line for line in script.splitlines() if '--upload-file "$archive"' in line and "cache_put_url" in line]
+    assert put_lines
+    assert all("--location" not in line for line in put_lines)
     assert "infracost breakdown" in script
     assert 'printf \'%s\\n\' \'{"skipped":true,"reason":"not configured"}\'' in script
 

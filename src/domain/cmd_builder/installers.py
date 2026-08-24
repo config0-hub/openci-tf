@@ -127,7 +127,7 @@ upstream_url="${{{upstream}:-${{{legacy_upstream}:-}}}}"
 if ! curl --fail-with-body --show-error "$cache_get_url" -o "$archive"; then
   test -n "$upstream_url"
   test -n "$cache_put_url"
-  curl --fail-with-body --show-error "$upstream_url" -o "$archive"
+  curl --fail-with-body --show-error --location "$upstream_url" -o "$archive"
   echo "{checksum}  $archive" | sha256sum -c -
   curl --fail-with-body --show-error --upload-file "$archive" "$cache_put_url"
 fi
