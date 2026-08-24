@@ -109,9 +109,104 @@ def test_resolve_consumes_parse_preserved_settings_contract_and_builds_inner_map
         "trigger_id": "trigger",
         "repo_name": "org/repo",
         "source_sha": _FULL_SHA,
-        "folder_configs": {"infra/a": {"account_alias": "target"}},
+        "folder_configs": {"infra/a": {"apply": False, "destroy": False}},
     }
     assert isinstance(observation["observed_at"], int)
+
+
+def test_resolve_projects_folder_gate_flags_before_observation_writes(monkeypatch):
+    monkeypatch.setenv("LOCKS_TABLE_NAME", "locks")
+    monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")
+    gate_observations: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        resolve,
+        "put_folder_gate_observations",
+        lambda **kwargs: gate_observations.append(kwargs),
+    )
+    monkeypatch.setattr(resolve.boto3, "resource", lambda *_: SimpleNamespace(Table=lambda _: object()))
+    monkeypatch.setattr(resolve, "get_github_token", lambda _: "token")
+    monkeypatch.setattr(resolve, "shallow_clone", lambda *_args, **_kwargs: "clone")
+    monkeypatch.setattr(resolve, "cleanup_clone", lambda _: None)
+    monkeypatch.setattr(resolve, "validate_reserved_package_names", lambda _: None)
+    monkeypatch.setattr(
+        resolve,
+        "resolve_outer_state",
+        lambda *_: {
+            "folder_configs": {
+                "infra/a": {"account_alias": "target"},
+                "infra/b": {
+                    "account_alias": "target",
+                    "apply": {"allow": True, "grace_seconds": 15},
+                    "destroy": {"allow": True, "grace_seconds": 60},
+                },
+            },
+            "upstream_urls": {"tofu": "https://example/tofu"},
+        },
+    )
+    monkeypatch.setattr(
+        resolve,
+        "load_account_alias",
+        lambda _: SimpleNamespace(
+            account_id="123456789012",
+            role_name="target",
+            poweruser_role_name=None,
+            external_id="openci-tf-6be00970ed31c57d",
+            max_ttl=3600,
+        ),
+    )
+    monkeypatch.setattr(resolve.run_lock, "acquire", lambda *_, **__: None)
+    monkeypatch.setattr(resolve, "set_run_deadline", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(resolve, "set_run_pipeline_metadata", lambda *_args, **_kwargs: None)
+
+    event = _safe_event()
+    event["folders"] = ["infra/a", "infra/b"]
+    resolve.handler(event, None)
+
+    assert len(gate_observations) == 1
+    folder_configs = gate_observations[0]["folder_configs"]
+    assert folder_configs == {
+        "infra/a": {"apply": False, "destroy": False},
+        "infra/b": {"apply": True, "destroy": True},
+    }
+    for flags in folder_configs.values():
+        assert set(flags) == {"apply", "destroy"}
+        assert type(flags["apply"]) is bool
+        assert type(flags["destroy"]) is bool
+
+
+def test_resolve_rejects_malformed_folder_gate_flags(monkeypatch):
+    monkeypatch.setenv("LOCKS_TABLE_NAME", "locks")
+    monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")
+    monkeypatch.setattr(resolve.boto3, "resource", lambda *_: SimpleNamespace(Table=lambda _: object()))
+    monkeypatch.setattr(resolve, "get_github_token", lambda _: "token")
+    monkeypatch.setattr(resolve, "shallow_clone", lambda *_args, **_kwargs: "clone")
+    monkeypatch.setattr(resolve, "cleanup_clone", lambda _: None)
+    monkeypatch.setattr(resolve, "validate_reserved_package_names", lambda _: None)
+    monkeypatch.setattr(
+        resolve,
+        "resolve_outer_state",
+        lambda *_: {
+            "folder_configs": {"infra/a": {"account_alias": "target", "apply": True}},
+            "upstream_urls": {"tofu": "https://example/tofu"},
+        },
+    )
+    monkeypatch.setattr(
+        resolve,
+        "load_account_alias",
+        lambda _: SimpleNamespace(
+            account_id="123456789012",
+            role_name="target",
+            poweruser_role_name=None,
+            external_id="openci-tf-6be00970ed31c57d",
+            max_ttl=3600,
+        ),
+    )
+    monkeypatch.setattr(resolve.run_lock, "acquire", lambda *_, **__: None)
+    monkeypatch.setattr(resolve, "set_run_deadline", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(resolve, "set_run_pipeline_metadata", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(ConfigResolutionError, match="malformed folder gate flags"):
+        resolve.handler(_safe_event(), None)
 
 
 def test_resolve_confirmed_pipeline_apply_uses_intent_step_index(monkeypatch):

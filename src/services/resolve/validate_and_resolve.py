@@ -58,6 +58,27 @@ _FULL_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 _NO_OP_FINALIZATION_BUDGET_SECONDS = 900
 
 
+def _project_folder_gate_flags(folder: str, cfg: dict[str, Any]) -> dict[str, bool]:
+    """Project compact outer-state folder config to boolean apply/destroy gate flags."""
+    apply = False
+    destroy = False
+    apply_block = cfg.get("apply")
+    if apply_block is not None:
+        if not isinstance(apply_block, dict):
+            raise ConfigResolutionError(
+                f"malformed folder gate flags for {folder!r}: apply must be a mapping when present"
+            )
+        apply = apply_block.get("allow") is True
+    destroy_block = cfg.get("destroy")
+    if destroy_block is not None:
+        if not isinstance(destroy_block, dict):
+            raise ConfigResolutionError(
+                f"malformed folder gate flags for {folder!r}: destroy must be a mapping when present"
+            )
+        destroy = destroy_block.get("allow") is True
+    return {"apply": apply, "destroy": destroy}
+
+
 class _PinnedPullRequestClient(Protocol):
     """Minimal GitHub PR operations needed to fetch a pinned changed-file list."""
 
@@ -399,7 +420,10 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             trigger_id=trigger_id,
             repo_name=repo_name,
             source_sha=commit_hash,
-            folder_configs={folder: configs[folder] for folder in folders},
+            folder_configs={
+                folder: _project_folder_gate_flags(folder, configs[folder])
+                for folder in folders
+            },
             observed_at=now,
         )
     items: list[dict[str, Any]] = []
