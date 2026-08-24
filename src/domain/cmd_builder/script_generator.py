@@ -269,7 +269,6 @@ def _render_plan_like(params: ScriptParams) -> str:
         for binary, version in _installer_specs(params)
     )
     artifact_names = " ".join(_artifact_names(params.verb))
-    git_exec_path = 'export GIT_EXEC_PATH=/opt/bin/libexec/git-core' if params.execution_target == "lambda" else ""
     if destroy_plan:
         plan_artifact_helper = _DESTROY_PLAN_ARTIFACT_HELPER
         plan_setup = 'plan_dir="${ARTIFACTS_DIR:-/tmp}/binary-plan"\nmkdir -p "$plan_dir"\nplan_file="$plan_dir/destroy.plan.tfplan"'
@@ -338,7 +337,6 @@ upload_artifacts() {{
 }}
 {plan_artifact_helper}
 {_GIT_AUTH_SETUP}
-{git_exec_path}
 {installers}
 export PATH={directory}:$PATH
 cd {workdir}
@@ -373,7 +371,6 @@ def _render_apply_like(params: ScriptParams) -> str:
         for binary, version in _installer_specs(params)
     )
     artifact_names = " ".join(_artifact_names(params.verb))
-    git_exec_path = 'export GIT_EXEC_PATH=/opt/bin/libexec/git-core' if params.execution_target == "lambda" else ""
     return f'''#!/usr/bin/env bash
 set -euo pipefail
 upload_artifacts() {{
@@ -400,7 +397,6 @@ upload_artifacts() {{
 }}
 {_APPLY_PLAN_HELPER}
 {_GIT_AUTH_SETUP}
-{git_exec_path}
 {installers}
 export PATH={directory}:$PATH
 cd {workdir}

@@ -19,7 +19,7 @@ def _render() -> str:
 
 def test_generated_script_contains_rewrite_and_askpass_without_sentinel():
     script = _render()
-    assert "export GIT_EXEC_PATH=/opt/bin/libexec/git-core" in script
+    assert "GIT_EXEC_PATH" not in script
     assert "GIT_CONFIG_COUNT=2" in script
     assert "GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf" in script
     assert "GIT_CONFIG_VALUE_0=git@github.com:" in script
