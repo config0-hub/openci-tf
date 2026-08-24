@@ -12,6 +12,7 @@ from tests.helpers.asl_reachability import (
     render_read_outer_definition,
     unreachable_states,
 )
+from tests.helpers.rendered_run_folder_asl import load_rendered_run_folder_definition
 
 
 @pytest.mark.parametrize(
@@ -118,17 +119,52 @@ def test_rendered_read_iterator_delegates_all_child_envelopes_to_one_consumer():
     assert top_level_states["AdvanceOrStop"]["Default"] == "NextStep"
     iterator = run_folders["Iterator"]
     states = iterator["States"]
-    assert set(states) == {"RunFolder", "NormalizeFolderOutcome"}
-    assert states["RunFolder"]["Next"] == "NormalizeFolderOutcome"
-    assert states["RunFolder"]["Catch"][0]["Next"] == "NormalizeFolderOutcome"
-    assert states["NormalizeFolderOutcome"]["Type"] == "Task"
-    assert states["NormalizeFolderOutcome"]["Parameters"] == {
+    assert set(states) == {"RunStepFolder", "NormalizeStepFolderOutcome"}
+    assert states["RunStepFolder"]["Next"] == "NormalizeStepFolderOutcome"
+    assert states["RunStepFolder"]["Catch"][0]["Next"] == "NormalizeStepFolderOutcome"
+    assert states["NormalizeStepFolderOutcome"]["Type"] == "Task"
+    assert states["NormalizeStepFolderOutcome"]["Parameters"] == {
         "normalize_folder_outcome": True,
         "state.$": "$",
     }
-    assert states["RunFolder"]["Parameters"]["StateMachineArn"].endswith(
+    assert states["RunStepFolder"]["Parameters"]["StateMachineArn"].endswith(
         ":stateMachine:mock-read"
     )
+
+
+def _collect_state_names(states: dict) -> list[str]:
+    names: list[str] = []
+
+    def visit(state_map: dict) -> None:
+        for name, state in state_map.items():
+            names.append(name)
+            if state.get("Type") == "Map" and "Iterator" in state:
+                visit(state["Iterator"].get("States", {}))
+            if state.get("Type") == "Parallel":
+                for branch in state.get("Branches", []):
+                    visit(branch.get("States", {}))
+
+    visit(states)
+    return names
+
+
+@pytest.mark.parametrize(
+    "definition_loader",
+    [
+        render_read_outer_definition,
+        lambda: render_mutation_outer_definition("openci_tf_apply"),
+        lambda: render_mutation_outer_definition("openci_tf_destroy"),
+        lambda: load_rendered_run_folder_definition("read"),
+        lambda: load_rendered_run_folder_definition("apply"),
+        lambda: load_rendered_run_folder_definition("destroy"),
+    ],
+    ids=["read", "apply", "destroy", "run_folder_read", "run_folder_apply", "run_folder_destroy"],
+)
+def test_rendered_state_machine_state_names_are_globally_unique(definition_loader):
+    definition = definition_loader()
+    names = _collect_state_names(definition["States"])
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    assert duplicates == [], f"duplicate state names: {duplicates}"
 
 
 @pytest.mark.parametrize(

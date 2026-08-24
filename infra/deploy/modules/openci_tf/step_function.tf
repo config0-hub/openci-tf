@@ -162,20 +162,20 @@ resource "aws_sfn_state_machine" "openci_tf" {
         }
         Catch = [{ ErrorEquals = ["States.ALL"], ResultPath = null, Next = "FailRunStepFolders" }]
         Iterator = {
-          StartAt = "RunFolder"
+          StartAt = "RunStepFolder"
           States = {
-            RunFolder = {
+            RunStepFolder = {
               Type       = "Task"
               Resource   = "arn:aws:states:::states:startExecution.sync:2"
               Parameters = { "StateMachineArn" = var.run_folder_state_machine_arn, "Input.$" = "$" }
               ResultPath = "$.child_execution"
-              Catch      = [{ ErrorEquals = ["States.ALL"], ResultPath = null, Next = "NormalizeFolderOutcome" }]
-              Next       = "NormalizeFolderOutcome"
+              Catch      = [{ ErrorEquals = ["States.ALL"], ResultPath = null, Next = "NormalizeStepFolderOutcome" }]
+              Next       = "NormalizeStepFolderOutcome"
             }
             # This Task is the required target for both the nested-execution success
             # and Catch paths. The consumer Lambda owns bounded success, malformed,
             # and nested-failure shaping so the iterator needs no routing Pass family.
-            NormalizeFolderOutcome = {
+            NormalizeStepFolderOutcome = {
               Type     = "Task"
               Resource = local.lambda_arns["render-pr"]
               Parameters = {

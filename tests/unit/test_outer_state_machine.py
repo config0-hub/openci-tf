@@ -30,7 +30,9 @@ def test_outer_definition_has_safe_and_intent_lanes():
     MUTATION_OUTER = Path("infra/deploy/modules/openci_tf/step_function_mutation_outer.tf").read_text()
     assert "MaxConcurrency = 1" in MUTATION_OUTER
     assert "states:startExecution.sync:2" in SOURCE
-    assert "NormalizeFolderOutcome" in SOURCE and 'ErrorEquals = ["States.ALL"]' in SOURCE
+    assert "NormalizeFolderOutcome" in SOURCE
+    assert "NormalizeStepFolderOutcome" in SOURCE
+    assert 'ErrorEquals = ["States.ALL"]' in SOURCE
     assert 'normalize_folder_outcome = true' in SOURCE
     assert "RouteChildOutcome" not in SOURCE
     assert "MergeFolderOutcome" not in SOURCE
