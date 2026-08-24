@@ -21,6 +21,32 @@ from tests.unit.iam_policy_evaluator import evaluate_inline_policy
 _ACCOUNT_ID = "123456789012"
 _BUCKET = f"arn:aws:s3:::openci-tf-state-{_ACCOUNT_ID}"
 _TABLE = f"arn:aws:dynamodb:us-east-1:{_ACCOUNT_ID}:table/openci-tf-tf-locks"
+_LONGEST_GITOPS_FOLDER = (
+    "terraform/secondary/ap-northeast-1/04-cloudwatch-log-group"
+)
+
+
+def _statement_with_action(policy: dict, action: str) -> dict:
+    for statement in policy["Statement"]:
+        actions = statement.get("Action", [])
+        if isinstance(actions, str):
+            actions = [actions]
+        if action in actions:
+            return statement
+    raise AssertionError(f"no statement grants Action {action!r}")
+
+
+def _state_object_statement(policy: dict) -> dict:
+    for statement in policy["Statement"]:
+        actions = statement.get("Action", [])
+        if isinstance(actions, str):
+            actions = [actions]
+        if not any(action.startswith("s3:") for action in actions):
+            continue
+        resource = statement.get("Resource", "")
+        if isinstance(resource, str) and resource.endswith(".tfstate"):
+            return statement
+    raise AssertionError("no statement grants exact state object access")
 
 
 def _policy(action: str, folder: str = "infra/folder-a") -> tuple[str, dict]:
@@ -48,21 +74,9 @@ def test_mutation_policy_contains_only_the_exact_folder_backend_arns() -> None:
     state_arn = f"{_BUCKET}/{state_key}"
     lock_id = f"openci-tf-state-{_ACCOUNT_ID}/{state_key}"
 
-    exact_state = next(
-        statement
-        for statement in policy["Statement"]
-        if statement["Sid"] == "ExactStateObject"
-    )
-    exact_list = next(
-        statement
-        for statement in policy["Statement"]
-        if statement["Sid"] == "ExactStateBucketList"
-    )
-    lock_write = next(
-        statement
-        for statement in policy["Statement"]
-        if statement["Sid"] == "ExactStateLockWrite"
-    )
+    exact_state = _state_object_statement(policy)
+    exact_list = _statement_with_action(policy, "s3:ListBucket")
+    lock_write = _statement_with_action(policy, "dynamodb:PutItem")
 
     assert exact_state["Resource"] == state_arn
     assert exact_state["Action"] == ["s3:GetObject", "s3:PutObject"]
@@ -99,11 +113,7 @@ def test_folder_a_session_does_not_allow_folder_b_state_or_lock() -> None:
 
 def test_read_session_has_no_state_object_write() -> None:
     _, policy = _policy("plan")
-    exact_state = next(
-        statement
-        for statement in policy["Statement"]
-        if statement["Sid"] == "ExactStateObject"
-    )
+    exact_state = _state_object_statement(policy)
     assert exact_state["Action"] == ["s3:GetObject"]
     assert not evaluate_inline_policy(
         policy,
@@ -140,8 +150,36 @@ def test_policy_interpolation_reuses_folder_validation_and_rejects_globs() -> No
 
 
 def test_session_policy_limit_fails_loud() -> None:
-    with pytest.raises(ConfigResolutionError, match="2048-character"):
-        _policy("apply", "folder-" + "a" * 100)
+    with pytest.raises(ConfigResolutionError, match="1800-character"):
+        _policy("apply", "folder-" + "a" * 161)
+
+
+def test_policy_has_no_sid_fields() -> None:
+    _, policy = _policy("apply")
+    for statement in policy["Statement"]:
+        assert "Sid" not in statement
+
+
+def test_workload_authority_uses_wildcard_not_resources() -> None:
+    _, policy = _policy("apply")
+    workload = next(
+        statement
+        for statement in policy["Statement"]
+        if statement.get("Action") == "*" and "NotResource" in statement
+    )
+    assert workload["NotResource"] == [f"{_BUCKET}*", f"{_TABLE}*"]
+
+
+def test_longest_gitops_folder_policy_stays_under_packed_quota_limit() -> None:
+    rendered = render_target_session_policy(
+        account_id=_ACCOUNT_ID,
+        repo_name="williaumwu/openci-test-gitops",
+        folder=_LONGEST_GITOPS_FOLDER,
+        action="apply",
+        project_name="openci-tf",
+        region="ap-northeast-1",
+    )
+    assert len(rendered) <= MAX_SESSION_POLICY_CHARS
 
 
 def test_assumed_identity_mismatch_refuses_execution(monkeypatch) -> None:

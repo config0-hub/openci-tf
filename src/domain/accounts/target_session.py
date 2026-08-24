@@ -9,7 +9,9 @@ import re
 from src.core.errors import ConfigResolutionError
 from src.domain.run.folder_id import decode_folder_id, encode_folder_id
 
-MAX_SESSION_POLICY_CHARS = 2048
+# STS packed policy quota is ~10% tighter than raw JSON chars (measured live:
+# 1963 chars rendered as 109% packed for terraform/primary/ap-northeast-1/01-vpc).
+MAX_SESSION_POLICY_CHARS = 1800
 
 _REPO_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _PROJECT_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
@@ -48,6 +50,54 @@ def _lock_write_keys(action: str, lock_id: str) -> list[str]:
     raise ConfigResolutionError(f"unsupported target-session action: {action}")
 
 
+def _lock_statements(
+    *,
+    action: str,
+    lock_table_arn: str,
+    read_lock_keys: list[str],
+    write_lock_keys: list[str],
+) -> list[dict[str, object]]:
+    if action in _MUTATION_ACTIONS and read_lock_keys == write_lock_keys:
+        return [
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:DeleteItem",
+                ],
+                "Resource": lock_table_arn,
+                "Condition": {
+                    "ForAllValues:StringEquals": {
+                        "dynamodb:LeadingKeys": write_lock_keys
+                    }
+                },
+            }
+        ]
+    return [
+        {
+            "Effect": "Allow",
+            "Action": "dynamodb:GetItem",
+            "Resource": lock_table_arn,
+            "Condition": {
+                "ForAllValues:StringEquals": {
+                    "dynamodb:LeadingKeys": read_lock_keys
+                }
+            },
+        },
+        {
+            "Effect": "Allow",
+            "Action": ["dynamodb:PutItem", "dynamodb:DeleteItem"],
+            "Resource": lock_table_arn,
+            "Condition": {
+                "ForAllValues:StringEquals": {
+                    "dynamodb:LeadingKeys": write_lock_keys
+                }
+            },
+        },
+    ]
+
+
 def render_target_session_policy(
     *,
     account_id: str,
@@ -76,68 +126,47 @@ def render_target_session_policy(
     read_lock_keys = [lock_id, f"{lock_id}-md5"]
     write_lock_keys = _lock_write_keys(action, lock_id)
 
+    statements: list[dict[str, object]] = [
+        {
+            "Effect": "Allow",
+            "Action": "*",
+            "NotResource": [
+                f"{bucket_arn}*",
+                f"{lock_table_arn}*",
+            ],
+        },
+        {
+            "Effect": "Allow",
+            "Action": _state_actions(action),
+            "Resource": object_arn,
+        },
+        {
+            "Effect": "Allow",
+            "Action": ["s3:GetBucketLocation", "s3:GetBucketVersioning"],
+            "Resource": bucket_arn,
+        },
+        {
+            "Effect": "Allow",
+            "Action": "s3:ListBucket",
+            "Resource": bucket_arn,
+            "Condition": {"StringEquals": {"s3:prefix": state_key}},
+        },
+        *_lock_statements(
+            action=action,
+            lock_table_arn=lock_table_arn,
+            read_lock_keys=read_lock_keys,
+            write_lock_keys=write_lock_keys,
+        ),
+        {
+            "Effect": "Allow",
+            "Action": "dynamodb:DescribeTable",
+            "Resource": lock_table_arn,
+        },
+    ]
+
     policy = {
         "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Sid": "KeepWorkloadAuthority",
-                "Effect": "Allow",
-                "Action": "*",
-                "NotResource": [
-                    bucket_arn,
-                    f"{bucket_arn}/*",
-                    lock_table_arn,
-                    f"{lock_table_arn}/index/*",
-                ],
-            },
-            {
-                "Sid": "ExactStateObject",
-                "Effect": "Allow",
-                "Action": _state_actions(action),
-                "Resource": object_arn,
-            },
-            {
-                "Sid": "StateBucketMetadata",
-                "Effect": "Allow",
-                "Action": ["s3:GetBucketLocation", "s3:GetBucketVersioning"],
-                "Resource": bucket_arn,
-            },
-            {
-                "Sid": "ExactStateBucketList",
-                "Effect": "Allow",
-                "Action": "s3:ListBucket",
-                "Resource": bucket_arn,
-                "Condition": {"StringEquals": {"s3:prefix": state_key}},
-            },
-            {
-                "Sid": "ExactStateLockRead",
-                "Effect": "Allow",
-                "Action": "dynamodb:GetItem",
-                "Resource": lock_table_arn,
-                "Condition": {
-                    "ForAllValues:StringEquals": {
-                        "dynamodb:LeadingKeys": read_lock_keys
-                    }
-                },
-            },
-            {
-                "Sid": "ExactStateLockWrite",
-                "Effect": "Allow",
-                "Action": ["dynamodb:PutItem", "dynamodb:DeleteItem"],
-                "Resource": lock_table_arn,
-                "Condition": {
-                    "ForAllValues:StringEquals": {
-                        "dynamodb:LeadingKeys": write_lock_keys
-                    }
-                },
-            },
-            {
-                "Sid": "DescribeStateLockTable",
-                "Effect": "Allow",
-                "Action": "dynamodb:DescribeTable",
-                "Resource": lock_table_arn,
-            },
-        ],
+        "Statement": statements,
     }
     rendered = json.dumps(policy, separators=(",", ":"), sort_keys=True)
     if len(rendered) > MAX_SESSION_POLICY_CHARS:
