@@ -52,7 +52,7 @@ def test_installer_version_selects_a_versioned_archive():
     assert old_version != new_version
     assert 'curl --fail-with-body --show-error --location "$upstream_url" -o "$archive"' in old_version
     assert 'curl --fail-with-body --show-error "$cache_get_url" -o "$archive"' in old_version
-    assert 'curl --fail-with-body --show-error --upload-file "$archive" "$cache_put_url"' in old_version
+    assert 'curl --fail-with-body --show-error -H \'Content-Type: application/octet-stream\' --upload-file "$archive" "$cache_put_url"' in old_version
     put_lines = [line for line in old_version.splitlines() if '--upload-file "$archive"' in line and "cache_put_url" in line]
     assert put_lines
     assert all("--location" not in line for line in put_lines)

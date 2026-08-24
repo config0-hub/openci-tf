@@ -49,7 +49,7 @@ def test_plan_and_report_scripts_still_install_and_execute_shared_tools(verb):
     assert "UPSTREAM_URL_TFSEC_1_28_10" in script
     assert "UPSTREAM_URL_INFRACOST_0_10_39" in script
     assert 'curl --fail-with-body --show-error --location "$upstream_url" -o "$archive"' in script
-    assert 'curl --fail-with-body --show-error --upload-file "$archive" "$cache_put_url"' in script
+    assert 'curl --fail-with-body --show-error -H \'Content-Type: application/octet-stream\' --upload-file "$archive" "$cache_put_url"' in script
     put_lines = [line for line in script.splitlines() if '--upload-file "$archive"' in line and "cache_put_url" in line]
     assert put_lines
     assert all("--location" not in line for line in put_lines)

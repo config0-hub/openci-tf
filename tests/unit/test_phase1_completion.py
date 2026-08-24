@@ -99,7 +99,7 @@ def test_prepare_handler_presigns_before_minting_credentials_and_submission(monk
     target_credentials = {"AWS_ACCESS_KEY_ID": "target-key-id", "AWS_SECRET_ACCESS_KEY": "target-secret", "AWS_SESSION_TOKEN": "target-session-token"}
     monkeypatch.setattr(prepare_and_submit.sts, "assume_role", lambda *args, **kwargs: calls.append(("assume", kwargs)) or target_credentials)
     monkeypatch.setattr(prepare_and_submit.s3, "presign_get", lambda *args: calls.append(("get", args)) or "get-url")
-    monkeypatch.setattr(prepare_and_submit.s3, "presign_put", lambda *args: calls.append(("put", args)) or "put-url")
+    monkeypatch.setattr(prepare_and_submit.s3, "presign_put", lambda *args, **kwargs: calls.append(("put", args)) or "put-url")
     monkeypatch.setattr(prepare_and_submit.s3, "presign_create_put", lambda *args: calls.append(("put", args)) or "create-put-url")
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "lambda-identity")
     monkeypatch.setenv("AWS_SESSION_TOKEN", "lambda-session-token")
@@ -132,6 +132,67 @@ def test_prepare_handler_presigns_before_minting_credentials_and_submission(monk
     assert calls[assume_index][1]["external_id"] == _TARGET_EXTERNAL_ID
 
 
+def test_prepare_presigns_cache_put_with_octet_stream(monkeypatch, tmp_path):
+    _mock_hub_account(monkeypatch)
+    monkeypatch.setenv("PACKAGE_BUCKET_NAME", "packages")
+    monkeypatch.setenv("DONE_BUCKET_NAME", "done")
+    monkeypatch.setenv("TMP_BUCKET_NAME", "tmp")
+    monkeypatch.setenv("KMS_KEY_ARN", "kms")
+    monkeypatch.setenv("ENGINE_INIT_LAMBDA_NAME", "engine")
+    monkeypatch.setattr(prepare_and_submit.boto3, "Session", lambda: SimpleNamespace(get_credentials=lambda: None))
+    binding_fields = frozen_account_fields(readonly_role_name="openci-tf-target")
+    cache_put_content_types: list[str | None] = []
+
+    def capture_presign_put(_bucket: str, key: str, _expiry: int, *, content_type: str | None = None) -> str:
+        if key.startswith("cache/"):
+            cache_put_content_types.append(content_type)
+        return "put-url"
+
+    monkeypatch.setattr(prepare_and_submit.sts, "assume_role", lambda *_args, **_kwargs: {"AWS_ACCESS_KEY_ID": "target"})
+    monkeypatch.setattr(prepare_and_submit.s3, "presign_get", lambda *_: "get-url")
+    monkeypatch.setattr(prepare_and_submit.s3, "presign_put", capture_presign_put)
+    monkeypatch.setattr(prepare_and_submit.s3, "presign_create_put", lambda *_: "create-put-url")
+    monkeypatch.setattr(
+        prepare_and_submit.sops,
+        "encrypt_file",
+        lambda plain, kms: encrypt_file(
+            plain,
+            kms,
+            lambda command, **kwargs: (
+                Path(command[3]).write_text("encrypted"),
+                SimpleNamespace(returncode=0, stderr=""),
+            )[1],
+        ),
+    )
+    monkeypatch.setattr(prepare_and_submit, "build_package", lambda *_: str(tmp_path / "package.zip"))
+    monkeypatch.setattr(prepare_and_submit, "shallow_clone", lambda *_args, **_kwargs: str(tmp_path))
+    monkeypatch.setattr(prepare_and_submit, "cleanup_clone", lambda _: None)
+    monkeypatch.setattr(prepare_and_submit, "get_github_token", lambda _: "github-token")
+    monkeypatch.setattr(prepare_and_submit.s3, "upload_file", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(prepare_and_submit.s3, "head_object", lambda *_args, **_kwargs: {"version_id": "baseline", "last_modified": datetime.now(timezone.utc)})
+    monkeypatch.setattr(prepare_and_submit.engine, "invoke_init_job", lambda *_: None)
+    (tmp_path / "folder").mkdir()
+    prepare_and_submit.handler(
+        {
+            "action": "plan",
+            "run_id": "run",
+            "folder": "infra/app",
+            "budget": 900,
+            "deadline_at": _DEADLINE_AT,
+            "attempt": 0,
+            "upstream_urls": {"tofu": "https://tofu", "tfsec": "https://tfsec", "infracost": "https://infracost"},
+            "folder_config": {"account_alias": "target"},
+            "git_url": "https://github.com/org/repo.git",
+            "commit_hash": _FULL_SHA,
+            "ssm_openci_tf_github_token": _CLONE_TOKEN,
+            "repo_name": "org/repo",
+            **binding_fields,
+        },
+        object(),
+    )
+    assert cache_put_content_types == ["application/octet-stream"] * 3
+
+
 def test_prepare_rejects_unpinned_runtime_before_packaging():
     with pytest.raises(ValueError, match="unsupported unpinned tf_runtime terraform:1.10.0"):
         prepare_and_submit._folder_config(
@@ -161,7 +222,7 @@ def test_prepare_drift_requires_only_runtime_upstream_and_omits_shared_tool_secr
     binding_fields = frozen_account_fields()
     monkeypatch.setattr(prepare_and_submit.sts, "assume_role", lambda *_args, **_kwargs: {"AWS_ACCESS_KEY_ID": "target"})
     monkeypatch.setattr(prepare_and_submit.s3, "presign_get", lambda *_: "get-url")
-    monkeypatch.setattr(prepare_and_submit.s3, "presign_put", lambda *_: "put-url")
+    monkeypatch.setattr(prepare_and_submit.s3, "presign_put", lambda *_args, **_kwargs: "put-url")
     monkeypatch.setattr(prepare_and_submit.s3, "presign_create_put", lambda *_: "create-put-url")
     monkeypatch.setattr(prepare_and_submit, "shallow_clone", lambda *_args, **_kwargs: str(tmp_path))
     monkeypatch.setattr(prepare_and_submit, "cleanup_clone", lambda _: None)
@@ -218,7 +279,7 @@ def test_prepare_submitted_at_is_captured_after_upload_before_submit(monkeypatch
     binding_fields = frozen_account_fields()
     monkeypatch.setattr(prepare_and_submit.sts, "assume_role", lambda *_args, **_kwargs: {"AWS_ACCESS_KEY_ID": "target"})
     monkeypatch.setattr(prepare_and_submit.s3, "presign_get", lambda *_: "get-url")
-    monkeypatch.setattr(prepare_and_submit.s3, "presign_put", lambda *_: "put-url")
+    monkeypatch.setattr(prepare_and_submit.s3, "presign_put", lambda *_args, **_kwargs: "put-url")
     monkeypatch.setattr(prepare_and_submit.s3, "presign_create_put", lambda *_: "create-put-url")
     monkeypatch.setattr(prepare_and_submit.sops, "encrypt_file", lambda path, _: path)
     monkeypatch.setattr(prepare_and_submit, "build_package", lambda *_: str(tmp_path / "package.zip"))
@@ -277,7 +338,7 @@ def test_prepare_handler_classifies_expiry_from_each_preparation_adapter(monkeyp
     binding_fields = frozen_account_fields()
     monkeypatch.setattr(prepare_and_submit.sts, "assume_role", lambda *_args, **_kwargs: {"AWS_ACCESS_KEY_ID": "target"})
     monkeypatch.setattr(prepare_and_submit.s3, "presign_get", lambda *_: "get-url")
-    monkeypatch.setattr(prepare_and_submit.s3, "presign_put", lambda *_: "put-url")
+    monkeypatch.setattr(prepare_and_submit.s3, "presign_put", lambda *_args, **_kwargs: "put-url")
     monkeypatch.setattr(prepare_and_submit.s3, "presign_create_put", lambda *_: "create-put-url")
     monkeypatch.setattr(prepare_and_submit.sops, "encrypt_file", lambda path, _: (_ for _ in ()).throw(error) if failing_adapter == "sops" else path)
     monkeypatch.setattr(prepare_and_submit, "build_package", lambda *_: str(tmp_path / "package.zip"))

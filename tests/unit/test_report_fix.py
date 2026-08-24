@@ -59,7 +59,7 @@ def test_report_script_uses_tfsec_soft_fail_out_and_silent_curl():
     assert "tfsec . --format json --soft-fail --out" in script
     assert "curl -sS --fail-with-body --retry 3" in script
     assert 'curl --fail-with-body --show-error --location "$upstream_url" -o "$archive"' in script
-    assert 'curl --fail-with-body --show-error --upload-file "$archive" "$cache_put_url"' in script
+    assert 'curl --fail-with-body --show-error -H \'Content-Type: application/octet-stream\' --upload-file "$archive" "$cache_put_url"' in script
     put_lines = [line for line in script.splitlines() if '--upload-file "$archive"' in line and "cache_put_url" in line]
     assert put_lines
     assert all("--location" not in line for line in put_lines)
@@ -359,7 +359,7 @@ def _prepare_env(monkeypatch, tmp_path):
     apply_prepare_handler_env(monkeypatch)
     monkeypatch.setattr(prepare_handler.sts, "assume_role", lambda *_args, **_kwargs: {"AWS_ACCESS_KEY_ID": "target"})
     monkeypatch.setattr(prepare_handler.s3, "presign_get", lambda *_: "get-url")
-    monkeypatch.setattr(prepare_handler.s3, "presign_put", lambda *_: "put-url")
+    monkeypatch.setattr(prepare_handler.s3, "presign_put", lambda *_args, **_kwargs: "put-url")
     monkeypatch.setattr(prepare_handler.s3, "presign_create_put", lambda *_: "create-put-url")
     monkeypatch.setattr(prepare_handler, "shallow_clone", lambda *_args, **_kwargs: str(tmp_path))
     monkeypatch.setattr(prepare_handler, "cleanup_clone", lambda _: None)

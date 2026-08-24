@@ -397,7 +397,10 @@ def handler(event: dict, _context: object) -> dict:
             package_bucket, installer_cache_key, expiry
         )
         secrets[f"CACHE_PUT_URL_{name}"] = s3.presign_put(
-            package_bucket, installer_cache_key, expiry
+            package_bucket,
+            installer_cache_key,
+            expiry,
+            content_type="application/octet-stream",
         )
         secrets[f"UPSTREAM_URL_{name}"] = upstream_url
     if config.ssm_env_paths:

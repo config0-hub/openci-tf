@@ -129,7 +129,7 @@ if ! curl --fail-with-body --show-error "$cache_get_url" -o "$archive"; then
   test -n "$cache_put_url"
   curl --fail-with-body --show-error --location "$upstream_url" -o "$archive"
   echo "{checksum}  $archive" | sha256sum -c -
-  curl --fail-with-body --show-error --upload-file "$archive" "$cache_put_url"
+  curl --fail-with-body --show-error -H 'Content-Type: application/octet-stream' --upload-file "$archive" "$cache_put_url"
 fi
 {extract}
 installed="$extract_dir/{binary}"
