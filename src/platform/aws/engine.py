@@ -17,6 +17,19 @@ from src.core.errors import EngineAckError
 # Contract source: aws-execution-engine/aws_exe_sys/init_job/dispatcher.py at 78c2fcd
 _CODEBUILD_TIMEOUT_MARGIN_MINUTES = 3
 _SFN_TIMEOUT_MARGIN_SECONDS = 300 + 300
+_CODEBUILD_PAYLOAD_FIELDS = (
+    "trigger_id",
+    "s3_package_uri",
+    "sops_type",
+    "sops_path",
+    "commands_b64",
+    "done_endpoint",
+    "execution_target",
+    "timeout_seconds",
+    "callback_url",
+    "callback_token",
+    "execution_mode",
+)
 
 
 def invoke_init_job(function_name: str, payload: dict) -> dict:
@@ -82,14 +95,38 @@ def resolve_codebuild_build_id(
     return None
 
 
+def _parse_positive_timeout_seconds(raw: object) -> int:
+    if isinstance(raw, bool):
+        raise EngineAckError("codebuild submission requires positive int timeout_seconds")
+    if isinstance(raw, int):
+        value = raw
+    elif isinstance(raw, str) and raw.isdigit():
+        value = int(raw)
+    else:
+        raise EngineAckError("codebuild submission requires positive int timeout_seconds")
+    if value <= 0:
+        raise EngineAckError("codebuild submission requires positive int timeout_seconds")
+    return value
+
+
 def _derive_codebuild_timeout_fields(timeout_seconds: object) -> tuple[int, int]:
-    if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool):
-        raise EngineAckError("codebuild submission requires positive int timeout_seconds")
-    if timeout_seconds <= 0:
-        raise EngineAckError("codebuild submission requires positive int timeout_seconds")
-    build_timeout_minutes = math.ceil(timeout_seconds / 60) + _CODEBUILD_TIMEOUT_MARGIN_MINUTES
-    sfn_timeout_seconds = timeout_seconds + _SFN_TIMEOUT_MARGIN_SECONDS
+    timeout = _parse_positive_timeout_seconds(timeout_seconds)
+    build_timeout_minutes = math.ceil(timeout / 60) + _CODEBUILD_TIMEOUT_MARGIN_MINUTES
+    sfn_timeout_seconds = timeout + _SFN_TIMEOUT_MARGIN_SECONDS
     return build_timeout_minutes, sfn_timeout_seconds
+
+
+def _codebuild_sfn_input(payload: dict) -> dict[str, object]:
+    """Match engine dispatcher transport: payload fields as strings, derived timeouts numeric."""
+    build_timeout_minutes, sfn_timeout_seconds = _derive_codebuild_timeout_fields(
+        payload.get("timeout_seconds")
+    )
+    sfn_input: dict[str, object] = {
+        field: str(payload.get(field) or "") for field in _CODEBUILD_PAYLOAD_FIELDS
+    }
+    sfn_input["build_timeout_minutes"] = build_timeout_minutes
+    sfn_input["sfn_timeout_seconds"] = sfn_timeout_seconds
+    return sfn_input
 
 
 def start_codebuild_execution(state_machine_arn: str, payload: dict) -> dict:
@@ -97,12 +134,7 @@ def start_codebuild_execution(state_machine_arn: str, payload: dict) -> dict:
     trigger_id = str(payload.get("trigger_id") or "")
     if not trigger_id:
         raise EngineAckError("codebuild submission requires trigger_id")
-    build_timeout_minutes, sfn_timeout_seconds = _derive_codebuild_timeout_fields(
-        payload.get("timeout_seconds")
-    )
-    sfn_input = dict(payload)
-    sfn_input["build_timeout_minutes"] = build_timeout_minutes
-    sfn_input["sfn_timeout_seconds"] = sfn_timeout_seconds
+    sfn_input = _codebuild_sfn_input(payload)
     execution_name = trigger_id[:80] if trigger_id else uuid.uuid4().hex[:80]
     response = boto3.client("stepfunctions").start_execution(
         stateMachineArn=state_machine_arn,

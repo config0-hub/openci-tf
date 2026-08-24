@@ -64,6 +64,8 @@ def test_start_codebuild_execution_never_fabricates_build_id(monkeypatch):
     sfn_input = json.loads(sfn.start_execution.call_args.kwargs["input"])
     assert sfn_input["build_timeout_minutes"] == 18
     assert sfn_input["sfn_timeout_seconds"] == 1500
+    assert sfn_input["timeout_seconds"] == "900"
+    assert sfn_input["callback_url"] == ""
 
 
 def test_start_codebuild_execution_rejects_missing_timeout(monkeypatch):
