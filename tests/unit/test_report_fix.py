@@ -25,9 +25,11 @@ from src.domain.formatters.artifacts import (
 from src.platform.aws.infracost_key import validate_infracost_key_path
 from src.services.render import handler as render_handler
 from src.services.run_folder import prepare_and_submit as prepare_handler
+from tests.helpers.frozen_account import HUB_ACCOUNT_ID, apply_prepare_handler_env, frozen_account_fields
 
 _CLONE_TOKEN = "/openci-tf/clone-token/test"
 _INFRACOST_KEY = "/openci-tf/infracost/api_key"
+_PREPARE_BINDING = frozen_account_fields()
 _FULL_SHA = "a" * 40
 
 _TFSEC_WRITE = '''while [ "$#" -gt 0 ]; do
@@ -342,14 +344,14 @@ def test_validate_infracost_key_path_rejects_broad_or_foreign_paths():
 
 
 def _prepare_env(monkeypatch, tmp_path):
+    apply_prepare_handler_env(monkeypatch)
     monkeypatch.setenv("PACKAGE_BUCKET_NAME", "packages")
     monkeypatch.setenv("DONE_BUCKET_NAME", "done")
     monkeypatch.setenv("TMP_BUCKET_NAME", "tmp")
     monkeypatch.setenv("KMS_KEY_ARN", "kms")
     monkeypatch.setenv("ENGINE_INIT_LAMBDA_NAME", "engine")
     monkeypatch.setattr(prepare_handler.boto3, "Session", lambda: SimpleNamespace(get_credentials=lambda: None))
-    monkeypatch.setattr(prepare_handler.sts, "get_caller_account_id", lambda: "REPLACE_MAIN_ACCOUNT")
-    monkeypatch.setattr(prepare_handler, "load_account_alias", lambda _: SimpleNamespace(account_id="123456789012", role_name="target", external_id="openci-tf-6be00970ed31c57d", max_ttl=3600))
+    apply_prepare_handler_env(monkeypatch)
     monkeypatch.setattr(prepare_handler.sts, "assume_role", lambda *_args, **_kwargs: {"AWS_ACCESS_KEY_ID": "target"})
     monkeypatch.setattr(prepare_handler.s3, "presign_get", lambda *_: "get-url")
     monkeypatch.setattr(prepare_handler.s3, "presign_put", lambda *_: "put-url")
@@ -382,6 +384,7 @@ def test_prepare_plan_injects_infracost_key_only_into_encrypted_secrets(monkeypa
         "folder_config": {"account_alias": "target"}, "git_url": "https://github.com/org/repo.git",
         "commit_hash": _FULL_SHA, "ssm_openci_tf_github_token": _CLONE_TOKEN, "repo_name": "org/repo",
         "ssm_infracost_api_key": _INFRACOST_KEY,
+        **_PREPARE_BINDING,
     }, object())
     assert captured["secrets"]["INFRACOST_API_KEY"] == "ico-test-key"
 
@@ -403,6 +406,7 @@ def test_prepare_report_injects_infracost_key_only_into_encrypted_secrets(monkey
         "folder_config": {"account_alias": "target"}, "git_url": "https://github.com/org/repo.git",
         "commit_hash": _FULL_SHA, "ssm_openci_tf_github_token": _CLONE_TOKEN, "repo_name": "org/repo",
         "ssm_infracost_api_key": _INFRACOST_KEY,
+        **_PREPARE_BINDING,
     }, object())
     secrets = captured["secrets"]
     assert secrets["INFRACOST_API_KEY"] == "ico-test-key"
@@ -427,6 +431,7 @@ def test_prepare_report_without_infracost_setting_omits_api_key(monkeypatch, tmp
         "folder_config": {"account_alias": "target"}, "git_url": "https://github.com/org/repo.git",
         "commit_hash": _FULL_SHA, "ssm_openci_tf_github_token": _CLONE_TOKEN, "repo_name": "org/repo",
         "ssm_infracost_api_key": "",
+        **_PREPARE_BINDING,
     }, object())
     fetch.assert_not_called()
     assert "INFRACOST_API_KEY" not in captured["secrets"]

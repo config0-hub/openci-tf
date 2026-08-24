@@ -24,13 +24,15 @@ from src.domain.ssm_env.paths import (
 from src.domain.ssm_env.resolve import resolve_ssm_env_vars
 from src.platform.git.package import build_package
 from src.services.run_folder import prepare_and_submit as prepare_handler
+from tests.helpers.frozen_account import HUB_ACCOUNT_ID, apply_prepare_handler_env, frozen_account_fields
 
 _SENTINEL = "FAKE_SENTINEL_TOKEN_VALUE"
 _VALID_PATH = "/openci-tf/env/github/example-org/private-module-repo"
+_PREPARE_BINDING = frozen_account_fields()
 
 
 def _mock_prepare_hub_account(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(prepare_handler.sts, "get_caller_account_id", lambda: "REPLACE_MAIN_ACCOUNT")
+    apply_prepare_handler_env(monkeypatch)
 
 
 def test_folder_config_defaults_ssm_env_paths_empty():
@@ -187,7 +189,6 @@ def test_prepare_handler_fetches_hub_ssm_before_target_assumption(monkeypatch, t
     monkeypatch.setenv("KMS_KEY_ARN", "kms")
     monkeypatch.setenv("ENGINE_INIT_LAMBDA_NAME", "engine")
     monkeypatch.setattr(prepare_handler.boto3, "Session", lambda: SimpleNamespace(get_credentials=lambda: None))
-    monkeypatch.setattr(prepare_handler, "load_account_alias", lambda _: SimpleNamespace(account_id="123456789012", role_name="target", external_id="openci-tf-6be00970ed31c57d", max_ttl=3600))
     monkeypatch.setattr(prepare_handler.s3, "presign_get", lambda *args: f"get://{args[1]}")
     monkeypatch.setattr(prepare_handler.s3, "presign_put", lambda *args: f"put://{args[1]}")
     monkeypatch.setattr(prepare_handler.s3, "presign_create_put", lambda *args: f"create-put://{args[1]}")
@@ -209,7 +210,9 @@ def test_prepare_handler_fetches_hub_ssm_before_target_assumption(monkeypatch, t
 
     monkeypatch.setattr(prepare_handler, "get_parameter", fake_get_parameter)
 
-    def fake_prepare(*, payload, secrets, encrypt, package, upload, submit):
+    def fake_prepare(*, payload, secrets, encrypt, package, upload, submit, pre_submit=None):
+        if pre_submit is not None:
+            pre_submit()
         captured.update(secrets)
         order.append("prepare")
         return {"submitted_at": 1.0}
@@ -228,6 +231,7 @@ def test_prepare_handler_fetches_hub_ssm_before_target_assumption(monkeypatch, t
             "commit_hash": "a" * 40,
             "ssm_openci_tf_github_token": "/openci-tf/clone-token/test",
             "repo_name": "org/repo",
+            **_PREPARE_BINDING,
         },
         object(),
     )
@@ -244,7 +248,6 @@ def test_prepare_handler_rejects_target_credentials_overwriting_ssm_env(monkeypa
     monkeypatch.setenv("KMS_KEY_ARN", "kms")
     monkeypatch.setenv("ENGINE_INIT_LAMBDA_NAME", "engine")
     monkeypatch.setattr(prepare_handler.boto3, "Session", lambda: SimpleNamespace(get_credentials=lambda: None))
-    monkeypatch.setattr(prepare_handler, "load_account_alias", lambda _: SimpleNamespace(account_id="123456789012", role_name="target", external_id="openci-tf-6be00970ed31c57d", max_ttl=3600))
     monkeypatch.setattr(prepare_handler.s3, "presign_get", lambda *args: f"get://{args[1]}")
     monkeypatch.setattr(prepare_handler.s3, "presign_put", lambda *args: f"put://{args[1]}")
     monkeypatch.setattr(prepare_handler.s3, "presign_create_put", lambda *args: f"create-put://{args[1]}")
@@ -270,6 +273,7 @@ def test_prepare_handler_rejects_target_credentials_overwriting_ssm_env(monkeypa
                 "commit_hash": "a" * 40,
                 "ssm_openci_tf_github_token": "/openci-tf/clone-token/test",
                 "repo_name": "org/repo",
+                **_PREPARE_BINDING,
             },
             object(),
         )
@@ -283,7 +287,6 @@ def test_prepare_handler_rejects_infracost_key_from_ssm_env(monkeypatch, tmp_pat
     monkeypatch.setenv("KMS_KEY_ARN", "kms")
     monkeypatch.setenv("ENGINE_INIT_LAMBDA_NAME", "engine")
     monkeypatch.setattr(prepare_handler.boto3, "Session", lambda: SimpleNamespace(get_credentials=lambda: None))
-    monkeypatch.setattr(prepare_handler, "load_account_alias", lambda _: SimpleNamespace(account_id="123456789012", role_name="target", external_id="openci-tf-6be00970ed31c57d", max_ttl=3600))
     monkeypatch.setattr(prepare_handler.s3, "presign_get", lambda *args: f"get://{args[1]}")
     monkeypatch.setattr(prepare_handler.s3, "presign_put", lambda *args: f"put://{args[1]}")
     monkeypatch.setattr(prepare_handler.s3, "presign_create_put", lambda *args: f"create-put://{args[1]}")
@@ -309,6 +312,7 @@ def test_prepare_handler_rejects_infracost_key_from_ssm_env(monkeypatch, tmp_pat
                 "commit_hash": "a" * 40,
                 "ssm_openci_tf_github_token": "/openci-tf/clone-token/test",
                 "repo_name": "org/repo",
+                **_PREPARE_BINDING,
             },
             object(),
         )

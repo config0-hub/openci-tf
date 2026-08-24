@@ -24,15 +24,22 @@ from src.platform.aws import engine, sts
 from src.platform.aws.sops import encrypt_file
 from src.platform.git.package import build_package
 from src.services.run_folder import prepare_and_submit
+from tests.helpers.frozen_account import (
+    HUB_ACCOUNT_ID,
+    TARGET_ACCOUNT_ID,
+    apply_prepare_handler_env,
+    frozen_account_fields,
+)
 
 _CLONE_TOKEN = "/openci-tf/clone-token/test"
 _FULL_SHA = "a" * 40
-_HUB_ACCOUNT_ID = "REPLACE_MAIN_ACCOUNT"
+_HUB_ACCOUNT_ID = HUB_ACCOUNT_ID
+_TARGET_EXTERNAL_ID = frozen_account_fields()["account_binding"]["external_id"]
 _DEADLINE_AT = "2999-01-01T00:00:00Z"
 
 
 def _mock_hub_account(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(prepare_and_submit.sts, "get_caller_account_id", lambda: _HUB_ACCOUNT_ID)
+    apply_prepare_handler_env(monkeypatch, hub_account_id=_HUB_ACCOUNT_ID)
 
 
 def test_secrets_enc_json_in_zip_before_upload(tmp_path):
@@ -87,7 +94,7 @@ def test_prepare_handler_presigns_before_minting_credentials_and_submission(monk
     monkeypatch.setenv("KMS_KEY_ARN", "kms")
     monkeypatch.setenv("ENGINE_INIT_LAMBDA_NAME", "engine")
     monkeypatch.setattr(prepare_and_submit.boto3, "Session", lambda: SimpleNamespace(get_credentials=lambda: None))
-    monkeypatch.setattr(prepare_and_submit, "load_account_alias", lambda _: SimpleNamespace(account_id="123456789012", role_name="openci-tf-target", external_id="openci-tf-6be00970ed31c57d", max_ttl=3600))
+    binding_fields = frozen_account_fields(readonly_role_name="openci-tf-target")
     calls = []
     target_credentials = {"AWS_ACCESS_KEY_ID": "target-key-id", "AWS_SECRET_ACCESS_KEY": "target-secret", "AWS_SESSION_TOKEN": "target-session-token"}
     monkeypatch.setattr(prepare_and_submit.sts, "assume_role", lambda *args, **kwargs: calls.append(("assume", kwargs)) or target_credentials)
@@ -112,7 +119,7 @@ def test_prepare_handler_presigns_before_minting_credentials_and_submission(monk
     monkeypatch.setattr(prepare_and_submit.s3, "head_object", lambda *_args, **_kwargs: {"version_id": "baseline", "last_modified": datetime.now(timezone.utc)})
     monkeypatch.setattr(prepare_and_submit.engine, "invoke_init_job", lambda *_: calls.append(("submit",)))
     folder = tmp_path / "folder"; folder.mkdir()
-    result = prepare_and_submit.handler({"action": "plan", "run_id": "run", "folder": "infra/app", "budget": 900, "deadline_at": _DEADLINE_AT, "attempt": 0, "upstream_urls": {"tofu": "https://tofu", "tfsec": "https://tfsec", "infracost": "https://infracost"}, "folder_config": {"account_alias": "target"}, "git_url": "https://github.com/org/repo.git", "commit_hash": _FULL_SHA, "ssm_openci_tf_github_token": _CLONE_TOKEN, "repo_name": "org/repo"}, object())
+    result = prepare_and_submit.handler({"action": "plan", "run_id": "run", "folder": "infra/app", "budget": 900, "deadline_at": _DEADLINE_AT, "attempt": 0, "upstream_urls": {"tofu": "https://tofu", "tfsec": "https://tfsec", "infracost": "https://infracost"}, "folder_config": {"account_alias": "target"}, "git_url": "https://github.com/org/repo.git", "commit_hash": _FULL_SHA, "ssm_openci_tf_github_token": _CLONE_TOKEN, "repo_name": "org/repo", **binding_fields}, object())
     assert result["attempt"] == 0
     assert "submitted_at" in result
     assert result["done_baseline_version_id"] == "baseline"
@@ -122,7 +129,7 @@ def test_prepare_handler_presigns_before_minting_credentials_and_submission(monk
     assert calls[0][0] == "put"
     assume_index = next(index for index, call in enumerate(calls) if call[0] == "assume")
     assert all(call[0] in {"put", "put", "get"} for call in calls[:assume_index])
-    assert calls[assume_index][1]["external_id"] == "openci-tf-6be00970ed31c57d"
+    assert calls[assume_index][1]["external_id"] == _TARGET_EXTERNAL_ID
 
 
 def test_prepare_rejects_unpinned_runtime_before_packaging():
@@ -134,7 +141,7 @@ def test_prepare_rejects_unpinned_runtime_before_packaging():
 
 def test_prepare_runtime_accepts_stored_external_id_derived_from_caller(monkeypatch):
     _mock_hub_account(monkeypatch)
-    assert prepare_and_submit._validated_external_id("openci-tf-6be00970ed31c57d", "123456789012") == "openci-tf-6be00970ed31c57d"
+    assert prepare_and_submit._validated_external_id(_TARGET_EXTERNAL_ID, TARGET_ACCOUNT_ID) == _TARGET_EXTERNAL_ID
 
 
 def test_prepare_runtime_rejects_stored_external_id_mismatch(monkeypatch):
@@ -151,7 +158,7 @@ def test_prepare_drift_requires_only_runtime_upstream_and_omits_shared_tool_secr
     monkeypatch.setenv("KMS_KEY_ARN", "kms")
     monkeypatch.setenv("ENGINE_INIT_LAMBDA_NAME", "engine")
     monkeypatch.setattr(prepare_and_submit.boto3, "Session", lambda: SimpleNamespace(get_credentials=lambda: None))
-    monkeypatch.setattr(prepare_and_submit, "load_account_alias", lambda _: SimpleNamespace(account_id="123456789012", role_name="target", external_id="openci-tf-6be00970ed31c57d", max_ttl=3600))
+    binding_fields = frozen_account_fields()
     monkeypatch.setattr(prepare_and_submit.sts, "assume_role", lambda *_args, **_kwargs: {"AWS_ACCESS_KEY_ID": "target"})
     monkeypatch.setattr(prepare_and_submit.s3, "presign_get", lambda *_: "get-url")
     monkeypatch.setattr(prepare_and_submit.s3, "presign_put", lambda *_: "put-url")
@@ -185,6 +192,7 @@ def test_prepare_drift_requires_only_runtime_upstream_and_omits_shared_tool_secr
             "ssm_openci_tf_github_token": _CLONE_TOKEN,
             "repo_name": "org/repo",
             "ssm_infracost_api_key": "/openci-tf/infracost/api_key",
+            **binding_fields,
         },
         object(),
     )
@@ -207,7 +215,7 @@ def test_prepare_submitted_at_is_captured_after_upload_before_submit(monkeypatch
     monkeypatch.setenv("KMS_KEY_ARN", "kms")
     monkeypatch.setenv("ENGINE_INIT_LAMBDA_NAME", "engine")
     monkeypatch.setattr(prepare_and_submit.boto3, "Session", lambda: SimpleNamespace(get_credentials=lambda: None))
-    monkeypatch.setattr(prepare_and_submit, "load_account_alias", lambda _: SimpleNamespace(account_id="123456789012", role_name="target", external_id="openci-tf-6be00970ed31c57d", max_ttl=3600))
+    binding_fields = frozen_account_fields()
     monkeypatch.setattr(prepare_and_submit.sts, "assume_role", lambda *_args, **_kwargs: {"AWS_ACCESS_KEY_ID": "target"})
     monkeypatch.setattr(prepare_and_submit.s3, "presign_get", lambda *_: "get-url")
     monkeypatch.setattr(prepare_and_submit.s3, "presign_put", lambda *_: "put-url")
@@ -219,7 +227,7 @@ def test_prepare_submitted_at_is_captured_after_upload_before_submit(monkeypatch
     monkeypatch.setattr(prepare_and_submit, "get_github_token", lambda _: "github-token")
     monkeypatch.setattr(prepare_and_submit.s3, "upload_file", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(prepare_and_submit.s3, "head_object", lambda *_args, **_kwargs: {"version_id": "baseline", "last_modified": datetime.now(timezone.utc)})
-    clock = iter([100.0, 200.0])
+    clock = iter([100.0, 200.0, 300.0, 400.0])
     monkeypatch.setattr(prepare_domain.time, "time", lambda: next(clock))
     submit_times: list[float] = []
 
@@ -243,11 +251,13 @@ def test_prepare_submitted_at_is_captured_after_upload_before_submit(monkeypatch
             "commit_hash": _FULL_SHA,
             "ssm_openci_tf_github_token": _CLONE_TOKEN,
             "repo_name": "org/repo",
+            **binding_fields,
         },
         object(),
     )
-    assert result["submitted_at"] == 100.0
-    assert submit_times == [200.0]
+
+    assert result["submitted_at"] == 300.0
+    assert submit_times == [400.0]
     assert result["done_baseline_version_id"] == "baseline"
 
 
@@ -264,7 +274,7 @@ def test_prepare_handler_classifies_expiry_from_each_preparation_adapter(monkeyp
     monkeypatch.setenv("KMS_KEY_ARN", "kms")
     monkeypatch.setenv("ENGINE_INIT_LAMBDA_NAME", "engine")
     monkeypatch.setattr(prepare_and_submit.boto3, "Session", lambda: SimpleNamespace(get_credentials=lambda: None))
-    monkeypatch.setattr(prepare_and_submit, "load_account_alias", lambda _: SimpleNamespace(account_id="123456789012", role_name="target", external_id="openci-tf-6be00970ed31c57d", max_ttl=3600))
+    binding_fields = frozen_account_fields()
     monkeypatch.setattr(prepare_and_submit.sts, "assume_role", lambda *_args, **_kwargs: {"AWS_ACCESS_KEY_ID": "target"})
     monkeypatch.setattr(prepare_and_submit.s3, "presign_get", lambda *_: "get-url")
     monkeypatch.setattr(prepare_and_submit.s3, "presign_put", lambda *_: "put-url")
@@ -279,7 +289,7 @@ def test_prepare_handler_classifies_expiry_from_each_preparation_adapter(monkeyp
     monkeypatch.setattr(prepare_and_submit.engine, "invoke_init_job", lambda *_: (_ for _ in ()).throw(error) if failing_adapter == "submit" else None)
     folder = tmp_path / "folder"
     folder.mkdir()
-    event = {"action": "plan", "run_id": "run", "folder": "infra/app", "budget": 900, "deadline_at": _DEADLINE_AT, "attempt": 0, "upstream_urls": {"tofu": "https://tofu", "tfsec": "https://tfsec", "infracost": "https://infracost"}, "folder_config": {"account_alias": "target"}, "git_url": "https://github.com/org/repo.git", "commit_hash": _FULL_SHA, "ssm_openci_tf_github_token": _CLONE_TOKEN, "repo_name": "org/repo"}
+    event = {"action": "plan", "run_id": "run", "folder": "infra/app", "budget": 900, "deadline_at": _DEADLINE_AT, "attempt": 0, "upstream_urls": {"tofu": "https://tofu", "tfsec": "https://tfsec", "infracost": "https://infracost"}, "folder_config": {"account_alias": "target"}, "git_url": "https://github.com/org/repo.git", "commit_hash": _FULL_SHA, "ssm_openci_tf_github_token": _CLONE_TOKEN, "repo_name": "org/repo", **binding_fields}
     with pytest.raises(CredentialExpiredError, match="preparation credentials expired"):
         prepare_and_submit.handler(event, object())
 

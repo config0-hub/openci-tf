@@ -561,9 +561,9 @@ def test_rendered_outer_map_item_selector_merges_shared_fields():
         "ssm_infracost_api_key",
     ):
         assert f"$.map_shared.{field}" in block
-    assert '"folder_config.$"           = "$$.Map.Item.Value.c"' in block
-    assert '"account_binding.$"         = "$$.Map.Item.Value.b"' in block
-    assert '"execution_id.$"            = "$$.Map.Item.Value.e"' in block
+    assert '"folder_config.$"              = "$$.Map.Item.Value.c"' in block
+    assert '"account_binding.$"            = "$$.Map.Item.Value.b"' in block
+    assert '"execution_id.$"               = "$$.Map.Item.Value.e"' in block
 
 
 def test_credential_retry_merge_preserves_required_fields():

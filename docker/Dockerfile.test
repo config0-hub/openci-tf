@@ -16,6 +16,7 @@ RUN python3 -m pip install pytest
 
 # Policy-evaluator and Terraform compatibility tests execute the real Terraform CLI.
 ARG TERRAFORM_VERSION=1.12.2
+ARG TOFU_VERSION=1.12.6
 ARG JUST_VERSION=1.51.0
 ARG TARGETARCH
 RUN dnf install -y git jq tar unzip && dnf clean all \
@@ -24,12 +25,23 @@ RUN dnf install -y git jq tar unzip && dnf clean all \
       --output /tmp/terraform.zip \
     && unzip /tmp/terraform.zip -d /usr/local/bin \
     && rm /tmp/terraform.zip \
+    && TOFU_ZIP="tofu_${TOFU_VERSION}_linux_${TARGETARCH}.zip" \
+    && curl --fail --show-error --silent --location \
+      "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_SHA256SUMS" \
+      --output /tmp/tofu_checksums \
+    && curl --fail --show-error --silent --location \
+      "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/${TOFU_ZIP}" \
+      --output "/tmp/${TOFU_ZIP}" \
+    && (cd /tmp && grep " ${TOFU_ZIP}$" tofu_checksums | sha256sum -c -) \
+    && unzip "/tmp/${TOFU_ZIP}" -d /usr/local/bin \
+    && rm "/tmp/${TOFU_ZIP}" /tmp/tofu_checksums \
     && curl --fail --show-error --silent --location \
       "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-$(uname -m)-unknown-linux-musl.tar.gz" \
       --output /tmp/just.tar.gz \
     && tar -xzf /tmp/just.tar.gz -C /usr/local/bin just \
     && rm /tmp/just.tar.gz \
     && terraform version \
+    && tofu version \
     && just --version
 
 # Copy source, tests, and the tracked repository contracts inspected by tests.

@@ -14,10 +14,17 @@ from src.domain.cmd_builder.script_generator import ScriptParams, render
 from src.domain.engine.payload import EnginePayload
 
 
+def _engine_payload_path() -> Path:
+    for candidate in (Path("engine_payload.py"), Path("docker/engine_ref/payload.py")):
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError("engine payload contract file is missing")
+
+
 @pytest.fixture(scope="module")
 def simple_payload_type():
     spec = importlib.util.spec_from_file_location(
-        "engine_payload", Path("docker/engine_ref/payload.py")
+        "engine_payload", _engine_payload_path()
     )
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)

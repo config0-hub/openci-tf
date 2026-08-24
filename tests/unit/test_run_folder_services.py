@@ -23,8 +23,11 @@ from src.domain.engine.result import ExecutionResult, parse_result
 from src.domain.formatters.artifacts import folder_comment
 from src.services.run_folder import collect, poll_done
 from src.services.run_folder import prepare_and_submit as prepare_handler
+from tests.helpers.frozen_account import HUB_ACCOUNT_ID, apply_prepare_handler_env, frozen_account_fields
 from tests.helpers.rendered_run_folder_asl import load_rendered_run_folder_definition
 from tests.unit.manifest_fixtures import complete_plan_object_mocks
+
+_PREPARE_BINDING = frozen_account_fields(hub_account_id=HUB_ACCOUNT_ID)
 
 
 def _artifact_head_meta(key: str, *, last_modified, body_size: int = 1) -> dict:
@@ -398,23 +401,11 @@ def test_state_machine_follows_rendered_retry_transitions(monkeypatch, tmp_path)
     monkeypatch.setenv("TMP_BUCKET_NAME", "tmp")
     monkeypatch.setenv("KMS_KEY_ARN", "kms")
     monkeypatch.setenv("ENGINE_INIT_LAMBDA_NAME", "engine")
+    apply_prepare_handler_env(monkeypatch)
     monkeypatch.setattr(
         prepare_handler.boto3,
         "Session",
         lambda: SimpleNamespace(get_credentials=lambda: None),
-    )
-    monkeypatch.setattr(
-        prepare_handler.sts, "get_caller_account_id", lambda: "111111111111"
-    )
-    monkeypatch.setattr(
-        prepare_handler,
-        "load_account_alias",
-        lambda _: SimpleNamespace(
-            account_id="123456789012",
-            role_name="target",
-            external_id="openci-tf-74245071290296b6",
-            max_ttl=3600,
-        ),
     )
     assumed_sessions = []
     monkeypatch.setattr(
@@ -500,6 +491,7 @@ def test_state_machine_follows_rendered_retry_transitions(monkeypatch, tmp_path)
         "run_id": "run",
         "folder": "infra/a",
         "budget": 1,
+        "deadline_at": "2099-01-01T00:00:00Z",
         "attempt": 0,
         "upstream_urls": {
             "tofu": "https://tofu",
@@ -512,6 +504,7 @@ def test_state_machine_follows_rendered_retry_transitions(monkeypatch, tmp_path)
         "commit_hash": "a" * 40,
         "ssm_openci_tf_github_token": "/openci-tf/clone-token/test",
         "ssm_infracost_api_key": "",
+        **_PREPARE_BINDING,
     }
     state["result"] = prepare_handler.handler(state, object())
     poll_input = {
@@ -536,6 +529,7 @@ def test_state_machine_follows_rendered_retry_transitions(monkeypatch, tmp_path)
             "run_id",
             "folder",
             "budget",
+            "deadline_at",
             "upstream_urls",
             "folder_config",
             "git_url",
@@ -543,6 +537,8 @@ def test_state_machine_follows_rendered_retry_transitions(monkeypatch, tmp_path)
             "ssm_openci_tf_github_token",
             "ssm_infracost_api_key",
             "repo_name",
+            "account_id",
+            "account_binding",
         )
     }
     retry_state["attempt"] = state["result"]["attempt"] + 1
@@ -743,24 +739,13 @@ def test_prepare_uploads_execution_scoped_package_key(monkeypatch, tmp_path):
     monkeypatch.setenv("TMP_BUCKET_NAME", "tmp")
     monkeypatch.setenv("KMS_KEY_ARN", "kms")
     monkeypatch.setenv("ENGINE_INIT_LAMBDA_NAME", "engine")
+    apply_prepare_handler_env(monkeypatch)
     monkeypatch.setattr(
         prepare_handler.boto3,
         "Session",
         lambda: SimpleNamespace(get_credentials=lambda: None),
     )
-    monkeypatch.setattr(
-        prepare_handler.sts, "get_caller_account_id", lambda: "111111111111"
-    )
-    monkeypatch.setattr(
-        prepare_handler,
-        "load_account_alias",
-        lambda _: SimpleNamespace(
-            account_id="123456789012",
-            role_name="target",
-            external_id="openci-tf-74245071290296b6",
-            max_ttl=3600,
-        ),
-    )
+    apply_prepare_handler_env(monkeypatch)
     monkeypatch.setattr(
         prepare_handler.sts,
         "assume_role",
@@ -809,6 +794,7 @@ def test_prepare_uploads_execution_scoped_package_key(monkeypatch, tmp_path):
         "run_id": "run-a",
         "folder": "infra/a",
         "budget": 60,
+        "deadline_at": "2099-01-01T00:00:00Z",
         "attempt": 0,
         "upstream_urls": {
             "tofu:1.8.0": "https://tofu",
@@ -821,6 +807,7 @@ def test_prepare_uploads_execution_scoped_package_key(monkeypatch, tmp_path):
         "commit_hash": "a" * 40,
         "ssm_openci_tf_github_token": "/openci-tf/clone-token/test",
         "ssm_infracost_api_key": "",
+        **_PREPARE_BINDING,
     }
     first = prepare_handler.handler({**base, "run_id": "run-a"}, object())
     second = prepare_handler.handler(

@@ -43,7 +43,7 @@ def test_outer_definition_has_safe_and_intent_lanes():
 
 def test_mutation_item_selectors_forward_pipeline_step_index():
     mutation_source = Path("infra/deploy/modules/openci_tf/step_function_mutation_outer.tf").read_text()
-    assert mutation_source.count('"step_index.$"              = "$$.Map.Item.Value.step_index"') == 2
+    assert mutation_source.count('"step_index.$"                 = "$$.Map.Item.Value.step_index"') == 2
 
 
 def test_deployed_state_machines_route_safe_and_intent_verbs():

@@ -20,7 +20,10 @@ from src.domain.engine.artifact_paths import (
 )
 from src.domain.engine.run_artifact_layout import resolve_run_artifact_layout
 from src.platform.aws.run_registry import RunRegistryError, get_run
+from tests.helpers.frozen_account import HUB_ACCOUNT_ID, apply_prepare_handler_env, frozen_account_fields
 from tests.unit.manifest_fixtures import complete_plan_object_mocks
+
+_PREPARE_BINDING = frozen_account_fields()
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -44,24 +47,13 @@ def _prepare_handler_mocks(monkeypatch, tmp_path):
     monkeypatch.setenv("KMS_KEY_ARN", "kms")
     monkeypatch.setenv("ENGINE_INIT_LAMBDA_NAME", "engine")
     monkeypatch.setenv("LANE_MODE", "read")
+    apply_prepare_handler_env(monkeypatch)
     monkeypatch.setattr(
         prepare_handler.boto3,
         "Session",
         lambda: SimpleNamespace(get_credentials=lambda: None),
     )
-    monkeypatch.setattr(
-        prepare_handler.sts, "get_caller_account_id", lambda: "REPLACE_MAIN_ACCOUNT"
-    )
-    monkeypatch.setattr(
-        prepare_handler,
-        "load_account_alias",
-        lambda _: SimpleNamespace(
-            account_id="123456789012",
-            role_name="target",
-            external_id="openci-tf-6be00970ed31c57d",
-            max_ttl=3600,
-        ),
-    )
+    apply_prepare_handler_env(monkeypatch)
     monkeypatch.setattr(
         prepare_handler.sts,
         "assume_role",
@@ -106,6 +98,14 @@ def test_prepare_presigns_only_pr_scoped_artifact_keys(monkeypatch, tmp_path):
   )
   monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")
   monkeypatch.setattr(
+      "src.services.run_folder.prepare_and_submit.put_folder_submission",
+      lambda **_kwargs: None,
+  )
+  monkeypatch.setattr(
+      "src.services.run_folder.prepare_and_submit._notify_after_acceptance",
+      lambda **_kwargs: {},
+  )
+  monkeypatch.setattr(
       "src.domain.engine.run_artifact_layout.get_run",
       lambda run_id: _github_pr_run_record(17),
   )
@@ -137,6 +137,7 @@ def test_prepare_presigns_only_pr_scoped_artifact_keys(monkeypatch, tmp_path):
           "commit_hash": "a" * 40,
           "ssm_openci_tf_github_token": "/openci-tf/clone-token/test",
           "repo_name": repo_name,
+          **_PREPARE_BINDING,
       },
       object(),
   )

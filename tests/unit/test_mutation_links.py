@@ -24,6 +24,7 @@ from src.services.render.handler import (
     _mutation_grace_seconds,
 )
 from src.services.webhook.run_request import github_run_request
+from tests.helpers.frozen_account import MAIN_ACCOUNT_ID
 
 
 def test_mutation_plan_show_artifact_uses_valid_environment_suffix():
@@ -148,7 +149,7 @@ def test_codebuild_url_can_wrap_destination_in_identity_center_shortcut():
         "openci-tf-worker",
         "openci-tf-worker:11111111-2222-3333-4444-555555555555",
         region="us-east-1",
-        account_id="REPLACE_MAIN_ACCOUNT",
+        account_id=MAIN_ACCOUNT_ID,
         identity_center_start_url="https://d-9567aa6b98.awsapps.com/start/#",
         identity_center_role_name="AWSAdministratorAccess",
     )
@@ -157,7 +158,7 @@ def test_codebuild_url_can_wrap_destination_in_identity_center_shortcut():
     fragment_query = parsed.fragment.split("?", 1)[1]
     query = parse_qs(fragment_query)
     assert url.startswith("https://d-9567aa6b98.awsapps.com/start/#/console?")
-    assert query["account_id"] == ["REPLACE_MAIN_ACCOUNT"]
+    assert query["account_id"] == [MAIN_ACCOUNT_ID]
     assert query["role_name"] == ["AWSAdministratorAccess"]
     destination = unquote(query["destination"][0])
     assert destination.startswith(
@@ -196,7 +197,7 @@ def test_mutation_codebuild_url_omits_invalid_build_id():
 
 def test_mutation_codebuild_url_uses_identity_center_account_shortcut(monkeypatch):
     monkeypatch.setenv("ENGINE_CODEBUILD_PROJECT_NAME", "openci-tf-worker")
-    monkeypatch.setenv("ENGINE_CODEBUILD_ACCOUNT_ID", "REPLACE_MAIN_ACCOUNT")
+    monkeypatch.setenv("ENGINE_CODEBUILD_ACCOUNT_ID", MAIN_ACCOUNT_ID)
     monkeypatch.setenv(
         "AWS_CONSOLE_START_URL", "https://d-9567aa6b98.awsapps.com/start"
     )
@@ -212,7 +213,7 @@ def test_mutation_codebuild_url_uses_identity_center_account_shortcut(monkeypatc
     fragment_query = parsed.fragment.split("?", 1)[1]
     query = parse_qs(fragment_query)
     assert parsed.netloc == "d-9567aa6b98.awsapps.com"
-    assert query["account_id"] == ["REPLACE_MAIN_ACCOUNT"]
+    assert query["account_id"] == [MAIN_ACCOUNT_ID]
     assert query["role_name"] == ["AWSAdministratorAccess"]
     assert "codesuite/codebuild" in unquote(query["destination"][0])
 
