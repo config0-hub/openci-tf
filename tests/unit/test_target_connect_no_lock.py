@@ -42,6 +42,17 @@ def test_bootstrap_still_provisions_lock_table():
     assert 'resource "aws_dynamodb_table" "locks"' in text
 
 
+def test_bootstrap_recipe_clears_stale_foreign_backend_cache():
+    justfile = (_REPO_ROOT / "justfile").read_text()
+    bootstrap = justfile.split("bootstrap:", 1)[1].split("bootstrap-destroy:", 1)[0]
+    assert bootstrap.count("./scripts/clear_stale_bootstrap_backend_cache.sh") >= 3
+    assert "init -reconfigure -input=false" in bootstrap
+    script = (_REPO_ROOT / "scripts/clear_stale_bootstrap_backend_cache.sh").read_text()
+    assert "jq -er '.backend.config.bucket'" in script
+    assert "infra/bootstrap/.terraform" in script
+    assert "rm -rf infra/bootstrap/.terraform" in script
+
+
 def test_target_connect_installer_backend_includes_lock_table(tmp_path: Path):
     if not _GENERATE_BACKEND.is_file():
         pytest.skip("generate_backend.sh is not available")
