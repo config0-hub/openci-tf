@@ -202,3 +202,57 @@ def test_pipeline_step_index_matches_between_inner_collect_and_final_replay() ->
     assert stored == [1, 2]
     assert replayed == [1, 2]
     assert stored == replayed
+
+
+def test_confirmed_pipeline_apply_step_index_matches_between_collect_and_render_replay() -> None:
+    """Confirmed apply step 2: mutation collect and RenderPR replay agree on registry step_index."""
+    step_two_folder = "terraform/primary/ap-northeast-1/03-sqs"
+    confirmed_step_index = 1
+    full_items = [_full_item(step_two_folder, confirmed_step_index)]
+    resolved = build_compact_resolve_result(
+        {
+            "run_id": "r" * 32,
+            "webhook_info": {
+                "repo_name": "org/repo",
+                "commit_hash": "a" * 40,
+                "pipeline": "primary-msg",
+                "pipeline_step_index": 2,
+                "pipeline_step_count": 2,
+            },
+            "settings": {"ssm_openci_tf_github_token": "/openci-tf/github/token"},
+            "action": "apply",
+            "folders": [step_two_folder],
+            "notification_target": {"type": "github_pr"},
+        },
+        run_id="r" * 32,
+        full_items=full_items,
+        skipped=[],
+    )
+    resolved["step_index"] = confirmed_step_index
+    resolved["map_items"][0]["step_index"] = 0
+
+    item = resolved["map_items"][0]
+    inner_event = merge_map_item(resolved["map_shared"], item)
+    inner_event["step_index"] = resolved["step_index"]
+    stored = registry_step_index_from_state(inner_event.get("step_index"))
+
+    outcome = render_handler.handler(
+        {
+            "normalize_folder_outcome": True,
+            "state": {
+                **inner_event,
+                "child_execution": {
+                    "Output": {
+                        "exec_id": str(item["e"]),
+                        "succeeded": True,
+                    }
+                },
+            },
+        },
+        object(),
+    )
+    replayed = registry_step_index_from_state(outcome.get("step_index"))
+
+    assert stored == 2
+    assert replayed == 2
+    assert stored == replayed

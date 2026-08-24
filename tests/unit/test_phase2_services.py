@@ -259,6 +259,7 @@ def test_resolve_confirmed_pipeline_apply_uses_intent_step_index(monkeypatch):
     result = resolve.handler(event, None)
 
     assert result["map_items"][0]["step_index"] == 1
+    assert result["step_index"] == 1
     assert result["steps"] == []
 
 

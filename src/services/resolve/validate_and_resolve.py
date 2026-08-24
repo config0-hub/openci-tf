@@ -466,6 +466,8 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         result = build_compact_resolve_result(
             resolved_event, run_id=run_id, full_items=items, skipped=skipped
         )
+        if confirmed_pipeline_step_index is not None:
+            result["step_index"] = confirmed_pipeline_step_index
         completed = True
         logger.info("validate_and_resolve handler completed", extra={"run_id": run_id, "repo": repo, "action": action})
         return result
