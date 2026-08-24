@@ -217,6 +217,31 @@ def test_render_consumer_normalizes_child_execution_envelopes(child_execution, e
     ) == expected
 
 
+def _render_pr_state_input_keys() -> set[str]:
+    render_pr = _state_block(SOURCE, "RenderPR")
+    parameters = render_pr.split("Parameters = {", 1)[1].split("\n        }", 1)[0]
+    return {
+        match.group(1)
+        for match in re.finditer(r'"([A-Za-z0-9_]+)\.\$"\s*=\s*"\$\.([A-Za-z0-9_]+)"', parameters)
+        if match.group(1) == match.group(2)
+    } - {"execution_arn"}
+
+
+def test_normalize_config_resolution_error_includes_render_pr_state_keys():
+    state = {
+        "webhook_info": {"repo_name": "org/repo", "pr_number": 7},
+        "settings": {"ssm_openci_tf_github_token": "/openci-tf/github-token"},
+        "run_id": "outer-run",
+        "notification_target": {"type": "github_pr"},
+        "action": "plan",
+        "deadline_at": "2999-01-01T00:00:00Z",
+    }
+    normalized = render_handler.handler(
+        {"normalize_config_error": True, "state": state}, object()
+    )
+    assert _render_pr_state_input_keys() <= set(normalized)
+
+
 def test_render_consumer_normalizes_config_resolution_error():
     state = {
         "webhook_info": {"repo_name": "org/repo", "pr_number": 7},
@@ -229,6 +254,7 @@ def test_render_consumer_normalizes_config_resolution_error():
         {"normalize_config_error": True, "state": state}, object()
     ) == {
         **state,
+        "deadline_at": None,
         "config_resolution_failed": True,
         "steps": [],
         "step_index": 0,

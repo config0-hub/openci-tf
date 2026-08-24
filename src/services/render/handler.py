@@ -598,6 +598,7 @@ def _normalize_config_resolution_error(event: dict[str, Any]) -> dict[str, Any]:
         "run_id": state["run_id"],
         "notification_target": state["notification_target"],
         "action": state["action"],
+        "deadline_at": state.get("deadline_at"),
         "config_resolution_failed": True,
         "steps": state.get("steps", []),
         "step_index": state.get("step_index", 0),
