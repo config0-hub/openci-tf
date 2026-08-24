@@ -33,5 +33,8 @@ run_case generic_404 2 1 '404 Not Found from intermediary endpoint'
 run_case wrapped_absence 2 254 'proxy: An error occurred (RepositoryNotFoundException) when calling the DescribeRepositories operation: repository not found'
 run_case wrong_name 2 0 'other-repository'
 run_case multiline 2 254 $'An error occurred (RepositoryNotFoundException) when calling the DescribeRepositories operation: missing\nextra diagnostic'
+run_case exact_absent_cli_v1 1 255 $'\nAn error occurred (RepositoryNotFoundException) when calling the DescribeRepositories operation: repository not found'
+run_case access_denied_cli_v1 2 255 'An error occurred (AccessDeniedException) when calling the DescribeRepositories operation: denied'
+run_case multiline_cli_v1 2 255 $'\nAn error occurred (RepositoryNotFoundException) when calling the DescribeRepositories operation: missing\nextra diagnostic'
 
 echo 'ecr_repo_probe tests: all passed'
