@@ -87,6 +87,9 @@ def merge_map_item(map_shared: dict[str, Any], compact_item: dict[str, Any]) -> 
     for field in OPTIONAL_COMPACT_MAP_ITEM_FIELDS:
         if field in compact_item:
             merged[field] = compact_item[field]
+    raw_step_index = merged.get("step_index")
+    if not isinstance(raw_step_index, int) or isinstance(raw_step_index, bool):
+        merged["step_index"] = 0
     return merged
 
 

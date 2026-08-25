@@ -7,6 +7,8 @@ import pytest
 
 from tests.helpers.asl_reachability import dangling_transitions, unreachable_states
 from tests.helpers.rendered_run_folder_asl import load_rendered_run_folder_definition
+from src.domain.engine.outer_map_state import merge_map_item
+from src.platform.aws.run_registry.step_index import registry_step_index_from_state
 
 
 @pytest.mark.parametrize("lane", ["read", "apply", "destroy"])
@@ -47,6 +49,75 @@ def test_collect_forwards_pipeline_step_index() -> None:
         ]["Parameters"]
         assert mutation_collect["step_index.$"] == "$.step_index"
     assert read_collect["step_index.$"] == "$.step_index"
+
+
+def test_non_pipeline_run_folder_collect_input_includes_step_index() -> None:
+    """Execution 1787690005089.c7ac9302: RunFolders omitted step_index from inner input."""
+    map_shared = {
+        "upstream_urls": {
+            "infracost:0.10.39": "https://github.com/infracost/infracost/releases/download/v0.10.39/infracost-linux-amd64.tar.gz",
+            "tfsec:1.28.10": "https://github.com/aquasecurity/tfsec/releases/download/v1.28.10/tfsec_1.28.10_linux_amd64.tar.gz",
+            "tofu:1.8.0": "https://github.com/opentofu/opentofu/releases/download/v1.8.0/tofu_1.8.0_linux_amd64.tar.gz",
+        },
+        "repo_name": "williaumwu/openci-test-gitops",
+        "git_url": "https://github.com/williaumwu/openci-test-gitops.git",
+        "commit_hash": "e014dacb3293dc4a3d6f287855a92cb633020436",
+        "ssm_openci_tf_github_token": "/openci-tf/clone-token/williaumwu-openci-test-gitops-control",
+        "ssm_infracost_api_key": "",
+    }
+    compact_item = {
+        "run_id": "1787690005089.c7ac9302",
+        "folder": "terraform/primary/ap-northeast-1/06-sns-topic",
+        "account_id": "998038917735",
+        "action": "plan_destroy",
+        "attempt": 0,
+        "budget": 1040,
+        "deadline_at": "2026-08-25T20:50:50Z",
+        "step_index": 0,
+        "b": [
+            "openci-tf-executor-readonly",
+            "openci-tf-executor-poweruser",
+            "openci-tf-8e330376333ca0e7",
+            3600,
+        ],
+        "c": {
+            "version": 1,
+            "timeout": 900,
+            "tf_runtime": "tofu:1.8.0",
+            "account_alias": "primary",
+            "execution_target": "lambda",
+            "extra_flags": [],
+            "ssm_env_paths": [],
+            "apply": {"allow": True, "grace_seconds": 15},
+            "destroy": {"allow": True, "grace_seconds": 60},
+        },
+        "e": "1787690005089.c7ac9302.f445281ac67b.0",
+    }
+    inner_event = merge_map_item(map_shared, compact_item)
+    collect_parameters = load_rendered_run_folder_definition("read")["States"]["Collect"][
+        "Parameters"
+    ]
+    assert collect_parameters["step_index.$"] == "$.step_index"
+    assert inner_event["step_index"] == 0
+    assert registry_step_index_from_state(inner_event["step_index"]) == 1
+
+    probe_complete_state = {
+        **inner_event,
+        "probe": {
+            "exec_id": inner_event["execution_id"],
+            "attempt": 0,
+            "submitted_at": 1787690030.55072,
+            "succeeded": True,
+            "error": None,
+            "credential_expired": False,
+            "steps": [{"step_name": "step-0", "status": "succeeded", "exit_code": 0}],
+            "pointers": {},
+            "probe_status": "complete",
+        },
+    }
+    step_index_path = collect_parameters["step_index.$"]
+    assert step_index_path.startswith("$.")
+    assert probe_complete_state[step_index_path.removeprefix("$.")] == 0
 
 
 def test_each_graph_embeds_only_its_lane_actions() -> None:

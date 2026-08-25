@@ -48,6 +48,12 @@ def test_mutation_item_selectors_forward_pipeline_step_index():
     assert mutation_source.count('"step_index.$"                 = "$.step_index"') == 2
 
 
+def test_run_folders_item_selector_forwards_map_item_step_index():
+    block = _state_block(SOURCE, "RunFolders")
+    assert '"step_index.$"                 = "$$.Map.Item.Value.step_index"' in block
+    assert '"step_index.$"                 = "$.step_index"' not in block
+
+
 def test_deployed_state_machines_route_safe_and_intent_verbs():
     outer_routes = re.findall(r'StringEquals = "(\w+)", Next = "(\w+)"', _state_block(SOURCE, "RouteAction"))
     assert {verb for verb, next_state in outer_routes if next_state == "ValidateAndResolve"} == {

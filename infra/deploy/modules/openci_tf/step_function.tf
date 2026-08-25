@@ -102,6 +102,7 @@ resource "aws_sfn_state_machine" "openci_tf" {
           "attempt.$"                    = "$$.Map.Item.Value.attempt"
           "budget.$"                     = "$$.Map.Item.Value.budget"
           "deadline_at.$"                = "$$.Map.Item.Value.deadline_at"
+          "step_index.$"                 = "$$.Map.Item.Value.step_index"
           "folder_config.$"              = "$$.Map.Item.Value.c"
           "execution_id.$"               = "$$.Map.Item.Value.e"
           "upstream_urls.$"              = "$.map_shared.upstream_urls"
