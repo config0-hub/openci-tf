@@ -279,6 +279,28 @@ When not kept, the bootstrap destroy first migrates its own state back to
 local, empties the bucket (all versions), then destroys the bucket and lock
 table. SSM install parameters are deleted in both namespaces.
 
+After Terraform teardown, both `just uninstall` and `just bootstrap-destroy` run
+`scripts/cleanup_operator_footprint.sh`, which removes operator-managed resources
+that survive `terraform destroy`:
+
+- CloudWatch log groups for product Lambdas, CodeBuild, and Step Functions
+  (the full list is in `scripts/product_log_groups.sh`)
+- SSM parameters outside `/openci-tf/install/` under `/openci-tf/clone-token`,
+  `/openci-tf/env`, `/openci-tf/infracost`, and `/openci-tf/webhook`
+- Legacy IAM roles `${OPENCI_TF_PROJECT}-executor-local` and
+  `${OPENCI_TF_PROJECT}-executor-remote` when present
+
+`just verify-clean` fails if any of those log groups, operator SSM parameters,
+or legacy executor roles remain.
+
+`just deploy-destroy` (used during `uninstall`) calls
+`scripts/terraform_unlock_stale_lock.sh` before `terraform destroy`. If a
+Terraform state lock exists on the deploy state, the script stops with exit code
+1, prints the lock holder and age, and shows the exact
+`terraform -chdir=infra/deploy force-unlock <lock-id>` command. It never
+unlocks automatically. Confirm no deploy is running, run that command, then
+retry `just uninstall` or `just deploy-destroy`.
+
 Every component also has an individual `<name>-destroy` recipe.
 
 ## After install
