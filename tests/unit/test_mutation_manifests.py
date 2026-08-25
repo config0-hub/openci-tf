@@ -7,7 +7,14 @@ from datetime import datetime, timezone
 
 import pytest
 
-from src.domain.engine.manifest import BucketSet, ManifestBinding, build_failure_manifest, build_manifest, validate_manifest_schema
+from src.domain.engine.manifest import (
+    BucketSet,
+    ManifestBinding,
+    _canonical_manifest_digest,
+    build_failure_manifest,
+    build_manifest,
+    validate_manifest_schema,
+)
 from src.services.run_folder import collect
 
 
@@ -155,3 +162,72 @@ def test_collect_passes_source_plan_run_id(monkeypatch):
     }
     collect.handler(event, object())
     assert captured["source_plan_run_id"] == "source-plan"
+
+
+def _manifest_entry(name: str) -> dict[str, object]:
+    return {
+        "name": name,
+        "s3_uri": f"s3://tmp/openci-tf/org/repo/run/infra/{name}",
+        "content_type": "text/plain",
+        "size": 1,
+        "checksum": "a" * 64,
+        "expires_at": "2099-01-01T00:00:00Z",
+    }
+
+
+@pytest.mark.parametrize("action,output_name", [("apply", "apply.out"), ("destroy", "destroy.out")])
+def test_failed_mutation_manifest_with_plan_show_validates(action, output_name):
+    manifest = build_failure_manifest(
+        execution_id="run.infra.0",
+        tmp_bucket="tmp",
+        done_bucket="done",
+        package_bucket="pkg",
+        action=action,
+        failure_reason="saved plan is stale",
+        run_id="run",
+        repo_name="org/repo",
+        commit_hash="a" * 40,
+        account_id="123456789012",
+        folder="infra",
+        attempt=0,
+        generated_at_source=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        source_plan_run_id="plan-run",
+    )
+    manifest["entries"] = [
+        _manifest_entry("init.out"),
+        _manifest_entry("validate.out"),
+        _manifest_entry("plan-show.out"),
+        _manifest_entry(output_name),
+    ]
+    manifest["manifest_sha256"] = _canonical_manifest_digest(manifest)
+    validate_manifest_schema(manifest, execution_id="run.infra.0")
+
+
+@pytest.mark.parametrize("action", ["apply", "destroy"])
+def test_failed_mutation_manifest_rejects_unrelated_extra_entry(action):
+    manifest = build_failure_manifest(
+        execution_id="run.infra.0",
+        tmp_bucket="tmp",
+        done_bucket="done",
+        package_bucket="pkg",
+        action=action,
+        failure_reason="engine failed",
+        run_id="run",
+        repo_name="org/repo",
+        commit_hash="a" * 40,
+        account_id="123456789012",
+        folder="infra",
+        attempt=0,
+        generated_at_source=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        source_plan_run_id="plan-run",
+    )
+    manifest["entries"] = [
+        _manifest_entry("init.out"),
+        _manifest_entry("validate.out"),
+        _manifest_entry("plan-show.out"),
+        _manifest_entry("apply.out" if action == "apply" else "destroy.out"),
+        _manifest_entry("tf/plan.out"),
+    ]
+    manifest["manifest_sha256"] = _canonical_manifest_digest(manifest)
+    with pytest.raises(ValueError, match="unexpected entries"):
+        validate_manifest_schema(manifest, execution_id="run.infra.0")

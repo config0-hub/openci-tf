@@ -12,6 +12,7 @@ from typing import Any
 from botocore.exceptions import BotoCoreError, ClientError  # type: ignore[import-not-found]
 
 from src.core.logging import get_logger
+from src.domain.engine.outer_map_state import merge_map_item
 from src.domain.locks import run_lock
 from src.domain.run.outcome import normalize_map_outcome
 from src.platform.aws.dynamo_resource import dynamo_table
@@ -126,6 +127,21 @@ def _persist_one_folder(event: dict[str, Any], item: dict[str, Any]) -> str | No
     return f"{folder}: persistence failed"
 
 
+def _rehydrate_map_item(event: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
+    compact_execution_id = item.get("e")
+    if isinstance(compact_execution_id, str) and compact_execution_id:
+        map_shared = event.get("map_shared")
+        if isinstance(map_shared, dict):
+            return merge_map_item(map_shared, item)
+        return {
+            **item,
+            "execution_id": compact_execution_id,
+            "account_binding": item.get("b"),
+            "folder_config": item.get("c"),
+        }
+    return item
+
+
 def _persist_folder_outcomes(event: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     seen_folders: set[str] = set()
@@ -145,17 +161,24 @@ def _persist_folder_outcomes(event: dict[str, Any]) -> list[str]:
         folder = item.get("folder")
         if not isinstance(folder, str) or folder in seen_folders:
             continue
+        rehydrated = _rehydrate_map_item(event, item)
+        execution_id = (
+            rehydrated.get("execution_id")
+            or rehydrated.get("exec_id")
+            or item.get("execution_id")
+            or item.get("exec_id")
+        )
+        if not isinstance(execution_id, str) or not execution_id:
+            execution_id = f"missing-{folder}"
         synthesized = {
             "folder": folder,
-            "account_id": item.get("account_id") or "",
-            "execution_id": item.get("execution_id")
-            or item.get("exec_id")
-            or f"missing-{folder}",
-            "attempt": item.get("attempt") or 0,
+            "account_id": rehydrated.get("account_id") or item.get("account_id") or "",
+            "execution_id": execution_id,
+            "attempt": rehydrated.get("attempt") or item.get("attempt") or 0,
             "status": "failed",
             "succeeded": False,
             "outcome": {"succeeded": False, "error": "missing map outcome"},
-            "step_index": item.get("step_index"),
+            "step_index": rehydrated.get("step_index") or item.get("step_index"),
         }
         error = _persist_one_folder(event, synthesized)
         if error:

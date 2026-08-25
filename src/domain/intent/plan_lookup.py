@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -25,9 +26,18 @@ from src.domain.engine.artifact_paths import (
     parse_execution_pointer,
     pr_pointer_key,
 )
+from src.domain.engine.outer_execution_id import parse_outer_run_epoch
 from src.domain.engine.plan_artifacts import validate_plan_artifact_metadata
 from src.platform.aws.s3 import get_bounded_json, get_object_bytes, head_object
 from src.platform.aws.run_registry import get_folder_record, get_run, list_runs_for_repo
+
+
+@dataclass(frozen=True)
+class PlanLookupResult:
+    """Outcome of resolving the newest fresh plan run for intent creation."""
+
+    match: dict[str, Any] | None
+    stale: bool = False
 
 
 def _pr_number(notification_target: object) -> int | None:
@@ -289,6 +299,50 @@ def _plan_run_from_pointer(
     }
 
 
+def _mutation_supersedes_plan_run(
+    *,
+    trigger_id: str,
+    pr_number: int,
+    folder: str,
+    plan_run_id: str,
+    commit_hash: str,
+    max_scan: int = 100,
+) -> bool:
+    """Return True when a newer successful apply/destroy invalidates the pinned plan."""
+    plan_epoch = parse_outer_run_epoch(plan_run_id)
+    if plan_epoch is None:
+        return False
+    cursor: str | None = None
+    scanned = 0
+    while scanned < max_scan:
+        limit = min(25, max_scan - scanned)
+        runs, cursor = list_runs_for_repo(trigger_id, limit=limit, cursor=cursor)
+        scanned += len(runs)
+        for run in runs:
+            if run.get("status") != "succeeded":
+                continue
+            action = str(run.get("action") or "")
+            if action not in {"apply", "destroy"}:
+                continue
+            if _pr_number(run.get("notification_target")) != pr_number:
+                continue
+            if str(run.get("commit_hash") or "").lower() != commit_hash.lower():
+                continue
+            run_id = str(run.get("run_id") or "")
+            if not run_id:
+                continue
+            mutation_epoch = parse_outer_run_epoch(run_id)
+            if mutation_epoch is None or mutation_epoch <= plan_epoch:
+                continue
+            folder_record = get_folder_record(run_id, folder)
+            if not folder_record or folder_record.get("status") != "succeeded":
+                continue
+            return True
+        if not cursor:
+            break
+    return False
+
+
 def find_newest_fresh_plan_run(
     *,
     trigger_id: str,
@@ -300,7 +354,7 @@ def find_newest_fresh_plan_run(
     account_id: str,
     expected_tf_runtime: str,
     max_scan: int = 100,
-) -> dict[str, Any] | None:
+) -> PlanLookupResult:
     """Return the newest successful plan run for a PR folder, or None."""
     required_plan_action = _plan_action_for_mutation(mutation_action)
     artifact_name = _plan_artifact_name(mutation_action)
@@ -314,7 +368,16 @@ def find_newest_fresh_plan_run(
         expected_tf_runtime=expected_tf_runtime,
     )
     if pointer_match is not None:
-        return pointer_match
+        if _mutation_supersedes_plan_run(
+            trigger_id=trigger_id,
+            pr_number=pr_number,
+            folder=folder,
+            plan_run_id=str(pointer_match["run_id"]),
+            commit_hash=commit_hash,
+            max_scan=max_scan,
+        ):
+            return PlanLookupResult(match=None, stale=True)
+        return PlanLookupResult(match=pointer_match)
     cursor: str | None = None
     scanned = 0
     while scanned < max_scan:
@@ -349,13 +412,23 @@ def find_newest_fresh_plan_run(
             )
             if not sha256:
                 continue
-            return {
+            match = {
                 "run_id": run_id,
                 "folder": folder,
                 "plan_sha256": sha256,
                 "plan_artifact_name": artifact_name,
                 "tf_runtime": expected_tf_runtime,
             }
+            if _mutation_supersedes_plan_run(
+                trigger_id=trigger_id,
+                pr_number=pr_number,
+                folder=folder,
+                plan_run_id=run_id,
+                commit_hash=commit_hash,
+                max_scan=max_scan,
+            ):
+                return PlanLookupResult(match=None, stale=True)
+            return PlanLookupResult(match=match)
         if not cursor:
             break
-    return None
+    return PlanLookupResult(match=None)

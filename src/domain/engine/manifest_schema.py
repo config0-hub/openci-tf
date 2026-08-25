@@ -157,6 +157,7 @@ _FAILURE_APPLY_ALLOWED = frozenset(
     {
         "init.out",
         "validate.out",
+        "plan-show.out",
         "apply.out",
     }
 )
@@ -164,6 +165,7 @@ _FAILURE_DESTROY_ALLOWED = frozenset(
     {
         "init.out",
         "validate.out",
+        "plan-show.out",
         "destroy.out",
     }
 )

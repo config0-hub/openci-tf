@@ -174,7 +174,7 @@ def test_map_item_execution_id_matches_prepare_for_its_attempt(tmp_path, monkeyp
         lambda stored, _target: stored,
     )
     monkeypatch.setattr(prepare_and_submit.s3, "presign_get", lambda *args: f"get://{args[1]}")
-    monkeypatch.setattr(prepare_and_submit.s3, "presign_put", lambda *args: f"put://{args[1]}")
+    monkeypatch.setattr(prepare_and_submit.s3, "presign_put", lambda *args, **_kwargs: f"put://{args[1]}")
     monkeypatch.setattr(prepare_and_submit.s3, "presign_create_put", lambda *args: f"create-put://{args[1]}")
     monkeypatch.setattr(prepare_and_submit, "get_github_token", lambda _: "token")
     monkeypatch.setattr(prepare_and_submit, "shallow_clone", lambda *_args, **_kwargs: clone_dir)

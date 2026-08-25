@@ -19,6 +19,7 @@ from src.domain.config.folder_config import (
     parse_folder_config,
 )
 from src.domain.config.pipeline import Pipeline, Step
+from src.domain.intent.plan_lookup import PlanLookupResult
 from src.domain.intent.gates import evaluate_confirm_gates, evaluate_intent_gates
 from src.domain.intent.models import FolderPlanPin, IntentGateFailure, IntentRecord
 from src.domain.intent.token import mint_token
@@ -172,12 +173,14 @@ def test_intent_gate_apply_enabled_account_passes_folder_gate(monkeypatch):
     )
     monkeypatch.setattr(
         "src.domain.intent.gates.find_newest_fresh_plan_run",
-        lambda **_kwargs: {
-            "run_id": "plan-run",
-            "plan_sha256": "b" * 64,
-            "plan_artifact_name": "plan.tfplan",
-            "tf_runtime": "tofu:1.8.0",
-        },
+        lambda **_kwargs: PlanLookupResult(
+            match={
+                "run_id": "plan-run",
+                "plan_sha256": "b" * 64,
+                "plan_artifact_name": "plan.tfplan",
+                "tf_runtime": "tofu:1.8.0",
+            }
+        ),
     )
     result = evaluate_intent_gates(
         action="apply",
@@ -248,6 +251,121 @@ def test_intent_gate_folder_not_enabled(monkeypatch):
     )
     assert result.ok is False
     assert "apply.allow: true" in result.failures[0].message
+
+
+def test_intent_gate_refuses_stale_apply_plan_after_successful_mutation(monkeypatch):
+    monkeypatch.setattr(
+        "src.domain.intent.gates.load_account_alias",
+        lambda _: SimpleNamespace(account_id="123456789012", enable_apply=True),
+    )
+
+    def fake_lookup(**_kwargs):
+        return PlanLookupResult(match=None, stale=True)
+
+    monkeypatch.setattr("src.domain.intent.gates.find_newest_fresh_plan_run", fake_lookup)
+    result = evaluate_intent_gates(
+        action="apply",
+        folders=["infra/vpc"],
+        folder_configs={
+            "infra/vpc": FolderConfig(
+                account_alias="target", apply=MutationVerbConfig(allow=True)
+            )
+        },
+        settings=RepoSettings(
+            trigger_id="t", repo_name="o/r", git_url="https://github.com/o/r"
+        ),
+        pr_number=1,
+        commit_hash="a" * 40,
+    )
+    assert result.ok is False
+    assert result.failures[0].message == "stale plan — re-run tf plan infra/vpc"
+
+
+def test_intent_gate_refuses_stale_destroy_plan_after_successful_mutation(monkeypatch):
+    monkeypatch.setattr(
+        "src.domain.intent.gates.load_account_alias",
+        lambda _: SimpleNamespace(account_id="123456789012", enable_apply=True),
+    )
+
+    def fake_lookup(**_kwargs):
+        return PlanLookupResult(match=None, stale=True)
+
+    monkeypatch.setattr("src.domain.intent.gates.find_newest_fresh_plan_run", fake_lookup)
+    result = evaluate_intent_gates(
+        action="destroy",
+        folders=["infra/vpc"],
+        folder_configs={
+            "infra/vpc": FolderConfig(
+                account_alias="target", destroy=MutationVerbConfig(allow=True)
+            )
+        },
+        settings=RepoSettings(
+            trigger_id="t", repo_name="o/r", git_url="https://github.com/o/r"
+        ),
+        pr_number=1,
+        commit_hash="a" * 40,
+    )
+    assert result.ok is False
+    assert (
+        result.failures[0].message
+        == "stale plan — re-run tf plan --destroy infra/vpc"
+    )
+
+
+def test_plan_lookup_marks_plan_stale_when_newer_mutation_succeeded(monkeypatch):
+    from src.domain.intent.plan_lookup import find_newest_fresh_plan_run
+
+    monkeypatch.setattr(
+        "src.domain.intent.plan_lookup._plan_run_from_pointer", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(
+        "src.domain.intent.plan_lookup._folder_plan_sha256",
+        lambda *_args, **_kwargs: "c" * 64,
+    )
+    monkeypatch.setattr(
+        "src.domain.intent.plan_lookup.list_runs_for_repo",
+        lambda *_args, **_kwargs: (
+            [
+                {
+                    "status": "succeeded",
+                    "action": "plan_destroy",
+                    "commit_hash": "a" * 40,
+                    "notification_target": {"type": "github_pr", "pr_number": 1},
+                    "run_id": "1700000000000.aaaaaaaa",
+                },
+                {
+                    "status": "succeeded",
+                    "action": "destroy",
+                    "commit_hash": "a" * 40,
+                    "notification_target": {"type": "github_pr", "pr_number": 1},
+                    "run_id": "1700000001000.bbbbbbbb",
+                },
+            ],
+            None,
+        ),
+    )
+
+    def folder_record(run_id: str, folder: str):
+        if run_id == "1700000001000.bbbbbbbb" and folder == "infra/vpc":
+            return {"status": "succeeded"}
+        if run_id == "1700000000000.aaaaaaaa":
+            return {"status": "succeeded", "manifest_sha256": "d" * 64}
+        return None
+
+    monkeypatch.setattr("src.domain.intent.plan_lookup.get_folder_record", folder_record)
+
+    result = find_newest_fresh_plan_run(
+        trigger_id="trigger",
+        repo_name="o/r",
+        pr_number=1,
+        folder="infra/vpc",
+        mutation_action="destroy",
+        commit_hash="a" * 40,
+        account_id="123456789012",
+        expected_tf_runtime="tofu:1.8.0",
+    )
+    assert result.match is None
+    assert result.stale is True
 
 
 def _intent_gate_settings() -> RepoSettings:

@@ -420,7 +420,7 @@ def test_state_machine_follows_rendered_retry_transitions(monkeypatch, tmp_path)
         prepare_handler.s3, "presign_get", lambda *args: f"get://{args[1]}"
     )
     monkeypatch.setattr(
-        prepare_handler.s3, "presign_put", lambda *args: f"put://{args[1]}"
+        prepare_handler.s3, "presign_put", lambda *args, **_kwargs: f"put://{args[1]}"
     )
     monkeypatch.setattr(
         prepare_handler.s3,
@@ -755,7 +755,7 @@ def test_prepare_uploads_execution_scoped_package_key(monkeypatch, tmp_path):
         prepare_handler.s3, "presign_get", lambda *args: f"get://{args[1]}"
     )
     monkeypatch.setattr(
-        prepare_handler.s3, "presign_put", lambda *args: f"put://{args[1]}"
+        prepare_handler.s3, "presign_put", lambda *args, **_kwargs: f"put://{args[1]}"
     )
     monkeypatch.setattr(
         prepare_handler.s3,

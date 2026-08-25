@@ -442,6 +442,92 @@ def test_finalizer_accepts_matching_authoritative_attempt_without_replay(monkeyp
     assert finalized == [("run", "failed")]
 
 
+def test_finalizer_rehydrates_compact_map_items_without_execution_id_mismatch(monkeypatch):
+    replay = Mock()
+    monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")
+    monkeypatch.setattr(
+        finalize_run,
+        "get_folder_attempt",
+        lambda *_args: {
+            "execution_id": "1787618846778.538c5fed.f445281ac67b.0",
+            "status": "failed",
+        },
+    )
+    monkeypatch.setattr(finalize_run, "put_folder_record", replay)
+    monkeypatch.setattr(
+        finalize_run, "finalize_run_if_running", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(finalize_run, "_release_locks", lambda *_args, **_kwargs: [])
+
+    result = finalize_run.handler(
+        {
+            "run_id": "1787618846778.538c5fed",
+            "map_shared": {
+                "upstream_urls": {"tofu:1.8.0": "https://example.com/tofu"},
+                "repo_name": "org/repo",
+                "git_url": "https://github.com/org/repo.git",
+                "commit_hash": "a" * 40,
+                "ssm_openci_tf_github_token": "/openci-tf/github/token",
+                "ssm_infracost_api_key": "/openci-tf/infracost/key",
+            },
+            "map_items": [
+                {
+                    "run_id": "1787618846778.538c5fed",
+                    "folder": "terraform/primary/ap-northeast-1/06-sns-topic",
+                    "account_id": "123456789012",
+                    "action": "destroy",
+                    "attempt": 0,
+                    "budget": 3600,
+                    "deadline_at": "2099-01-01T00:00:00Z",
+                    "b": [
+                        "openci-tf-executor-poweruser",
+                        None,
+                        "openci-tf-0123456789abcdef",
+                        3600,
+                    ],
+                    "c": {"account_alias": "target", "tf_runtime": "tofu:1.8.0"},
+                    "e": "1787618846778.538c5fed.f445281ac67b.0",
+                }
+            ],
+            "outcomes": [],
+        },
+        object(),
+    )
+
+    assert result == {"finalized": True}
+    replay.assert_not_called()
+
+
+def test_finalizer_still_reports_persisted_execution_id_mismatch(monkeypatch):
+    monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")
+    monkeypatch.setattr(
+        finalize_run,
+        "get_folder_attempt",
+        lambda *_args: {"execution_id": "run.folder.0", "status": "failed"},
+    )
+    monkeypatch.setattr(finalize_run, "put_folder_record", Mock())
+    monkeypatch.setattr(
+        finalize_run, "finalize_run_if_running", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(finalize_run, "_release_locks", lambda *_args, **_kwargs: [])
+
+    with pytest.raises(RuntimeError, match="persisted attempt execution id mismatch"):
+        finalize_run.handler(
+            {
+                "run_id": "run",
+                "outcomes": [
+                    {
+                        "folder": "infra/a",
+                        "execution_id": "different.folder.0",
+                        "attempt": 0,
+                        "status": "failed",
+                    }
+                ],
+            },
+            object(),
+        )
+
+
 def test_eventbridge_terminal_event_finalizes_registry_run(monkeypatch):
     finalized: list[tuple[str, str]] = []
     monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")

@@ -93,7 +93,7 @@ def evaluate_intent_gates(
     for folder in folders:
         config = folder_configs[folder]
         account_id = account_by_folder[folder].account_id
-        match = find_newest_fresh_plan_run(
+        lookup = find_newest_fresh_plan_run(
             trigger_id=settings.trigger_id,
             repo_name=settings.repo_name,
             pr_number=pr_number,
@@ -103,11 +103,17 @@ def evaluate_intent_gates(
             account_id=account_id,
             expected_tf_runtime=config.tf_runtime,
         )
-        if match is None:
-            failures.append(
-                IntentGateFailure("no fresh plan — run tf plan first", folder=folder)
-            )
+        if lookup.match is None:
+            if lookup.stale:
+                if action == "apply":
+                    message = f"stale plan — re-run tf plan {folder}"
+                else:
+                    message = f"stale plan — re-run tf plan --destroy {folder}"
+            else:
+                message = "no fresh plan — run tf plan first"
+            failures.append(IntentGateFailure(message, folder=folder))
             continue
+        match = lookup.match
         source_run_ids.add(str(match["run_id"]))
         pins.append(
             FolderPlanPin(

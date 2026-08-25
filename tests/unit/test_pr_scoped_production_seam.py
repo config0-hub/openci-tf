@@ -85,7 +85,7 @@ def test_prepare_presigns_only_pr_scoped_artifact_keys(monkeypatch, tmp_path):
   prepare_handler = _prepare_handler_mocks(monkeypatch, tmp_path)
   presigned_keys: list[str] = []
 
-  def capture_presign_put(_bucket: str, key: str, _expiry: int) -> str:
+  def capture_presign_put(_bucket: str, key: str, _expiry: int, *, content_type: str | None = None) -> str:
       presigned_keys.append(key)
       return f"put://{key}"
 

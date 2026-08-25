@@ -190,7 +190,7 @@ def test_prepare_handler_fetches_hub_ssm_before_target_assumption(monkeypatch, t
     monkeypatch.setenv("ENGINE_INIT_LAMBDA_NAME", "engine")
     monkeypatch.setattr(prepare_handler.boto3, "Session", lambda: SimpleNamespace(get_credentials=lambda: None))
     monkeypatch.setattr(prepare_handler.s3, "presign_get", lambda *args: f"get://{args[1]}")
-    monkeypatch.setattr(prepare_handler.s3, "presign_put", lambda *args: f"put://{args[1]}")
+    monkeypatch.setattr(prepare_handler.s3, "presign_put", lambda *args, **_kwargs: f"put://{args[1]}")
     monkeypatch.setattr(prepare_handler.s3, "presign_create_put", lambda *args: f"create-put://{args[1]}")
     monkeypatch.setattr(prepare_handler.sts, "assume_role", lambda *_, **__: order.append("assume") or {"AWS_ACCESS_KEY_ID": "target"})
     monkeypatch.setattr(prepare_handler, "get_github_token", lambda _: "clone-token")
@@ -249,7 +249,7 @@ def test_prepare_handler_rejects_target_credentials_overwriting_ssm_env(monkeypa
     monkeypatch.setenv("ENGINE_INIT_LAMBDA_NAME", "engine")
     monkeypatch.setattr(prepare_handler.boto3, "Session", lambda: SimpleNamespace(get_credentials=lambda: None))
     monkeypatch.setattr(prepare_handler.s3, "presign_get", lambda *args: f"get://{args[1]}")
-    monkeypatch.setattr(prepare_handler.s3, "presign_put", lambda *args: f"put://{args[1]}")
+    monkeypatch.setattr(prepare_handler.s3, "presign_put", lambda *args, **_kwargs: f"put://{args[1]}")
     monkeypatch.setattr(prepare_handler.s3, "presign_create_put", lambda *args: f"create-put://{args[1]}")
     monkeypatch.setattr(
         prepare_handler.sts,
@@ -288,7 +288,7 @@ def test_prepare_handler_rejects_infracost_key_from_ssm_env(monkeypatch, tmp_pat
     monkeypatch.setenv("ENGINE_INIT_LAMBDA_NAME", "engine")
     monkeypatch.setattr(prepare_handler.boto3, "Session", lambda: SimpleNamespace(get_credentials=lambda: None))
     monkeypatch.setattr(prepare_handler.s3, "presign_get", lambda *args: f"get://{args[1]}")
-    monkeypatch.setattr(prepare_handler.s3, "presign_put", lambda *args: f"put://{args[1]}")
+    monkeypatch.setattr(prepare_handler.s3, "presign_put", lambda *args, **_kwargs: f"put://{args[1]}")
     monkeypatch.setattr(prepare_handler.s3, "presign_create_put", lambda *args: f"create-put://{args[1]}")
     monkeypatch.setattr(prepare_handler.sts, "assume_role", lambda *_, **__: {"AWS_ACCESS_KEY_ID": "target"})
     monkeypatch.setattr(prepare_handler, "get_github_token", lambda _: "clone-token")

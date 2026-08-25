@@ -23,6 +23,7 @@ from src.domain.engine.manifest import build_failure_manifest, validate_manifest
 from src.domain.engine.outer_map_state import merge_map_item
 from src.domain.intent.gates import evaluate_intent_gates
 from src.domain.intent.plan_lookup import (
+    PlanLookupResult,
     _folder_plan_sha256,
     find_newest_fresh_plan_run,
 )
@@ -267,9 +268,7 @@ def test_plan_lookup_destroy_reads_destroy_pointer(monkeypatch):
     )
     monkeypatch.setattr(
         "src.domain.intent.plan_lookup.list_runs_for_repo",
-        lambda *_args, **_kwargs: pytest.fail(
-            "pointer match should avoid fallback scan"
-        ),
+        lambda *_args, **_kwargs: ([], None),
     )
 
     result = find_newest_fresh_plan_run(
@@ -283,13 +282,14 @@ def test_plan_lookup_destroy_reads_destroy_pointer(monkeypatch):
         expected_tf_runtime="tofu:1.8.0",
     )
 
-    assert result == {
+    assert result.match == {
         "run_id": "1786850065992.24d545e0",
         "folder": "infra/ec2",
         "plan_sha256": "d" * 64,
         "plan_artifact_name": "destroy.plan.tfplan",
         "tf_runtime": "tofu:1.8.0",
     }
+    assert result.stale is False
     assert captured["pointer_key"] == pr_pointer_key(
         repo_name="org/repo",
         pr_number=7,
@@ -366,13 +366,14 @@ def test_plan_lookup_fallback_uses_pr_scoped_manifest_for_destroy(monkeypatch):
         expected_tf_runtime="tofu:1.8.0",
     )
 
-    assert result == {
+    assert result.match == {
         "run_id": "destroy-run",
         "folder": "infra/ec2",
         "plan_sha256": "e" * 64,
         "plan_artifact_name": "destroy.plan.tfplan",
         "tf_runtime": "tofu:1.8.0",
     }
+    assert result.stale is False
     assert captured == {
         "run_id": "destroy-run",
         "folder": "infra/ec2",
@@ -443,7 +444,7 @@ def test_plan_lookup_rejects_source_plan_under_different_account(monkeypatch):
             commit_hash="a" * 40,
             account_id="222222222222",
             expected_tf_runtime="tofu:1.8.0",
-        )
+        ).match
         is None
     )
     assert captured["account_id"] == "222222222222"
@@ -479,12 +480,14 @@ def test_intent_gate_pins_current_account_and_runtime(monkeypatch):
     )
     monkeypatch.setattr(
         "src.domain.intent.gates.find_newest_fresh_plan_run",
-        lambda **_kwargs: {
-            "run_id": "plan-run",
-            "plan_sha256": "b" * 64,
-            "plan_artifact_name": "plan.tfplan",
-            "tf_runtime": "tofu:1.8.0",
-        },
+        lambda **_kwargs: PlanLookupResult(
+            match={
+                "run_id": "plan-run",
+                "plan_sha256": "b" * 64,
+                "plan_artifact_name": "plan.tfplan",
+                "tf_runtime": "tofu:1.8.0",
+            }
+        ),
     )
     config = FolderConfig(
         account_alias="target",
