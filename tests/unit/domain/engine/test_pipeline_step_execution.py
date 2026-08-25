@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Config0, Inc.
 # SPDX-License-Identifier: AGPL-3.0-or-later
 from dataclasses import asdict
+from types import SimpleNamespace
+
+import pytest
 
 from src.domain.config.folder_config import compact_folder_config_for_outer_state, parse_folder_config
 from src.domain.engine.execution_id import compose_execution_id
@@ -9,6 +12,7 @@ from src.domain.engine.summary import build_outer_map_outcome
 from src.platform.aws.run_registry.step_index import registry_step_index_from_state
 from src.domain.formatters.artifacts import summary
 from src.services.render import handler as render_handler
+from tests.helpers.rendered_run_folder_asl import load_rendered_run_folder_definition
 
 
 def _outcome(folder: str, *, succeeded: bool, step_index: int | None = None) -> dict[str, object]:
@@ -202,6 +206,95 @@ def test_pipeline_step_index_matches_between_inner_collect_and_final_replay() ->
     assert stored == [1, 2]
     assert replayed == [1, 2]
     assert stored == replayed
+
+
+def test_readonly_pipeline_collect_attempts_match_render_pr_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay the two-step readonly pipeline shape captured from execution history."""
+    run_id = "1787660208876.7e34ddd6"
+    account_id = "998038917735"
+    folders = [
+        "terraform/primary/ap-northeast-1/03-sqs",
+        "terraform/primary/ap-northeast-1/06-sns-topic",
+    ]
+    execution_ids = [
+        f"{run_id}.4b4bc82fdc99.0",
+        f"{run_id}.f445281ac67b.0",
+    ]
+    collect_parameters = load_rendered_run_folder_definition("read")["States"][
+        "Collect"
+    ]["Parameters"]
+    collect_step_path = collect_parameters.get("step_index.$")
+    attempt_items = {
+        folder: {
+            "run_id": run_id,
+            "folder": folder,
+            "account_id": account_id,
+            "execution_id": execution_id,
+            "attempt": 0,
+            "status": "succeeded",
+            "step_index": registry_step_index_from_state(
+                step_index if collect_step_path == "$.step_index" else None
+            ),
+        }
+        for step_index, (folder, execution_id) in enumerate(
+            zip(folders, execution_ids, strict=True)
+        )
+    }
+
+    def replay_folder_attempt(**item: object) -> None:
+        existing = attempt_items[str(item["folder"])]
+        if existing["step_index"] != item["step_index"]:
+            raise ValueError("attempt item replay mismatch on step_index")
+
+    from src.platform.aws import run_registry
+
+    monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")
+    monkeypatch.setenv("LOCKS_TABLE_NAME", "locks")
+    monkeypatch.setattr(
+        render_handler.boto3,
+        "resource",
+        lambda _service: SimpleNamespace(Table=lambda _name: object()),
+    )
+    monkeypatch.setattr(render_handler.run_lock, "release", lambda *_args: None)
+    monkeypatch.setattr(run_registry, "put_folder_record", replay_folder_attempt)
+    monkeypatch.setattr(run_registry, "update_run_status", lambda *_args, **_kwargs: None)
+
+    result = render_handler.handler(
+        {
+            "run_id": run_id,
+            "webhook_info": {
+                "repo_name": "williaumwu/openci-test-gitops",
+                "notification_target": {"type": "registry"},
+            },
+            "notification_target": {"type": "registry"},
+            "action": "plan",
+            "outcomes": [
+                {
+                    "folder": folder,
+                    "account_id": account_id,
+                    "execution_id": execution_id,
+                    "output": {
+                        "exec_id": execution_id,
+                        "succeeded": True,
+                        "attempt": 0,
+                        "manifest_s3_uri": f"s3://tmp/{folder}/manifest.json",
+                        "manifest_sha256": "a" * 64,
+                    },
+                    "step_index": step_index,
+                }
+                for step_index, (folder, execution_id) in enumerate(
+                    zip(folders, execution_ids, strict=True)
+                )
+            ],
+            "skipped": [],
+        },
+        object(),
+    )
+
+    assert result["registry_only"] is True
+    assert [item["step_index"] for item in attempt_items.values()] == [1, 2]
 
 
 def test_confirmed_pipeline_apply_step_index_matches_between_collect_and_render_replay() -> None:

@@ -160,6 +160,7 @@ resource "aws_sfn_state_machine" "this" {
             "deadline_at.$"        = "$.deadline_at"
             "submitted_at.$"       = "$.probe.submitted_at"
             "source_plan_run_id.$" = "$.source_plan_run_id"
+            "step_index.$"         = "$.step_index"
           }
           Retry = [{ ErrorEquals = ["States.ALL"], IntervalSeconds = 1, MaxAttempts = 3, BackoffRate = 2.0 }]
           Catch = [{ ErrorEquals = ["States.ALL"], ResultPath = "$.error", Next = "WriteFailureManifest" }]
@@ -186,6 +187,7 @@ resource "aws_sfn_state_machine" "this" {
             "run_id.$"             = "$.run_id"
             "deadline_at.$"        = "$.deadline_at"
             "submitted_at.$"       = "$.probe.submitted_at"
+            "step_index.$"         = "$.step_index"
           }
           Retry = [{ ErrorEquals = ["States.ALL"], IntervalSeconds = 1, MaxAttempts = 3, BackoffRate = 2.0 }]
           Catch = [{ ErrorEquals = ["States.ALL"], ResultPath = "$.error", Next = "WriteFailureManifest" }]

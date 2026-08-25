@@ -41,11 +41,12 @@ def test_collect_forwards_pipeline_step_index() -> None:
     read_collect = load_rendered_run_folder_definition("read")["States"]["Collect"][
         "Parameters"
     ]
-    apply_collect = load_rendered_run_folder_definition("apply")["States"][
-        "CollectMutation"
-    ]["Parameters"]
+    for lane in ("apply", "destroy"):
+        mutation_collect = load_rendered_run_folder_definition(lane)["States"][
+            "CollectMutation"
+        ]["Parameters"]
+        assert mutation_collect["step_index.$"] == "$.step_index"
     assert read_collect["step_index.$"] == "$.step_index"
-    assert apply_collect["step_index.$"] == "$.step_index"
 
 
 def test_each_graph_embeds_only_its_lane_actions() -> None:

@@ -54,6 +54,7 @@
         "pointers.$": "$.probe.pointers",
         "repo_name.$": "$.repo_name",
         "run_id.$": "$.run_id",
+        "step_index.$": "$.step_index",
         "steps.$": "$.probe.steps",
         "submitted_at.$": "$.probe.submitted_at",
         "succeeded.$": "$.probe.succeeded"
