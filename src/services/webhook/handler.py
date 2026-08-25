@@ -12,7 +12,8 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from src.core.logging import get_logger
 from src.domain.authorization import can_trigger
-from src.domain.command.grammar import ParseError, parse_command
+from src.domain.command.grammar import ParseError, parse_command, unknown_verb_in_comment
+from src.domain.formatters.intent import unknown_verb_refusal_comment
 from src.domain.engine.invocation_id import (
     InvalidInvocationIdentityError,
     extract_delivery_id,
@@ -28,6 +29,7 @@ from src.services.webhook.parse_event import (
     extract_normalized_event,
     parse_github_event,
 )
+from src.services.webhook.pr_comment import post_pr_comment
 from src.services.webhook.run_request import github_run_request
 from src.services.webhook.validate import verify_signature
 
@@ -100,6 +102,14 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return _response(400, {"error": "missing GitHub delivery id"})
     parsed = _command_from_info(info)
     if parsed is None:
+        if info.event_type == "issue_comment":
+            unknown_verb = unknown_verb_in_comment(info.comment_body or "")
+            if unknown_verb is not None and info.pr_number is not None:
+                post_pr_comment(
+                    {"pr_number": info.pr_number, "repo_name": info.repo_name},
+                    {"ssm_openci_tf_github_token": settings.ssm_openci_tf_github_token},
+                    unknown_verb_refusal_comment(unknown_verb),
+                )
         return _response(200, {"message": "Event ignored"})
     action, folders, all_flag, affected_flag, pipeline, pipeline_step = parsed
     if action in {"apply", "destroy"}:

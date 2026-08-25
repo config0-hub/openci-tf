@@ -3,7 +3,13 @@
 """Render intent confirmation comments."""
 from __future__ import annotations
 
+from src.domain.command.grammar import accepted_verbs
 from src.domain.intent.models import IntentGateFailure, IntentRecord
+
+
+def unknown_verb_refusal_comment(verb: str) -> str:
+    verbs = ", ".join(accepted_verbs())
+    return f"## tf {verb} refused\n\n- Unknown verb `{verb}`. Accepted verbs: {verbs}"
 
 
 def intent_failure_comment(action: str, failures: list[IntentGateFailure]) -> str:

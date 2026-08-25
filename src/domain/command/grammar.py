@@ -11,6 +11,22 @@ class ParseError(ValueError):
 
 
 _PUBLIC_VERBS = frozenset({"plan", "drift", "report", "apply", "destroy"})
+
+
+def accepted_verbs() -> tuple[str, ...]:
+    return tuple(sorted(_PUBLIC_VERBS))
+
+
+def unknown_verb_in_comment(text: str) -> str | None:
+    tokens = text.strip().split()
+    if len(tokens) < 2 or tokens[0].lower() != "tf":
+        return None
+    verb = tokens[1].lower()
+    if verb in _PUBLIC_VERBS:
+        return None
+    return verb
+
+
 _CONFIRM_TOKEN = re.compile(r"^[0-9a-f]{6,8}$")
 _PIPELINE_NAME = re.compile(r"^[A-Za-z0-9_./-]+$")
 _PIPELINE_STEP = re.compile(r"^[1-9][0-9]*$")

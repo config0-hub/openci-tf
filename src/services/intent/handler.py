@@ -14,17 +14,13 @@ from src.platform.aws.ssm import get_github_token
 from src.platform.github.client import GitHubClient
 from src.services.intent.confirm import confirm_intent
 from src.services.intent.create import IntentCreationError, create_intent
+from src.services.webhook.pr_comment import post_pr_comment
 
 logger = get_logger(__name__)
 
 
 def _post_comment(webhook_info: dict[str, Any], settings: dict[str, Any], body: str) -> None:
-    pr_number = webhook_info.get("pr_number")
-    repo = webhook_info.get("repo_name")
-    if not isinstance(pr_number, int) or not isinstance(repo, str):
-        return
-    token = get_github_token(settings["ssm_openci_tf_github_token"])
-    GitHubClient(token).create_comment(repo, pr_number, body)
+    post_pr_comment(webhook_info, settings, body)
 
 
 def _current_pr_head_sha(settings: dict[str, Any], repo: str, pr_number: int) -> str:
