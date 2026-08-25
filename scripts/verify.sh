@@ -8,6 +8,10 @@ set -euo pipefail
 
 MODE="${1:?Usage: verify.sh present|clean}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=account_bucket_exists.sh
+source "$SCRIPT_DIR/account_bucket_exists.sh"
+# shellcheck source=product_log_groups.sh
+source "$SCRIPT_DIR/product_log_groups.sh"
 # ref 4353245 - openci-tf remote executor consistency naming
 PROJECT="${OPENCI_TF_PROJECT:-openci-tf}"
 ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
@@ -225,24 +229,7 @@ check_role() { # <description> <want:0|1> <role_name>
   fi
 }
 
-# Global engine bucket names (openci-tf-internal, openci-tf-done) live only in the
-# hub account. head-bucket from another account returns 403 Forbidden, not 404.
-# list-buckets scopes the probe to buckets owned by this account.
-bucket_exists() {
-  local name="$1" found err
-  err="$(mktemp)"
-  if ! found="$(aws s3api list-buckets --query "Buckets[?Name=='${name}'].Name" --output text 2>"$err")"; then
-    cat "$err" >&2
-    rm -f "$err"
-    return 254
-  fi
-  rm -f "$err"
-  if [ -n "$found" ] && [ "$found" != "None" ]; then
-    return 0
-  fi
-  echo "NoSuchBucket: ${name} not in this account" >&2
-  return 1
-}
+bucket_exists() { account_bucket_exists "$1"; }
 lambda_exists() { aws lambda get-function --function-name "$1"; }
 role_probe() { "$SCRIPT_DIR/role_probe.sh" "$1"; }
 boundary_policy_probe() { "$SCRIPT_DIR/boundary_policy_probe.sh" "$1" "$ACCOUNT_ID"; }
@@ -259,6 +246,21 @@ ssm_params_exist() {
     total=$((total + n))
   done
   [ "$total" != "0" ] || { echo "ParameterNotFound: no parameters under /openci-tf/install/{openci-tf,engine}" >&2; return 1; }
+}
+ssm_prefix_params_exist() { # <prefix>
+  local prefix="$1" n
+  n="$(aws ssm get-parameters-by-path --path "$prefix" --recursive --query 'length(Parameters)' --output text)" || return 2
+  [ "$n" != "0" ] || { echo "ParameterNotFound: no parameters under ${prefix}" >&2; return 1; }
+}
+log_group_exists() {
+  local name="$1" found
+  found="$(aws logs describe-log-groups --log-group-name-prefix "$name" --limit 1 \
+    --query 'logGroups[?logGroupName==`'"$name"'`].logGroupName' --output text)"
+  if [ -n "$found" ] && [ "$found" != "None" ]; then
+    return 0
+  fi
+  echo "ResourceNotFoundException: log group ${name}" >&2
+  return 1
 }
 source_copy_exists() { aws s3api head-object --bucket "$STATE_BUCKET" --key "source/$1/manifest.json"; }
 state_object_status() {
@@ -411,6 +413,10 @@ if [ "$MODE" = "present" ]; then
   for r in executor-local executor-remote; do
     optional_present_role "legacy role ${PROJECT}-${r}" "${PROJECT}-${r}"
   done
+else
+  for r in executor-local executor-remote; do
+    check_role "legacy role ${PROJECT}-${r}" "$WANT" "${PROJECT}-${r}"
+  done
 fi
 
 verify_poweruser_footprint
@@ -419,6 +425,20 @@ check "ECR repository ${PROJECT}" "$WANT" aws ecr describe-repositories --reposi
 
 # SSM install config
 check "SSM install parameters" "$WANT" ssm_params_exist
+
+if [ "$MODE" = "clean" ]; then
+  for prefix in \
+    /openci-tf/clone-token \
+    /openci-tf/env \
+    /openci-tf/infracost \
+    /openci-tf/webhook; do
+    check "SSM operator parameters under ${prefix}" "$WANT" ssm_prefix_params_exist "$prefix"
+  done
+  while IFS= read -r log_group; do
+    [ -n "$log_group" ] || continue
+    check "log group ${log_group}" "$WANT" log_group_exists "$log_group"
+  done < <(product_log_group_names "$PROJECT")
+fi
 
 # KMS keys cannot be deleted immediately: terraform destroy only SCHEDULES
 # deletion (default 30 days). In clean mode, report such residuals explicitly

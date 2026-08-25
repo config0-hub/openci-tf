@@ -1143,8 +1143,72 @@ def test_verify_uses_canonical_engine_source_and_bucket_names():
     assert "bootstrap foundation deploy target-connect engine-02-deploy" not in script
     assert 'for b in internal "done"; do' in script
     assert "engine bucket ${PROJECT}-${b}-${ACCOUNT_ID}" not in script
-    assert "list-buckets" in script
-    assert "not in this account" in script
+    assert "account_bucket_exists.sh" in script
+
+
+def test_account_bucket_exists_reports_present_absent_and_list_errors(tmp_path: Path):
+    repo_root = Path(__file__).parents[2]
+    helper = repo_root / "scripts/account_bucket_exists.sh"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+
+    def write_fake_aws(mode: str) -> None:
+        (bin_dir / "aws").write_text(
+            f"""#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *"list-buckets"*)
+    case "{mode}" in
+      present) echo "openci-tf-internal" ;;
+      absent) echo "" ;;
+      error)
+        echo "AccessDenied: blocked" >&2
+        exit 254
+        ;;
+    esac
+    ;;
+  *)
+    echo "unexpected aws call: $*" >&2
+    exit 99
+    ;;
+esac
+"""
+        )
+        (bin_dir / "aws").chmod(0o755)
+
+    env = os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}"}
+
+    write_fake_aws("present")
+    present = subprocess.run(
+        ["bash", "-c", f'source "{helper}"; account_bucket_exists openci-tf-internal'],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert present.returncode == 0, present.stderr
+
+    write_fake_aws("absent")
+    absent = subprocess.run(
+        ["bash", "-c", f'source "{helper}"; account_bucket_exists openci-tf-internal'],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert absent.returncode == 1
+    assert "not in this account" in absent.stderr
+
+    write_fake_aws("error")
+    error = subprocess.run(
+        ["bash", "-c", f'source "{helper}"; account_bucket_exists openci-tf-internal'],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert error.returncode == 254
+    assert "AccessDenied" in error.stderr
 
 
 def test_upload_source_excludes_untracked_and_value_bearing_files(tmp_path):
@@ -1317,6 +1381,210 @@ def test_api_repository_lookup_does_not_decrypt_webhook_secret(monkeypatch):
         Path(__file__).parents[2] / "src/services/orchestration/start_run.py"
     ).read_text()
     assert "get_repo_settings(request.trigger_id, with_webhook_secret=False)" in source
+
+
+def test_cleanup_operator_footprint_deletes_product_log_groups_and_operator_ssm():
+    repo_root = Path(__file__).parents[2]
+    cleanup = (repo_root / "scripts/cleanup_operator_footprint.sh").read_text()
+    log_groups = (repo_root / "scripts/product_log_groups.sh").read_text()
+    assert "product_log_groups.sh" in cleanup
+    assert "product_log_group_names" in cleanup
+    for token in (
+        "init-job",
+        "worker",
+        "finalizer",
+        "/aws/codebuild/",
+        "/aws/vendedlogs/states/",
+        "run-folder",
+    ):
+        assert token in log_groups
+    for prefix in (
+        "/openci-tf/clone-token",
+        "/openci-tf/env",
+        "/openci-tf/infracost",
+        "/openci-tf/webhook",
+    ):
+        assert prefix in cleanup
+    assert "delete_legacy_role_if_exists" in cleanup
+    assert "executor-local" in cleanup
+    assert "executor-remote" in cleanup
+
+
+def test_justfile_uninstall_and_bootstrap_destroy_invoke_operator_cleanup():
+    justfile = (Path(__file__).parents[2] / "justfile").read_text()
+    uninstall = justfile.split("uninstall:", 1)[1].split("verify:", 1)[0]
+    bootstrap = justfile.split("bootstrap-destroy:", 1)[1].split("foundation:", 1)[0]
+    assert "./scripts/cleanup_operator_footprint.sh" in uninstall
+    assert "./scripts/cleanup_operator_footprint.sh" in bootstrap
+
+
+def test_deploy_destroy_unlocks_stale_terraform_lock_before_destroy():
+    justfile = (Path(__file__).parents[2] / "justfile").read_text()
+    section = justfile.split("deploy-destroy:", 1)[1].split("target-create-aws-readonly", 1)[0]
+    unlock_index = section.index("./scripts/terraform_unlock_stale_lock.sh")
+    destroy_index = section.index("terraform -chdir=infra/deploy destroy")
+    assert unlock_index < destroy_index
+
+
+def test_verify_clean_checks_operator_ssm_log_groups_and_legacy_roles():
+    script = (Path(__file__).parents[2] / "scripts/verify.sh").read_text()
+    assert "product_log_groups.sh" in script
+    assert "ssm_prefix_params_exist" in script
+    for prefix in (
+        "/openci-tf/clone-token",
+        "/openci-tf/env",
+        "/openci-tf/infracost",
+        "/openci-tf/webhook",
+    ):
+        assert prefix in script
+    assert 'check "log group ${log_group}"' in script
+    assert "product_log_group_names" in script
+    assert 'check_role "legacy role ${PROJECT}-${r}"' in script
+
+
+def test_terraform_unlock_stale_lock_reports_lock_with_force_unlock_command(
+    tmp_path: Path,
+):
+    repo_root = Path(__file__).parents[2]
+    script = repo_root / "scripts/terraform_unlock_stale_lock.sh"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    unlock_log = tmp_path / "unlock.log"
+
+    (bin_dir / "aws").write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *"dynamodb get-item"*)
+    cat <<'JSON'
+{"Item":{"Info":{"S":"{\\"ID\\":\\"c5bcf01c-1ebf-b1e3-9f3a-55a995eef2cc\\",\\"Created\\":\\"2020-01-01T00:00:00Z\\",\\"Who\\":\\"test@host\\",\\"Operation\\":\\"OperationTypeApply\\"}"}}}
+JSON
+    ;;
+  *)
+    echo "unexpected aws call: $*" >&2
+    exit 99
+    ;;
+esac
+"""
+    )
+    (bin_dir / "terraform").write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >>"{unlock_log}"
+"""
+    )
+    (bin_dir / "aws").chmod(0o755)
+    (bin_dir / "terraform").chmod(0o755)
+
+    env = os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}", "AWS_REGION": "us-east-1"}
+    completed = subprocess.run(
+        [
+            "bash",
+            str(script),
+            "infra/deploy",
+            "openci-tf-state-123456789012",
+            "deploy",
+            "openci-tf-tf-locks",
+        ],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 1, completed.stdout
+    assert "terraform -chdir=infra/deploy force-unlock c5bcf01c-1ebf-b1e3-9f3a-55a995eef2cc" in completed.stderr
+    assert "test@host" in completed.stderr
+    assert not unlock_log.exists()
+
+
+def test_terraform_unlock_stale_lock_exits_zero_when_no_lock(tmp_path: Path):
+    repo_root = Path(__file__).parents[2]
+    script = repo_root / "scripts/terraform_unlock_stale_lock.sh"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+
+    (bin_dir / "aws").write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *"dynamodb get-item"*)
+    echo null
+    ;;
+  *)
+    echo "unexpected aws call: $*" >&2
+    exit 99
+    ;;
+esac
+"""
+    )
+    (bin_dir / "aws").chmod(0o755)
+
+    env = os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}", "AWS_REGION": "us-east-1"}
+    completed = subprocess.run(
+        [
+            "bash",
+            str(script),
+            "infra/deploy",
+            "openci-tf-state-123456789012",
+            "deploy",
+            "openci-tf-tf-locks",
+        ],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_terraform_unlock_stale_lock_fails_with_exact_command_for_fresh_lock(
+    tmp_path: Path,
+):
+    repo_root = Path(__file__).parents[2]
+    script = repo_root / "scripts/terraform_unlock_stale_lock.sh"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+
+    (bin_dir / "aws").write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *"dynamodb get-item"*)
+    cat <<'JSON'
+{"Item":{"Info":{"S":"{\\"ID\\":\\"fresh-lock-id\\",\\"Created\\":\\"2099-01-01T00:00:00Z\\",\\"Who\\":\\"test@host\\",\\"Operation\\":\\"OperationTypeApply\\"}"}}}
+JSON
+    ;;
+  *)
+    echo "unexpected aws call: $*" >&2
+    exit 99
+    ;;
+esac
+"""
+    )
+    (bin_dir / "terraform").write_text("#!/usr/bin/env bash\nexit 99\n")
+    (bin_dir / "aws").chmod(0o755)
+    (bin_dir / "terraform").chmod(0o755)
+
+    env = os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}", "AWS_REGION": "us-east-1"}
+    completed = subprocess.run(
+        [
+            "bash",
+            str(script),
+            "infra/deploy",
+            "openci-tf-state-123456789012",
+            "deploy",
+            "openci-tf-tf-locks",
+        ],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode != 0
+    assert "terraform -chdir=infra/deploy force-unlock fresh-lock-id" in completed.stderr
 
 
 def test_presign_put_sets_content_type_for_text_artifacts(monkeypatch):

@@ -1,4 +1,6 @@
 # PUBLIC kit-synced modules: UpAgent work dispatch, Herdr transport tools, and run control.
+# Worktrees: imported modules live in gitignored .shared-llm; symlink before just recipes:
+#   ln -sfn ../openci-tf/.shared-llm .shared-llm
 import '.shared-llm/public/extensions/common/upagent/justfile'
 import '.shared-llm/public/extensions/common/herdr/justfile'
 import '.shared-llm/public/extensions/common/runner/justfile'
@@ -161,6 +163,7 @@ bootstrap-destroy:
     else
         echo "no state bucket, local state, or lock table; nothing to destroy"
     fi
+    ./scripts/cleanup_operator_footprint.sh
     # Post-destroy verification on EVERY path: both resources must be gone,
     # and an indeterminate probe (403/expired STS) must fail, not pass.
     set +e; ./scripts/bucket_exists.sh "$BUCKET"; post_bucket_rc=$?; set -e
@@ -288,6 +291,7 @@ deploy-destroy:
     ./scripts/write_tfvars.sh infra/deploy "aws_region={{OPENCI_TF_REGION}}" "image_tag=${IMAGE_TAG}" "target_account_ids=${TARGET_ACCOUNT_IDS}" "run_history_retention_days=${RUN_HISTORY_RETENTION_DAYS}" "run_folder_max_concurrency=${RUN_FOLDER_MAX_CONCURRENCY}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_lifecycle_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}" "api_caller_policy_json=${API_CALLER_POLICY_JSON}" "provision_legacy_executor_local=${PROVISION_LEGACY_EXECUTOR_LOCAL}" "enable_apply=${ENABLE_APPLY}" "aws_console_start_url=${AWS_CONSOLE_START_URL}" "aws_console_role_name=${AWS_CONSOLE_ROLE_NAME}"
     ./scripts/generate_backend.sh "$BUCKET" deploy "{{OPENCI_TF_REGION}}" infra/deploy "{{OPENCI_TF_PROJECT}}-tf-locks"
     terraform -chdir=infra/deploy init -reconfigure -input=false
+    ./scripts/terraform_unlock_stale_lock.sh infra/deploy "$BUCKET" deploy "{{OPENCI_TF_PROJECT}}-tf-locks"
     terraform -chdir=infra/deploy destroy -input=false -auto-approve
 
 # Target account: provision or remove the executor-readonly role only.
@@ -459,6 +463,7 @@ uninstall:
     fi
     ./scripts/ssm_config.sh delete-all
     SSM_CONFIG_PROJECT=engine ./scripts/ssm_config.sh delete-all
+    ./scripts/cleanup_operator_footprint.sh
     echo "uninstall complete — run 'just verify-clean'"
 
 verify:
