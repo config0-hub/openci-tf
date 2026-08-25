@@ -225,7 +225,24 @@ check_role() { # <description> <want:0|1> <role_name>
   fi
 }
 
-bucket_exists() { aws s3api head-bucket --bucket "$1"; }
+# Global engine bucket names (openci-tf-internal, openci-tf-done) live only in the
+# hub account. head-bucket from another account returns 403 Forbidden, not 404.
+# list-buckets scopes the probe to buckets owned by this account.
+bucket_exists() {
+  local name="$1" found err
+  err="$(mktemp)"
+  if ! found="$(aws s3api list-buckets --query "Buckets[?Name=='${name}'].Name" --output text 2>"$err")"; then
+    cat "$err" >&2
+    rm -f "$err"
+    return 254
+  fi
+  rm -f "$err"
+  if [ -n "$found" ] && [ "$found" != "None" ]; then
+    return 0
+  fi
+  echo "NoSuchBucket: ${name} not in this account" >&2
+  return 1
+}
 lambda_exists() { aws lambda get-function --function-name "$1"; }
 role_probe() { "$SCRIPT_DIR/role_probe.sh" "$1"; }
 boundary_policy_probe() { "$SCRIPT_DIR/boundary_policy_probe.sh" "$1" "$ACCOUNT_ID"; }

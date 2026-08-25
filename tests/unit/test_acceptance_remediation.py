@@ -1143,6 +1143,8 @@ def test_verify_uses_canonical_engine_source_and_bucket_names():
     assert "bootstrap foundation deploy target-connect engine-02-deploy" not in script
     assert 'for b in internal "done"; do' in script
     assert "engine bucket ${PROJECT}-${b}-${ACCOUNT_ID}" not in script
+    assert "list-buckets" in script
+    assert "not in this account" in script
 
 
 def test_upload_source_excludes_untracked_and_value_bearing_files(tmp_path):
