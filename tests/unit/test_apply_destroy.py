@@ -487,6 +487,120 @@ def test_apply_pipeline_intent_scopes_record_to_requested_step(monkeypatch):
     assert stored[0].folders == ("infra/rds", "infra/ec2")
 
 
+def _us08_two_step_pipeline() -> Pipeline:
+    return Pipeline(
+        name="primary-msg",
+        steps=(
+            Step(("terraform/primary/ap-northeast-1/03-sqs",)),
+            Step(("terraform/primary/ap-northeast-1/06-sns-topic",)),
+        ),
+    )
+
+
+def _us08_two_step_configs() -> dict[str, FolderConfig]:
+    return {
+        folder: FolderConfig(account_alias="target", apply=MutationVerbConfig(allow=True))
+        for folder in [
+            "terraform/primary/ap-northeast-1/03-sqs",
+            "terraform/primary/ap-northeast-1/06-sns-topic",
+        ]
+    }
+
+
+def test_pipeline_apply_step_2_succeeds_without_replan_after_step_1_apply(monkeypatch):
+    step1 = "terraform/primary/ap-northeast-1/03-sqs"
+    step2 = "terraform/primary/ap-northeast-1/06-sns-topic"
+    plan_run_id = "1787688123671.7e34ddd6"
+    stored: list[IntentRecord] = []
+
+    def fake_lookup(**kwargs):
+        folder = kwargs["folder"]
+        if folder == step1:
+            return PlanLookupResult(match=None, stale=True)
+        if folder == step2:
+            return PlanLookupResult(
+                match={
+                    "run_id": plan_run_id,
+                    "folder": step2,
+                    "plan_sha256": "a" * 64,
+                    "plan_artifact_name": "plan.tfplan",
+                    "tf_runtime": "terraform",
+                }
+            )
+        return PlanLookupResult(match=None)
+
+    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
+    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create._pipeline_for_intent",
+        lambda **_kwargs: (_us08_two_step_pipeline(), _us08_two_step_configs(), "p" * 64),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.find_latest_successful_pipeline_apply",
+        lambda **_kwargs: {"pipeline_sha256": "p" * 64},
+    )
+    monkeypatch.setattr(
+        "src.domain.intent.gates.load_account_alias",
+        lambda alias: SimpleNamespace(
+            account_id="123456789012",
+            role_name="openci-tf-executor-readonly",
+            poweruser_role_name="openci-tf-executor-poweruser",
+            external_id="openci-tf-0123456789abcdef",
+            max_ttl=3600,
+            enable_apply=True,
+        ),
+    )
+    monkeypatch.setattr("src.domain.intent.gates.find_newest_fresh_plan_run", fake_lookup)
+    monkeypatch.setattr("src.services.intent.create.put_intent", lambda record: stored.append(record))
+
+    failure, record = create_intent(
+        action="apply",
+        folders=[],
+        trigger_id="t",
+        pr_number=1,
+        commit_hash="a" * 40,
+        pipeline="primary-msg",
+        pipeline_step=2,
+    )
+
+    assert failure is None
+    assert record is not None
+    assert record["folders"] == [step2]
+    assert record["source_run_id"] == plan_run_id
+    assert stored[0].folders == (step2,)
+
+
+def test_pipeline_apply_step_2_refused_when_step_1_not_applied(monkeypatch):
+    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
+    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create._pipeline_for_intent",
+        lambda **_kwargs: (_us08_two_step_pipeline(), _us08_two_step_configs(), "p" * 64),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.find_latest_successful_pipeline_apply",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "src.domain.intent.gates.find_newest_fresh_plan_run",
+        lambda **_kwargs: pytest.fail("missing step 1 anchor must reject before plan lookup"),
+    )
+
+    failure, record = create_intent(
+        action="apply",
+        folders=[],
+        trigger_id="t",
+        pr_number=1,
+        commit_hash="a" * 40,
+        pipeline="primary-msg",
+        pipeline_step=2,
+    )
+
+    assert record is None
+    assert failure is not None
+    assert failure.message == "pipeline primary-msg step 2 requires a completed apply of step 1 first"
+
+
 def test_apply_pipeline_intent_rejects_pipeline_hash_mismatch(monkeypatch):
     monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
     monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")

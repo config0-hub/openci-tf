@@ -55,8 +55,13 @@ If the canonical parsed pipeline changed since that prior step, restart from
 step 1. Applying step `n` after step `n-1`'s run has aged out of the
 run-history retention window (default 90 days, `RUN_HISTORY_RETENTION_DAYS`)
 requires restarting the pipeline from step 1, since the step-order anchor is a
-run-registry record. After `tf apply confirm <token>` succeeds, the comment ends
-with `next: tf apply pipeline X step 2` until the last step. The final step says
+run-registry record. For step `n > 1`, the preliminary gate checks only folders
+in steps `n` and later. Folders from earlier steps are not re-checked for a
+fresh plan because their successful apply already superseded the pipeline plan
+for that folder. Step `n` still uses the per-folder plan from the original
+pipeline plan run when that folder has not been applied since that plan. After
+`tf apply confirm <token>` succeeds, the comment ends with
+`next: tf apply pipeline X step 2` until the last step. The final step says
 `pipeline X complete (N steps)`. Locks are held only for the current apply step.
 
 ## User-visible errors

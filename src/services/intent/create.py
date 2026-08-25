@@ -11,7 +11,7 @@ from src.core.errors import ConfigResolutionError, ConfigValidationError
 from src.core.models import FolderConfig, RepoSettings
 from src.domain.config.outer_state import discover_folders, resolve_outer_state
 from src.domain.config.pipeline import Pipeline, canonical_pipeline_sha256, load_pipeline
-from src.domain.intent.gates import evaluate_intent_gates
+from src.domain.intent.gates import evaluate_intent_gates, folders_for_pipeline_apply_gate
 from src.domain.intent.models import IntentGateFailure
 from src.platform.aws.dynamo import get_repo_settings
 from src.platform.aws.ssm import get_github_token
@@ -139,10 +139,10 @@ def _create_pipeline_apply_intent(
                 ),
                 None,
             )
-    all_folders = [folder for step in pipeline.steps for folder in step.folders]
+    gate_folders = folders_for_pipeline_apply_gate(pipeline, pipeline_step)
     all_gates = evaluate_intent_gates(
         action=action,
-        folders=all_folders,
+        folders=gate_folders,
         folder_configs=folder_configs,
         settings=settings,
         pr_number=pr_number,

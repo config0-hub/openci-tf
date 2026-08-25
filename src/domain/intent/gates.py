@@ -8,6 +8,7 @@ from typing import Protocol
 
 from src.core.errors import ConfigValidationError
 from src.core.models import FolderConfig, RepoSettings
+from src.domain.config.pipeline import Pipeline
 from src.domain.accounts.aliases import AccountAlias, load_account_alias
 from src.domain.accounts.binding import account_binding_from_alias
 from src.domain.intent.models import (
@@ -23,6 +24,19 @@ from src.domain.intent.token import mint_token
 class _ApprovalClient(Protocol):
     def pr_has_approved_review(self, repo: str, pr_number: int) -> bool:
         ...
+
+
+def folders_for_pipeline_apply_gate(pipeline: Pipeline, pipeline_step: int) -> list[str]:
+    """Return folders checked by the preliminary gate before creating a pipeline apply intent."""
+    if pipeline_step < 1:
+        raise ValueError("pipeline_step must be an integer >= 1")
+    if pipeline_step == 1:
+        return [folder for step in pipeline.steps for folder in step.folders]
+    return [
+        folder
+        for step in pipeline.steps[pipeline_step - 1 :]
+        for folder in step.folders
+    ]
 
 
 def _folder_config_allows(action: str, config: FolderConfig) -> bool:
