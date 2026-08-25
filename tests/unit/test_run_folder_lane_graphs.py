@@ -37,6 +37,17 @@ def test_mutation_graph_contains_no_read_collector_or_safe_variants(lane: str) -
         assert "Collect" not in _transition_targets(state)
 
 
+def test_collect_forwards_pipeline_step_index() -> None:
+    read_collect = load_rendered_run_folder_definition("read")["States"]["Collect"][
+        "Parameters"
+    ]
+    apply_collect = load_rendered_run_folder_definition("apply")["States"][
+        "CollectMutation"
+    ]["Parameters"]
+    assert read_collect["step_index.$"] == "$.step_index"
+    assert apply_collect["step_index.$"] == "$.step_index"
+
+
 def test_each_graph_embeds_only_its_lane_actions() -> None:
     expected = {
         "read": {"plan", "plan_destroy", "drift", "report"},
