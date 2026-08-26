@@ -314,6 +314,7 @@ Every component also has an individual `<name>-destroy` recipe.
 Store the webhook secret, the repository-scoped GitHub control PAT, and any
 private-module token as separate SSM/KMS SecureStrings, then run
 `just register-repo`, `just register-account`, and `just create-webhook`;
+register only private repositories (see [docs/GITHUB_WEBHOOK.md](GITHUB_WEBHOOK.md#private-repositories-only));
 never pass secret values on the command line. The control PAT must be a
 fine-grained PAT scoped to **Only selected repositories** for the registered
 repo, with Metadata read, Contents read, Pull requests read, and Issues
