@@ -36,7 +36,6 @@ Limits and rejects:
 
 - `tf plan pipeline <name>`
 - `tf plan --destroy pipeline <name>`
-- `tf drift pipeline <name>`
 - `tf apply pipeline <name> [step <n>]`
 - `tf apply confirm <token>`
 
@@ -44,11 +43,11 @@ Limits and rejects:
 
 Multi-folder `plan`, `report`, and pipeline read-only runs post a summary table on the
 pull request. The third column is **Plan** and shows each folder's plan delta as
-`+add ~change -destroy` counts, or `no changes` when the plan is empty. `tf drift`
-and `tf drift pipeline` runs use **Drift Check** instead, with `clean` or `changes`
+`+add ~change -destroy` counts, or `no changes` when the plan is empty. API
+`drift` and pipeline drift runs use **Drift Check** instead, with `clean` or `changes`
 from the authoritative drift result. Security and Cost columns are unchanged.
 
-Read-only runs (`plan`, `plan --destroy`, `drift`) validate the whole pipeline,
+Read-only runs (`plan`, `plan --destroy`) validate the whole pipeline,
 lock every folder up front, then run step by step. `tf plan --destroy pipeline X`
 runs the steps in reverse order. A failed step stops later steps and the summary
 marks them `not run`.

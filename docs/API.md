@@ -53,8 +53,9 @@ Pipeline run:
 `folder_mode` is `all` or `explicit` for service/API callers. For pipeline runs,
 `pipeline` is mutually exclusive with `folders`; `folder_mode` may be omitted or
 set to `pipeline`. API callers can create `plan`, `drift`, and `report` runs, but
-`report` is not supported for pipelines. GitHub webhook ingress may also use
-`affected`, which resolves folders from the pinned pull request changed-file list.
+`report` is not supported for pipelines. GitHub webhook ingress uses `explicit`
+folder selection from parsed `tf plan <folder-or-csv>` and
+`tf plan --destroy <folder-or-csv>` comments only.
 
 ## Retention
 

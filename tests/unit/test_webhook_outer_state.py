@@ -7,6 +7,8 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from src.core.models import RepoSettings
 from src.domain.engine.outer_map_state import merge_map_item
 from src.services.resolve import validate_and_resolve
@@ -194,14 +196,15 @@ def test_webhook_rejects_bad_delivery_header(monkeypatch):
     assert started == []
 
 
-def _pull_request_event(*, delivery: str | None = _GUID_A, request_id: str | None = None) -> dict[str, object]:
-    headers = {"X-GitHub-Event": "pull_request", "X-GitHub-Delivery": delivery} if delivery else {"X-GitHub-Event": "pull_request"}
-    event = {
-        "httpMethod": "POST",
-        "pathParameters": {"trigger_id": "trigger"},
+def _pull_request_event(*, delivery: str | None = _GUID_A, action: str = "synchronize") -> dict[str, object]:
+    headers = {"X-GitHub-Event": "pull_request"}
+    if delivery is not None:
+        headers["X-GitHub-Delivery"] = delivery
+    return {
+        "trigger_id": "trigger",
         "headers": headers,
         "body": json.dumps({
-            "action": "synchronize",
+            "action": action,
             "pull_request": {
                 "number": 7,
                 "user": {"login": "alice"},
@@ -211,100 +214,27 @@ def _pull_request_event(*, delivery: str | None = _GUID_A, request_id: str | Non
             "repository": {"full_name": "org/repo"},
         }),
     }
-    if request_id is not None:
-        event["requestContext"] = {"requestId": request_id}
-    return event
 
 
-def test_pull_request_auto_plan_uses_affected_selection(tmp_path, monkeypatch):
-    clone_dir = _repository(tmp_path)
-    monkeypatch.setenv("LOCKS_TABLE_NAME", "locks")
-    monkeypatch.setattr(validate_and_resolve.boto3, "resource", lambda *_: SimpleNamespace(Table=lambda _: object()))
-    monkeypatch.setattr(validate_and_resolve, "get_github_token", lambda _: "token")
-    monkeypatch.setattr(validate_and_resolve, "shallow_clone", lambda *_args, **_kwargs: clone_dir)
-    monkeypatch.setattr(validate_and_resolve, "cleanup_clone", lambda _: None)
-    monkeypatch.setattr(validate_and_resolve.run_lock, "acquire", lambda *_: None)
-    monkeypatch.setattr(
-        validate_and_resolve.GitHubClient,
-        "__init__",
-        lambda self, token: None,
-    )
-    monkeypatch.setattr(
-        validate_and_resolve.GitHubClient,
-        "get_pr_head_sha",
-        lambda self, repo, pr_number: _FULL_SHA,
-    )
-    monkeypatch.setattr(
-        validate_and_resolve.GitHubClient,
-        "get_pr_changed_files",
-        lambda self, repo, pr_number, *, max_files=None: [{"filename": "infra/vpc/main.tf", "status": "modified"}],
-    )
-    _mock_account_alias(monkeypatch)
+@pytest.mark.parametrize("action", ["opened", "synchronize"])
+def test_pull_request_events_are_ignored_without_starting_run(monkeypatch, action):
+    started = _wire_webhook(monkeypatch, "")
+    response = webhook.handler(_pull_request_event(action=action), None)
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["message"] == "Event ignored"
+    assert body["reason"] == "pull_request_event"
+    assert started == []
 
+
+def test_pull_request_parse_command_returns_noop():
     parsed = parse_command({
         "webhook_info": {"event_type": "pull_request", "comment_body": ""},
         "settings": {},
     }, None)
-    assert parsed["affected_flag"] is True
-    assert parsed["all_flag"] is False
-
-    base = {
-        "action": "plan",
-        "folders": [],
-        "affected_flag": True,
-        "settings": {
-            "ssm_openci_tf_github_token": "/openci-tf/clone-token/test",
-            "git_url": "https://github.com/org/repo.git",
-            "upstream_urls": SETTINGS.upstream_urls,
-        },
-    }
-    first = validate_and_resolve.handler(
-        {
-            **base,
-            "webhook_info": {
-                "event_type": "pull_request",
-                "repo_name": "org/repo",
-                "trigger_id": "trigger",
-                "pr_number": 7,
-                "commit_hash": _FULL_SHA,
-                "delivery_id": _GUID_A,
-            },
-        },
-        None,
-    )
-    second = validate_and_resolve.handler(
-        {
-            **base,
-            "webhook_info": {
-                "event_type": "pull_request",
-                "repo_name": "org/repo",
-                "trigger_id": "trigger",
-                "pr_number": 7,
-                "commit_hash": _FULL_SHA,
-                "delivery_id": _GUID_B,
-            },
-        },
-        None,
-    )
-    assert first["run_id"] != second["run_id"]
-    assert first["map_items"][0]["e"] != second["map_items"][0]["e"]
-    assert first["map_items"][0]["folder"] == "infra/vpc"
-    assert _GUID_A not in first["run_id"] and _GUID_B not in second["run_id"]
-    retry = validate_and_resolve.handler(
-        {
-            **base,
-            "webhook_info": {
-                "event_type": "pull_request",
-                "repo_name": "org/repo",
-                "trigger_id": "trigger",
-                "pr_number": 7,
-                "commit_hash": _FULL_SHA,
-                "delivery_id": _GUID_A,
-            },
-        },
-        None,
-    )
-    assert retry["run_id"] == first["run_id"]
+    assert parsed["action"] == "noop"
+    assert "affected_flag" not in parsed
+    assert "auto_plan" not in parsed
 
 
 def test_two_deliveries_do_not_cross_accept_done_markers(monkeypatch):

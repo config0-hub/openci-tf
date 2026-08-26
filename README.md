@@ -2,7 +2,7 @@
 
 Safe-path CI for Terraform/OpenTofu in GitHub pull requests.
 
-openci-tf runs authenticated `tf plan`, `tf drift`, and `tf report` commands
+openci-tf runs authenticated `tf plan` and `tf report` commands
 against registered repositories and AWS accounts. Read-only work runs through a
 readonly execution lane; apply and destroy require the separate gated flow
 documented in [`docs/APPLY.md`](docs/APPLY.md).

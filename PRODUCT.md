@@ -21,7 +21,7 @@ team developers interact with openci-tf mainly through GitHub PR comments.
 
 ## Product Purpose
 
-openci-tf provides authenticated `tf plan`, `tf drift`, and `tf report` commands
+openci-tf provides authenticated `tf plan` and `tf report` commands
 over Terraform/OpenTofu folders in GitHub pull requests. Apply and destroy are
 blocked by default and require the explicit gated flow documented in
 [docs/APPLY.md](docs/APPLY.md).

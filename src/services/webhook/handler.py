@@ -41,8 +41,6 @@ def _response(status: int, body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _command_from_info(info: Any) -> tuple[str, list[str], bool, bool, str | None, int | None] | None:
-    if info.event_type == "pull_request":
-        return "plan", [], False, True, None, None
     comment_body = info.comment_body or ""
     if not comment_body:
         return None
@@ -73,6 +71,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return _response(200, {"message": "Event ignored"})
     if info.repo_name.casefold() != settings.repo_name.casefold():
         return _response(403, {"error": "Repository mismatch"})
+    if info.event_type == "pull_request":
+        return _response(200, {"message": "Event ignored", "reason": "pull_request_event"})
     try:
         token = get_github_token(settings.ssm_openci_tf_github_token)
         if info.pr_api_url and (not info.commit_hash or not info.head_repo_name):
@@ -142,7 +142,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         except OrchestrationError:
             return _response(502, {"error": "Unable to start run"})
         return _response(200, {"message": "Accepted", "run_id": run_id, "created": created})
-    if action not in {"plan", "drift", "report", "plan_destroy"}:
+    if action not in {"plan", "report", "plan_destroy"}:
         return _response(200, {"message": "Unsafe action ignored"})
     request = github_run_request(
         {

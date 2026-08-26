@@ -77,7 +77,7 @@ def test_webhook_posts_refusal_for_unknown_tf_verb(monkeypatch):
     assert pr_number == 7
     assert "## tf frobnicate refused" in body
     assert "Unknown verb `frobnicate`" in body
-    assert "Accepted verbs: apply, destroy, drift, plan, report" in body
+    assert "Accepted verbs: apply, destroy, plan, report" in body
 
 
 def test_webhook_silently_ignores_non_tf_comment(monkeypatch):

@@ -31,16 +31,6 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     comment_body = webhook_info.get("comment_body", "")
 
     if not comment_body:
-        # pull_request events (auto-plan) don't have comment_body
-        if webhook_info["event_type"] == "pull_request":
-            return {
-                **event,
-                "action": "plan",
-                "folders": [],
-                "all_flag": False,
-                "affected_flag": True,
-                "auto_plan": True,
-            }
         return {**event, "action": "noop"}
 
     try:

@@ -10,7 +10,7 @@ class ParseError(ValueError):
     pass
 
 
-_PUBLIC_VERBS = frozenset({"plan", "drift", "report", "apply", "destroy"})
+_PUBLIC_VERBS = frozenset({"plan", "report", "apply", "destroy"})
 
 
 def accepted_verbs() -> tuple[str, ...]:
@@ -35,7 +35,7 @@ _PIPELINE_STEP = re.compile(r"^[1-9][0-9]*$")
 def parse_command(text: str) -> Command:
     tokens = text.strip().split()
     if len(tokens) < 2 or tokens[0].lower() != "tf":
-        raise ParseError("expected: tf <verb> [folder|all]")
+        raise ParseError("expected: tf <verb> [folder-or-csv]")
     verb = tokens[1].lower()
     if verb == "validate":
         raise ParseError("validate is not a supported command; use tf plan")
@@ -56,21 +56,28 @@ def parse_command(text: str) -> Command:
     if rest and rest[0].lower() == "pipeline":
         return _parse_read_only_pipeline_command(verb, rest, destroy_flag=destroy_flag)
 
+    if verb == "report":
+        if rest:
+            raise ParseError(
+                "tf report does not accept folder targets; use tf plan <folder-or-csv> for one or more folders"
+            )
+        return Command(action=verb, all_flag=True, destroy_flag=destroy_flag)
+
     if not rest:
-        if verb != "plan":
-            raise ParseError(f"{verb} requires a folder target or 'all'")
-        return Command(action=verb, affected_flag=True, destroy_flag=destroy_flag)
+        raise ParseError("tf plan requires a folder target")
 
     if len(rest) > 1:
-        raise ParseError("expected: tf <verb> [folder|all]")
+        raise ParseError("expected: tf plan <folder-or-csv>")
 
     target = rest[0]
     if target == "all":
-        return Command(action=verb, all_flag=True, destroy_flag=destroy_flag)
+        raise ParseError(
+            "tf plan all is not supported; use explicit folder CSV targets such as tf plan infra/a,infra/b"
+        )
 
     folders = _parse_folder_list([target])
     if not folders:
-        raise ParseError("a folder target or 'all' is required")
+        raise ParseError("a folder target is required")
     return Command(action=verb, folders=folders, destroy_flag=destroy_flag)
 
 

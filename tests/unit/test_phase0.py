@@ -25,18 +25,29 @@ from src.domain.engine.payload import EnginePayload
 from src.domain.locks.run_lock import acquire, release
 
 
-@pytest.mark.parametrize("text,action,all_flag,affected_flag", [
-    *((f"tf {verb} all", verb, True, False) for verb in ("drift", "report", "plan")),
-    ("tf plan", "plan", False, True),
-    ("tf plan infra/vpc,infra/rds", "plan", False, False),
+@pytest.mark.parametrize("text,action,all_flag,affected_flag,folders", [
+    ("tf report", "report", True, False, []),
+    ("tf plan infra/vpc,infra/rds", "plan", False, False, ["infra/vpc", "infra/rds"]),
 ])
-def test_safe_grammar_accepts(text, action, all_flag, affected_flag):
+def test_safe_grammar_accepts(text, action, all_flag, affected_flag, folders):
     command = parse_command(text)
     assert command.action == action
     assert command.all_flag == all_flag
     assert command.affected_flag == affected_flag
+    assert command.folders == folders
 
-@pytest.mark.parametrize("text", ["plan openci-tf x", "tf unknown x", "tf plan ,", "tf plan x extra extra", "tf validate x"])
+@pytest.mark.parametrize("text", [
+    "plan openci-tf x",
+    "tf unknown x",
+    "tf plan",
+    "tf plan all",
+    "tf report all",
+    "tf report infra/vpc",
+    "tf drift infra/vpc",
+    "tf plan ,",
+    "tf plan x extra extra",
+    "tf validate x",
+])
 def test_grammar_rejects_invalid(text):
     with pytest.raises(ParseError): parse_command(text)
 @pytest.mark.parametrize("verb", ["apply", "destroy"])

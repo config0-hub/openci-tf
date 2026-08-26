@@ -2,9 +2,10 @@
 
 `openci-tf` is a safe-path GitHub PR automation service. Authentication requires a
 collaborator with write or admin permission, a pinned PR head SHA, and a non-fork
-pull request. The command surface is `tf plan|drift|report` with optional
-`folder` or `all` targets; bare `tf plan` selects affected folders from the
-pinned PR diff. Apply and destroy are rejected both by the resolver and the
+pull request. The command surface is comment-driven: `tf plan <folder-or-csv>`,
+`tf plan --destroy <folder-or-csv>`, `tf report`, `tf apply <folder-or-csv>`,
+and `tf destroy <folder-or-csv>`. PR open/synchronize events do not start runs; only supported `tf ...` issue
+comments do. Apply and destroy are rejected both by the resolver and the
 inner state machine.
 
 The outer state machine routes the safe verbs, resolves folders, renders in-progress

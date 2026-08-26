@@ -126,12 +126,13 @@ arn:aws:iam::<account_id>:role/<role_name>
 
 For mutation lanes it uses `<poweruser_role_name>` instead.
 
-## How `tf plan all` spans accounts
+## How `tf report` spans accounts
 
-`validate-and-resolve` discovers every folder with `.openci_tf/config.yaml`.
-Folders may reference different aliases; each run-folder execution assumes the
-matching target role and uses that folder's backend state configuration. The
-outer state machine fans out per folder and posts the summary comment last.
+`validate-and-resolve` discovers every folder with `.openci_tf/config.yaml` when
+`tf report` runs (or when API callers use `folder_mode: all`). Folders may
+reference different aliases; each run-folder execution assumes the matching target
+role and uses that folder's backend state configuration. The outer state machine
+fans out per folder and posts the summary comment last.
 
 Adding another account does not change the PR command surface: onboard the target,
 register an alias, update hub IAM, and point folders at the new `account_alias`.

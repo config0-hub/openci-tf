@@ -35,9 +35,9 @@ Expected behavior:
 
 | | |
 |---|---|
-| **Command** | `tf plan all`, `tf drift all`, or `tf report all` |
-| **Accounts** | Every discovered folder's configured target account |
-| **Preconditions** | Same as US-01; `all` resolves configured folders |
+| **Command** | `tf report` or `tf plan <folder1>,<folder2>,...` |
+| **Accounts** | Every discovered folder's configured target account (for `tf report`) or each listed folder's account |
+| **Preconditions** | Same as US-01; `tf report` resolves all configured folders |
 | **Mutation risk** | `none` |
 
 Expected behavior:

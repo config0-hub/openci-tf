@@ -199,7 +199,7 @@ def _parse_issue_comment(
 def _parse_pull_request(
     payload: dict[str, Any], trigger_id: str
 ) -> Optional[WebhookInfo]:
-    """Parse pull_request event — for auto-plan on PR open/sync."""
+    """Parse pull_request event for signature and head pinning only."""
     action = payload.get("action", "")
     if action not in ACTIONABLE_PR_ACTIONS:
         return None

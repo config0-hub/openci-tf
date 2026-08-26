@@ -18,29 +18,43 @@ from src.domain.command.grammar import ParseError, parse_command
 from src.platform.github.client import GitHubChangedFilesLimitExceeded, GitHubClient
 
 
-def test_bare_tf_plan_uses_affected_selection():
-    command = parse_command("tf plan")
-    assert command.action == "plan"
-    assert command.affected_flag is True
-    assert command.all_flag is False
-    assert command.folders == []
+def test_bare_tf_plan_is_rejected():
+    with pytest.raises(ParseError, match="tf plan requires a folder target"):
+        parse_command("tf plan")
 
 
-def test_tf_plan_all_is_accepted():
-    command = parse_command("tf plan all")
-    assert command.action == "plan"
+def test_tf_plan_all_is_rejected():
+    with pytest.raises(
+        ParseError,
+        match="tf plan all is not supported",
+    ):
+        parse_command("tf plan all")
+
+
+def test_tf_drift_is_rejected():
+    with pytest.raises(ParseError, match="unknown verb"):
+        parse_command("tf drift infra/vpc")
+
+
+def test_tf_report_all_is_rejected():
+    with pytest.raises(ParseError):
+        parse_command("tf report all")
+
+
+def test_tf_report_folder_target_is_rejected():
+    with pytest.raises(ParseError, match="tf report does not accept folder targets"):
+        parse_command("tf report infra/vpc")
+
+
+def test_tf_report_sets_all_flag():
+    command = parse_command("tf report")
+    assert command.action == "report"
     assert command.all_flag is True
 
 
 def test_validate_is_not_a_public_verb():
     with pytest.raises(ParseError, match="validate is not a supported command"):
         parse_command("tf validate infra/vpc")
-
-
-@pytest.mark.parametrize("verb", ["drift", "report"])
-def test_drift_and_report_still_accept_all(verb: str):
-    command = parse_command(f"tf {verb} all")
-    assert command.all_flag is True
 
 
 def test_changed_directories_skip_special_paths():
@@ -133,3 +147,33 @@ def test_changed_files_pagination_preserves_http_failures():
 
     with pytest.raises(RuntimeError, match="github unavailable"):
         client.get_pr_changed_files("org/repo", 7, max_files=2)
+
+
+def test_all_flag_discovers_all_configured_folders(monkeypatch):
+    from src.services.resolve.validate_and_resolve import _selected_folders
+
+    discovered = ["infra/a", "infra/b", "infra/c"]
+    monkeypatch.setattr(
+        "src.services.resolve.validate_and_resolve.discover_folders",
+        lambda _root: discovered,
+    )
+    event = {"all_flag": True, "webhook_info": {}}
+    assert _selected_folders(event, "/clone", "token", "a" * 40) == discovered
+
+
+def test_affected_flag_resolves_only_changed_folders(monkeypatch):
+    from src.services.resolve.validate_and_resolve import _selected_folders
+
+    monkeypatch.setattr(
+        "src.services.resolve.validate_and_resolve.discover_folders",
+        lambda _root: ["infra/a", "infra/b", "infra/c"],
+    )
+    monkeypatch.setattr(
+        "src.services.resolve.validate_and_resolve._changed_files_for_pinned_pr",
+        lambda *_: [{"filename": "infra/b/main.tf", "status": "modified"}],
+    )
+    event = {
+        "affected_flag": True,
+        "webhook_info": {"repo_name": "org/repo", "pr_number": 7},
+    }
+    assert _selected_folders(event, "/clone", "token", "a" * 40) == ["infra/b"]
