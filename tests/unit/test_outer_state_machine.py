@@ -72,7 +72,7 @@ def test_no_op_uses_the_normal_empty_map_and_final_render_path():
     assert "FailRenderNoOp" not in SOURCE
     assert 'Next = "RenderPlaceholder"' in _state_block(SOURCE, "ValidateAndResolve")
     assert 'ItemsPath      = "$.current_step_items"' in _state_block(SOURCE, "RunStepFolders")
-    assert '"no_op_reason.$"        = "$.no_op_reason"' in _state_block(
+    assert '"no_op_reason.$"           = "$.no_op_reason"' in _state_block(
         SOURCE, "RenderPR"
     )
 
@@ -274,6 +274,13 @@ def test_render_consumer_normalizes_config_resolution_error():
         ],
         "skipped": [],
         "no_op_reason": None,
+        "folders": [],
+        "all_flag": False,
+        "affected_flag": False,
+        "requested_comment_id": None,
+        "requested_comment_body": None,
+        "intent_comment_id": None,
+        "consumed_confirm_token": None,
     }
 
 

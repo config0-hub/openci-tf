@@ -26,7 +26,7 @@ from src.domain.intent.token import mint_token
 from src.services.intent.confirm import confirm_intent
 from src.services.intent.create import IntentCreationError, create_intent
 from src.services.intent.handler import confirm_handler, create_handler
-from src.services.intent.registry import mark_intent_used
+from src.services.intent.registry import mark_intent_used, put_intent, get_intent
 from src.platform.aws.run_registry import RunRegistryError
 from src.services.render.handler import _pipeline_apply_footer
 
@@ -929,6 +929,278 @@ def test_create_handler_malformed_account_alias_returns_intent_failed(
     ]
 
 
+@patch("src.domain.accounts.aliases.get_account_alias")
+def test_create_handler_failure_posts_context_before_deleting_command(
+    get_account_alias, monkeypatch
+):
+    get_account_alias.side_effect = ValueError("Unknown account alias: 'missing'")
+    monkeypatch.setattr(
+        "src.services.intent.create._folder_configs_for_intent",
+        lambda **_kwargs: {
+            "infra/vpc": FolderConfig(
+                account_alias="missing", apply=MutationVerbConfig(allow=True)
+            )
+        },
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.get_repo_settings",
+        lambda *_args, **_kwargs: _intent_gate_settings(),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.get_github_token",
+        lambda _path: "github-token",
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._current_pr_head_sha",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
+    posted: list[str] = []
+    deleted: list[int | None] = []
+    monkeypatch.setattr(
+        "src.services.intent.handler._post_comment",
+        lambda _webhook, _settings, body: posted.append(body) or 9001,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_triggering_comment_after_replacement",
+        lambda _webhook, _settings, comment_id: deleted.append(comment_id),
+    )
+
+    event = {
+        "action": "apply",
+        "folders": ["infra/vpc"],
+        "webhook_info": {
+            "pr_number": 1,
+            "trigger_id": "t",
+            "repo_name": "o/r",
+            "comment_id": 44,
+            "comment_body": "tf apply infra/vpc",
+            "commit_hash": "a" * 40,
+        },
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    result = create_handler(event, None)
+
+    assert result["intent_failed"] is True
+    assert deleted == [44]
+    assert len(posted) == 1
+    assert "### openci-tf command" in posted[0]
+    assert "- command: `tf apply infra/vpc`" in posted[0]
+    assert "- triggering comment id: `44` (removed after acknowledgement)" in posted[0]
+    assert "## tf apply refused" in posted[0]
+
+
+def test_create_handler_success_deletes_requested_command_after_intent_comment(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "src.services.intent.handler._current_pr_head_sha",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.create_intent",
+        lambda **_kwargs: (
+            None,
+            {
+                "token": "abc123",
+                "trigger_id": "t",
+                "pr_number": 1,
+                "action": "apply",
+                "source_run_id": "plan-run",
+                "folders": ["infra/vpc"],
+                "commit_hash": "a" * 40,
+                "expires_at": 9999999999,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.store_intent_comment_metadata",
+        lambda *_args, **_kwargs: None,
+    )
+    deleted: list[int | None] = []
+    monkeypatch.setattr(
+        "src.services.intent.handler._post_comment",
+        lambda *_args, **_kwargs: 9001,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_triggering_comment_after_replacement",
+        lambda _webhook, _settings, comment_id: deleted.append(comment_id),
+    )
+
+    event = {
+        "action": "apply",
+        "folders": ["infra/vpc"],
+        "webhook_info": {
+            "pr_number": 1,
+            "trigger_id": "t",
+            "repo_name": "o/r",
+            "comment_id": 44,
+            "comment_body": "tf apply infra/vpc",
+        },
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    result = create_handler(event, None)
+
+    assert result["intent_created"] is True
+    assert deleted == [44]
+
+
+def test_confirm_handler_failure_deletes_confirmation_intent_and_requested_comments(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "src.services.intent.handler._current_pr_head_sha",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.confirm_intent",
+        lambda **_kwargs: ([IntentGateFailure("token already used")], None),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.get_intent",
+        lambda _token: IntentRecord(
+            token="abc123",
+            trigger_id="t",
+            pr_number=1,
+            action="apply",
+            source_run_id="run1",
+            folders=("infra/vpc",),
+            commit_hash="a" * 40,
+            folder_pins=(),
+            expires_at=9999999999,
+            requested_comment_id=10,
+            intent_comment_id=11,
+        ),
+    )
+    deleted_batches: list[list[int | None]] = []
+    stale_tokens: list[str | None] = []
+    monkeypatch.setattr(
+        "src.services.intent.handler._post_comment",
+        lambda *_args, **_kwargs: 9001,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_comments_after_replacement",
+        lambda _webhook, _settings, comment_ids: deleted_batches.append(list(comment_ids)),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_stale_confirm_token_comments_after_replacement",
+        lambda _webhook, _settings, token, **kwargs: stale_tokens.append(token),
+    )
+
+    event = {
+        "action": "apply",
+        "confirm_token": "abc123",
+        "webhook_info": {
+            "pr_number": 1,
+            "trigger_id": "t",
+            "repo_name": "o/r",
+            "comment_id": 55,
+            "comment_body": "tf apply confirm abc123",
+        },
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    result = confirm_handler(event, None)
+
+    assert result["intent_failed"] is True
+    assert deleted_batches == [[55, 11, 10]]
+    assert stale_tokens == ["abc123"]
+
+
+def test_confirm_handler_success_deletes_intent_request_comment(monkeypatch):
+    monkeypatch.setattr(
+        "src.services.intent.handler._current_pr_head_sha",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.confirm_intent",
+        lambda **_kwargs: (
+            [],
+            {
+                "action": "apply",
+                "folders": ["infra/vpc"],
+                "folder_pins": {"infra/vpc": {"source_run_id": "plan-run"}},
+                "source_plan_run_id": "plan-run",
+                "requested_comment_id": 10,
+                "requested_comment_body": "tf apply infra/vpc",
+                "intent_comment_id": 11,
+                "intent_token": "abc123",
+            },
+        ),
+    )
+    deleted: list[int | None] = []
+    stale_tokens: list[str | None] = []
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_triggering_comment_after_replacement",
+        lambda _webhook, _settings, comment_id: deleted.append(comment_id),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_stale_confirm_token_comments_after_replacement",
+        lambda _webhook, _settings, token, **kwargs: stale_tokens.append(token),
+    )
+
+    event = {
+        "action": "apply",
+        "confirm_token": "abc123",
+        "webhook_info": {
+            "pr_number": 1,
+            "trigger_id": "t",
+            "repo_name": "o/r",
+            "comment_id": 55,
+            "comment_body": "tf apply confirm abc123",
+        },
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    result = confirm_handler(event, None)
+
+    assert result["intent_confirmed"] is True
+    assert result["consumed_confirm_token"] == "abc123"
+    assert deleted == [11]
+    assert stale_tokens == ["abc123"]
+
+
+def test_intent_record_comment_metadata_round_trips_through_registry(monkeypatch):
+    stored: dict[str, object] = {}
+
+    def _put(record: dict[str, object]) -> None:
+        stored.update(record)
+
+    def _get(token: str) -> dict[str, object] | None:
+        if token != "abc123":
+            return None
+        return dict(stored)
+
+    monkeypatch.setattr("src.services.intent.registry.put_intent_record", _put)
+    monkeypatch.setattr("src.services.intent.registry.get_intent_record", _get)
+
+    original = IntentRecord(
+        token="abc123",
+        trigger_id="t",
+        pr_number=1,
+        action="apply",
+        source_run_id="run1",
+        folders=("infra/vpc",),
+        commit_hash="a" * 40,
+        folder_pins=(),
+        expires_at=9999999999,
+        requested_comment_id=10,
+        requested_comment_body="tf apply infra/vpc",
+        intent_comment_id=11,
+    )
+    put_intent(original)
+    loaded = get_intent("abc123")
+
+    assert loaded is not None
+    assert loaded.requested_comment_id == 10
+    assert loaded.requested_comment_body == "tf apply infra/vpc"
+    assert loaded.intent_comment_id == 11
+    assert "requested_comment_id" in original.to_dict()
+    assert "requested_comment_body" in original.to_dict()
+    assert "intent_comment_id" in original.to_dict()
+
+
 def test_confirm_handler_forces_pinned_intent_folder_selection(monkeypatch):
     monkeypatch.setattr(
         "src.services.intent.handler._current_pr_head_sha", lambda *_args: "a" * 40
@@ -948,6 +1220,14 @@ def test_confirm_handler_forces_pinned_intent_folder_selection(monkeypatch):
                 "pipeline_sha256": "c" * 64,
             },
         ),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_triggering_comment_after_replacement",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_stale_confirm_token_comments_after_replacement",
+        lambda *_args, **_kwargs: None,
     )
     event = {
         "action": "apply",
@@ -991,6 +1271,14 @@ def test_confirm_handler_records_pipeline_metadata_when_registry_enabled(monkeyp
                 "pipeline_sha256": "c" * 64,
             },
         ),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_triggering_comment_after_replacement",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_stale_confirm_token_comments_after_replacement",
+        lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
         "src.services.intent.handler.set_run_pipeline_metadata",

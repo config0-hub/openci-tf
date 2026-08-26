@@ -176,5 +176,6 @@ def test_render_placeholder_uses_account_id_from_map_items(monkeypatch):
         "map_items": [{"folder": "infra/a", "account_id": _ACCOUNT}],
         "skipped": [],
     }, None)
-    assert comments[0][0].startswith("<details>")
+    assert "### openci-tf command" in comments[0][0]
+    assert "<details>" in comments[0][0]
     assert f"`infra/a` · {_ACCOUNT} ·" in comments[0][0]

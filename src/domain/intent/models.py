@@ -34,6 +34,9 @@ class IntentRecord:
     step_index: int | None = None
     step_count: int | None = None
     pipeline_sha256: str | None = None
+    requested_comment_id: int | None = None
+    requested_comment_body: str | None = None
+    intent_comment_id: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -67,6 +70,12 @@ class IntentRecord:
             payload["step_count"] = self.step_count
         if self.pipeline_sha256 is not None:
             payload["pipeline_sha256"] = self.pipeline_sha256
+        if self.requested_comment_id is not None:
+            payload["requested_comment_id"] = self.requested_comment_id
+        if self.requested_comment_body is not None:
+            payload["requested_comment_body"] = self.requested_comment_body
+        if self.intent_comment_id is not None:
+            payload["intent_comment_id"] = self.intent_comment_id
         return payload
 
 

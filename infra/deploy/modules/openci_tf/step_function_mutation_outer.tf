@@ -6,16 +6,23 @@ locals {
       Type     = "Task"
       Resource = local.lambda_arns["render-pr"]
       Parameters = {
-        "webhook_info.$"        = "$.webhook_info"
-        "settings.$"            = "$.settings"
-        "action.$"              = "$.action"
-        "run_id.$"              = "$.run_id"
-        "deadline_at.$"         = "$.deadline_at"
-        "notification_target.$" = "$.notification_target"
-        "outcomes.$"            = "$.outcomes"
-        "skipped.$"             = "$.skipped"
-        "no_op_reason.$"        = "$.no_op_reason"
-        "execution_arn.$"       = "$$.Execution.Id"
+        "webhook_info.$"           = "$.webhook_info"
+        "settings.$"               = "$.settings"
+        "action.$"                 = "$.action"
+        "run_id.$"                 = "$.run_id"
+        "deadline_at.$"            = "$.deadline_at"
+        "notification_target.$"    = "$.notification_target"
+        "outcomes.$"               = "$.outcomes"
+        "skipped.$"                = "$.skipped"
+        "no_op_reason.$"           = "$.no_op_reason"
+        "folders.$"                = "$.folders"
+        "all_flag.$"               = "$.all_flag"
+        "affected_flag.$"          = "$.affected_flag"
+        "requested_comment_id.$"   = "$.requested_comment_id"
+        "requested_comment_body.$" = "$.requested_comment_body"
+        "intent_comment_id.$"      = "$.intent_comment_id"
+        "consumed_confirm_token.$" = "$.consumed_confirm_token"
+        "execution_arn.$"          = "$$.Execution.Id"
       }
       ResultPath = "$.render_flags"
       Catch      = [{ ErrorEquals = ["States.ALL"], ResultPath = null, Next = "FinalizeAfterRenderFailure" }]
@@ -57,12 +64,20 @@ locals {
       Type     = "Task"
       Resource = local.lambda_arns["render-pr"]
       Parameters = {
-        "pipeline_failure.$"    = "$.pipeline_failure"
-        "webhook_info.$"        = "$.webhook_info"
-        "settings.$"            = "$.settings"
-        "run_id.$"              = "$.run_id"
-        "notification_target.$" = "$.notification_target"
-        "execution_arn.$"       = "$$.Execution.Id"
+        "pipeline_failure.$"       = "$.pipeline_failure"
+        "webhook_info.$"           = "$.webhook_info"
+        "settings.$"               = "$.settings"
+        "action.$"                 = "$.action"
+        "run_id.$"                 = "$.run_id"
+        "notification_target.$"    = "$.notification_target"
+        "folders.$"                = "$.folders"
+        "all_flag.$"               = "$.all_flag"
+        "affected_flag.$"          = "$.affected_flag"
+        "requested_comment_id.$"   = "$.requested_comment_id"
+        "requested_comment_body.$" = "$.requested_comment_body"
+        "intent_comment_id.$"      = "$.intent_comment_id"
+        "consumed_confirm_token.$" = "$.consumed_confirm_token"
+        "execution_arn.$"          = "$$.Execution.Id"
       }
       ResultPath = null
       Catch      = [{ ErrorEquals = ["States.ALL"], ResultPath = null, Next = "FinalizeRun" }]
@@ -218,15 +233,23 @@ resource "aws_sfn_state_machine" "openci_tf_apply" {
         Type     = "Task"
         Resource = local.lambda_arns["render-pr"]
         Parameters = {
-          placeholder             = true
-          "webhook_info.$"        = "$.webhook_info"
-          "settings.$"            = "$.settings"
-          "action.$"              = "$.action"
-          "run_id.$"              = "$.run_id"
-          "notification_target.$" = "$.notification_target"
-          "map_items.$"           = "$.map_items"
-          "skipped.$"             = "$.skipped"
-          outcomes                = []
+          placeholder                = true
+          "webhook_info.$"           = "$.webhook_info"
+          "settings.$"               = "$.settings"
+          "action.$"                 = "$.action"
+          "run_id.$"                 = "$.run_id"
+          "notification_target.$"    = "$.notification_target"
+          "map_items.$"              = "$.map_items"
+          "skipped.$"                = "$.skipped"
+          "folders.$"                = "$.folders"
+          "all_flag.$"               = "$.all_flag"
+          "affected_flag.$"          = "$.affected_flag"
+          "requested_comment_id.$"   = "$.requested_comment_id"
+          "requested_comment_body.$" = "$.requested_comment_body"
+          "intent_comment_id.$"      = "$.intent_comment_id"
+          "consumed_confirm_token.$" = "$.consumed_confirm_token"
+          "execution_arn.$"          = "$$.Execution.Id"
+          outcomes                   = []
         }
         ResultPath = null
         Catch      = [{ ErrorEquals = ["States.ALL"], ResultPath = null, Next = "RunFoldersSequential" }]
@@ -378,15 +401,23 @@ resource "aws_sfn_state_machine" "openci_tf_destroy" {
         Type     = "Task"
         Resource = local.lambda_arns["render-pr"]
         Parameters = {
-          placeholder             = true
-          "webhook_info.$"        = "$.webhook_info"
-          "settings.$"            = "$.settings"
-          "action.$"              = "$.action"
-          "run_id.$"              = "$.run_id"
-          "notification_target.$" = "$.notification_target"
-          "map_items.$"           = "$.map_items"
-          "skipped.$"             = "$.skipped"
-          outcomes                = []
+          placeholder                = true
+          "webhook_info.$"           = "$.webhook_info"
+          "settings.$"               = "$.settings"
+          "action.$"                 = "$.action"
+          "run_id.$"                 = "$.run_id"
+          "notification_target.$"    = "$.notification_target"
+          "map_items.$"              = "$.map_items"
+          "skipped.$"                = "$.skipped"
+          "folders.$"                = "$.folders"
+          "all_flag.$"               = "$.all_flag"
+          "affected_flag.$"          = "$.affected_flag"
+          "requested_comment_id.$"   = "$.requested_comment_id"
+          "requested_comment_body.$" = "$.requested_comment_body"
+          "intent_comment_id.$"      = "$.intent_comment_id"
+          "consumed_confirm_token.$" = "$.consumed_confirm_token"
+          "execution_arn.$"          = "$$.Execution.Id"
+          outcomes                   = []
         }
         ResultPath = null
         Catch      = [{ ErrorEquals = ["States.ALL"], ResultPath = null, Next = "RunFoldersSequential" }]

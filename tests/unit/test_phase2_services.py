@@ -583,7 +583,8 @@ def test_render_posts_bounded_config_error_feedback_from_normalized_outcome(monk
     result = render.handler({"webhook_info": _webhook_for_run_id(), "settings": {"ssm_openci_tf_github_token": _CLONE_TOKEN}, "outcomes": [{"folder": "config", "status": "infrastructure_error", "error": error}], "skipped": []}, None)
     assert result["rendered"]
     assert len(comments) == 1
-    assert comments[0][0].startswith("<details>")
+    assert "### openci-tf command" in comments[0][0]
+    assert "<details>" in comments[0][0]
     assert "configuration error" in comments[0][0].lower()
     assert error[:253] in comments[0][0]
     assert error[:256] not in comments[0][0]
@@ -637,6 +638,7 @@ def test_render_early_placeholder_posts_ci_status_before_folder_work(monkeypatch
     monkeypatch.setenv("AWS_REGION", "us-east-1")
     monkeypatch.setattr(render, "get_github_token", lambda _: "token")
     created: list[tuple[str, int]] = []
+    deleted: list[int] = []
 
     class Client:
         def __init__(self, _token=None):
@@ -649,8 +651,8 @@ def test_render_early_placeholder_posts_ci_status_before_folder_work(monkeypatch
         def find_comments_by_tag(self, *_args):
             return []
 
-        def delete_comment(self, *_args):
-            raise AssertionError("early placeholder must not delete comments")
+        def delete_comment(self, _repo, comment_id):
+            deleted.append(comment_id)
 
     monkeypatch.setattr(render, "GitHubClient", Client)
     webhook = {
@@ -682,6 +684,7 @@ def test_render_early_placeholder_posts_ci_status_before_folder_work(monkeypatch
     run_id = derive_run_id(webhook)
     assert status_comment_marker_prefix(run_id) in body
     assert "Terraform Multi-Folder Summary" not in body
+    assert deleted == [99]
 
 
 def test_render_early_placeholder_skips_without_console_url(monkeypatch):
@@ -701,7 +704,10 @@ def test_render_early_placeholder_does_not_post_folder_comments(monkeypatch):
     upserts = []
     monkeypatch.setattr(render, "_delete_and_repost", lambda *_args: upserts.append(_args) or pytest.fail("early placeholder must not upsert folder comments"))
     created = []
-    monkeypatch.setattr(render, "GitHubClient", lambda _: SimpleNamespace(create_comment=lambda *_a, **_k: created.append(_a) or 1))
+    monkeypatch.setattr(render, "GitHubClient", lambda _: SimpleNamespace(
+        create_comment=lambda *_a, **_k: created.append(_a) or 1,
+        delete_comment=lambda *_a, **_k: None,
+    ))
     render.handler({
         "early_placeholder": True,
         "action": "plan",
@@ -793,7 +799,11 @@ def test_render_placeholder_still_posts_summary_when_all_folders_locked(monkeypa
         "skipped": [{"folder": "infra/a", "account_id": "123456789012", "status": "in_progress", "reply": "Run already in progress."}],
     }, None)
     assert result["placeholder_rendered"] is True
-    assert comments == [("## Terraform Multi-Folder Summary\n\n| Folder | Account | Plan | Security | Cost |\n|--------|---------|------------|----------|------|\n| `infra/a` | `123456789012` | in progress | in progress | in progress |", "summary")]
+    body, suffix = comments[0]
+    assert suffix == "summary"
+    assert "### openci-tf command" in body
+    assert "## Terraform Multi-Folder Summary" in body
+    assert "| `infra/a` | `123456789012` | in progress | in progress | in progress |" in body
 
 
 def test_render_placeholder_uses_same_markers_as_final_render(monkeypatch):
@@ -862,7 +872,7 @@ def test_render_final_cleanup_deletes_only_matching_run_status_after_delete_and_
         "skipped": [],
     }, None)
     assert upsert_order == ["folder-infra/a"]
-    assert deleted == [9001]
+    assert deleted == [9001, 42]
 
 
 def test_render_config_error_cleanup_uses_derived_run_id(monkeypatch):
@@ -933,7 +943,7 @@ def test_render_repeated_run_replaces_generated_comments_at_bottom(monkeypatch):
 
     class Session:
         def __init__(self):
-            self.store: dict[int, str] = {1: "tf plan all"}
+            self.store: dict[int, str] = {1: "tf plan infra/a"}
             self.next_id = 100
             self.deleted: list[int] = []
             self.patched: list[int] = []
@@ -1003,11 +1013,18 @@ def test_render_repeated_run_replaces_generated_comments_at_bottom(monkeypatch):
     render.handler(placeholder_event, None)
     placeholder_ids = sorted(cid for cid, body in session.store.items() if cid != 1)
     assert len(placeholder_ids) == 2
-    assert session.store[1] == "tf plan all"
+    assert session.store[1] == "tf plan infra/a"
     assert not session.patched
 
     final_event = {
-        "webhook_info": {"repo_name": repo, "pr_number": pr, "commit_hash": _FULL_SHA, "trigger_id": "trigger", "event_type": "issue_comment", "comment_id": 42},
+        "webhook_info": {
+            "repo_name": repo,
+            "pr_number": pr,
+            "commit_hash": _FULL_SHA,
+            "trigger_id": "trigger",
+            "event_type": "issue_comment",
+            "comment_id": 1,
+        },
         "settings": {"ssm_openci_tf_github_token": _CLONE_TOKEN},
         "outcomes": [{"folder": "infra/a", "account_id": "123456789012", "execution_id": "run.abc.0", "succeeded": True}],
         "skipped": [],
@@ -1019,9 +1036,10 @@ def test_render_repeated_run_replaces_generated_comments_at_bottom(monkeypatch):
     monkeypatch.setattr(render.run_lock, "release", lambda *_, **__: None)
     render.handler(final_event, None)
 
-    assert session.store[1] == "tf plan all"
+    assert 1 not in session.store
     assert not session.patched
-    assert set(session.deleted) == set(placeholder_ids)
+    assert set(placeholder_ids).issubset(set(session.deleted))
+    assert 1 in session.deleted
     final_generated = [cid for cid in session.store if cid != 1]
     assert len(final_generated) == 1
     tag_counts = {tag: 0 for tag in (folder_marker, summary_marker)}

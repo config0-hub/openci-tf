@@ -9,6 +9,7 @@ from src.platform.aws.intent_registry import (
     get_intent_record,
     mark_intent_record_used,
     put_intent_record,
+    update_intent_comment_metadata,
 )
 
 
@@ -44,6 +45,12 @@ def _record_to_dict(record: IntentRecord) -> dict:
         payload["step_count"] = record.step_count
     if record.pipeline_sha256 is not None:
         payload["pipeline_sha256"] = record.pipeline_sha256
+    if record.requested_comment_id is not None:
+        payload["requested_comment_id"] = record.requested_comment_id
+    if record.requested_comment_body is not None:
+        payload["requested_comment_body"] = record.requested_comment_body
+    if record.intent_comment_id is not None:
+        payload["intent_comment_id"] = record.intent_comment_id
     return payload
 
 
@@ -79,6 +86,21 @@ def _dict_to_record(item: dict) -> IntentRecord:
         step_index=int(item["step_index"]) if item.get("step_index") is not None else None,
         step_count=int(item["step_count"]) if item.get("step_count") is not None else None,
         pipeline_sha256=str(item["pipeline_sha256"]) if item.get("pipeline_sha256") is not None else None,
+        requested_comment_id=(
+            int(item["requested_comment_id"])
+            if item.get("requested_comment_id") is not None
+            else None
+        ),
+        requested_comment_body=(
+            str(item["requested_comment_body"])
+            if item.get("requested_comment_body") is not None
+            else None
+        ),
+        intent_comment_id=(
+            int(item["intent_comment_id"])
+            if item.get("intent_comment_id") is not None
+            else None
+        ),
     )
 
 
@@ -95,3 +117,18 @@ def get_intent(token: str) -> IntentRecord | None:
 
 def mark_intent_used(token: str, *, trigger_id: str, pr_number: int, now: int | None = None) -> IntentRecord:
     return _dict_to_record(mark_intent_record_used(token, trigger_id=trigger_id, pr_number=pr_number, now=now))
+
+
+def store_intent_comment_metadata(
+    token: str,
+    *,
+    requested_comment_id: int | None = None,
+    requested_comment_body: str | None = None,
+    intent_comment_id: int | None = None,
+) -> None:
+    update_intent_comment_metadata(
+        token,
+        requested_comment_id=requested_comment_id,
+        requested_comment_body=requested_comment_body,
+        intent_comment_id=intent_comment_id,
+    )

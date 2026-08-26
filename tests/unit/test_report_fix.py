@@ -600,10 +600,10 @@ def test_render_plan_all_posts_linked_multi_folder_summary(monkeypatch):
     monkeypatch.setattr(render_handler, "list_text_prefix", lambda *_args, **_kw: artifacts)
     monkeypatch.setattr(render_handler, "_plan_artifact_metadata", lambda *_, **__: None)
     monkeypatch.setattr(render_handler.run_lock, "release", lambda *_, **__: None)
-    monkeypatch.setattr(render_handler, "GitHubClient", lambda _: object())
+    monkeypatch.setattr(render_handler, "GitHubClient", lambda _: SimpleNamespace(delete_comment=lambda *_a, **_k: None))
     monkeypatch.setattr(render_handler, "_delete_and_repost", upsert)
     monkeypatch.setattr(render_handler, "_delete_generated_comment", lambda *_, **__: None)
-    monkeypatch.setattr(render_handler, "_delete_transient_status_comment", lambda *_, **__: None)
+    monkeypatch.setattr(render_handler, "_delete_transient_status_comment", lambda *_, **__: [])
 
     render_handler.handler(
         {

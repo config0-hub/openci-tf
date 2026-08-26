@@ -887,7 +887,7 @@ def test_render_defers_registry_terminalization_until_after_github(monkeypatch):
     monkeypatch.setattr(
         render_handler,
         "_delete_transient_status_comment",
-        lambda *_args, **_kwargs: None,
+        lambda *_args, **_kwargs: [],
     )
     monkeypatch.setattr(
         render_handler.boto3,

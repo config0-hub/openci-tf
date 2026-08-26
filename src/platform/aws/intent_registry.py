@@ -56,6 +56,34 @@ def get_intent_record(token: str) -> dict[str, Any] | None:
     return item
 
 
+def update_intent_comment_metadata(
+    token: str,
+    *,
+    requested_comment_id: int | None = None,
+    requested_comment_body: str | None = None,
+    intent_comment_id: int | None = None,
+) -> None:
+    values: dict[str, Any] = {}
+    parts: list[str] = []
+    if isinstance(requested_comment_id, int):
+        values[":requested_comment_id"] = requested_comment_id
+        parts.append("requested_comment_id = :requested_comment_id")
+    if isinstance(requested_comment_body, str):
+        values[":requested_comment_body"] = requested_comment_body
+        parts.append("requested_comment_body = :requested_comment_body")
+    if isinstance(intent_comment_id, int):
+        values[":intent_comment_id"] = intent_comment_id
+        parts.append("intent_comment_id = :intent_comment_id")
+    if not parts:
+        return
+    _table().update_item(
+        Key={"pk": intent_pk(token), "sk": intent_sk()},
+        UpdateExpression="SET " + ", ".join(parts),
+        ExpressionAttributeValues=values,
+        ConditionExpression="attribute_exists(pk)",
+    )
+
+
 def mark_intent_record_used(
     token: str,
     *,

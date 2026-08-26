@@ -97,7 +97,7 @@ def test_render_mutation_terminal_comment_is_markerless(monkeypatch):
 
     monkeypatch.setattr(render, "_delete_and_repost", capture)
     monkeypatch.setattr(render, "_delete_generated_comment", lambda *_, **__: None)
-    monkeypatch.setattr(render, "_delete_transient_status_comment", lambda *_, **__: None)
+    monkeypatch.setattr(render, "_delete_transient_status_comment", lambda *_, **__: [])
 
     render.handler(
         {

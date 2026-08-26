@@ -60,4 +60,7 @@ def confirm_intent(
         "step_index": confirmed.step_index,
         "step_count": confirmed.step_count,
         "pipeline_sha256": confirmed.pipeline_sha256,
+        "requested_comment_id": confirmed.requested_comment_id,
+        "requested_comment_body": confirmed.requested_comment_body,
+        "intent_comment_id": confirmed.intent_comment_id,
     }

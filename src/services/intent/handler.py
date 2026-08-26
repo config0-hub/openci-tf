@@ -7,20 +7,110 @@ import os
 from typing import Any
 
 from src.core.logging import get_logger
+from src.domain.formatters.artifacts import _redact_confirm_token, command_context_block
 from src.domain.formatters.intent import intent_failure_comment, intent_success_comment
 from src.domain.intent.models import IntentGateFailure, IntentRecord
 from src.platform.aws.run_registry import set_run_pipeline_metadata
 from src.platform.aws.ssm import get_github_token
-from src.platform.github.client import GitHubClient
+from src.platform.github.client import GitHubClient, comment_url
+from src.platform.github.command_comment_cleanup import (
+    delete_acknowledged_command_comment,
+    delete_acknowledged_command_comments,
+    delete_stale_confirm_token_comments,
+)
 from src.services.intent.confirm import confirm_intent
 from src.services.intent.create import IntentCreationError, create_intent
-from src.services.webhook.pr_comment import post_pr_comment
+from src.services.intent.registry import get_intent, store_intent_comment_metadata
 
 logger = get_logger(__name__)
 
 
-def _post_comment(webhook_info: dict[str, Any], settings: dict[str, Any], body: str) -> None:
-    post_pr_comment(webhook_info, settings, body)
+def _post_comment(webhook_info: dict[str, Any], settings: dict[str, Any], body: str) -> int | None:
+    pr_number = webhook_info.get("pr_number")
+    repo = webhook_info.get("repo_name")
+    if not isinstance(pr_number, int) or not isinstance(repo, str):
+        return None
+    token = get_github_token(settings["ssm_openci_tf_github_token"])
+    return GitHubClient(token).create_comment(repo, pr_number, body)
+
+
+def _with_intent_command_context(
+    webhook_info: dict[str, Any], action: str, body: str
+) -> str:
+    repo = webhook_info.get("repo_name")
+    pr_number = webhook_info.get("pr_number")
+    comment_id = webhook_info.get("comment_id")
+    comment_link = None
+    if isinstance(repo, str) and isinstance(pr_number, int) and isinstance(comment_id, int):
+        comment_link = comment_url(repo, pr_number, comment_id)
+    context = command_context_block(
+        action=action,
+        comment_body=webhook_info.get("comment_body")
+        if isinstance(webhook_info.get("comment_body"), str)
+        else None,
+        comment_id=comment_id if isinstance(comment_id, int) else None,
+        comment_link=comment_link,
+        commit_hash=webhook_info.get("commit_hash")
+        if isinstance(webhook_info.get("commit_hash"), str)
+        else None,
+        comment_removed=True,
+    )
+    return f"{context}\n\n---\n\n{body}"
+
+
+def _delete_triggering_comment_after_replacement(
+    webhook_info: dict[str, Any],
+    settings: dict[str, Any],
+    comment_id: int | None,
+) -> None:
+    pr_number = webhook_info.get("pr_number")
+    repo = webhook_info.get("repo_name")
+    if not isinstance(pr_number, int) or not isinstance(repo, str):
+        return
+    token = get_github_token(settings["ssm_openci_tf_github_token"])
+    warnings = delete_acknowledged_command_comment(GitHubClient(token), repo, comment_id)
+    for warning in warnings:
+        logger.warning(warning)
+
+
+def _delete_comments_after_replacement(
+    webhook_info: dict[str, Any],
+    settings: dict[str, Any],
+    comment_ids: list[int | None],
+) -> None:
+    pr_number = webhook_info.get("pr_number")
+    repo = webhook_info.get("repo_name")
+    if not isinstance(pr_number, int) or not isinstance(repo, str):
+        return
+    token = get_github_token(settings["ssm_openci_tf_github_token"])
+    client = GitHubClient(token)
+    warnings = delete_acknowledged_command_comments(client, repo, comment_ids)
+    for warning in warnings:
+        logger.warning(warning)
+
+
+def _delete_stale_confirm_token_comments_after_replacement(
+    webhook_info: dict[str, Any],
+    settings: dict[str, Any],
+    confirm_token: str | None,
+    *,
+    exclude_comment_ids: set[int] | None = None,
+) -> None:
+    pr_number = webhook_info.get("pr_number")
+    repo = webhook_info.get("repo_name")
+    if not isinstance(pr_number, int) or not isinstance(repo, str):
+        return
+    token = get_github_token(settings["ssm_openci_tf_github_token"])
+    client = GitHubClient(token)
+    warnings = delete_stale_confirm_token_comments(
+        client,
+        repo,
+        pr_number,
+        confirm_token,
+        exclude_comment_ids=exclude_comment_ids,
+    )
+    for warning in warnings:
+        logger.warning(warning)
 
 
 def _current_pr_head_sha(settings: dict[str, Any], repo: str, pr_number: int) -> str:
@@ -62,6 +152,10 @@ def create_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     commit_hash = _current_pr_head_sha(settings, repo_name, pr_number)
     if not isinstance(folders, list) or not all(isinstance(folder, str) for folder in folders):
         raise ValueError("folders must be a list of strings")
+    requested_comment_id = webhook.get("comment_id")
+    requested_comment_body = webhook.get("comment_body")
+    if isinstance(requested_comment_body, str):
+        requested_comment_body = _redact_confirm_token(requested_comment_body)
     try:
         failure, record = create_intent(
             action=action,
@@ -74,13 +168,27 @@ def create_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         )
     except IntentCreationError as error:
         failures = [IntentGateFailure(str(error))]
-        body = intent_failure_comment(action, failures)
-        _post_comment(webhook, settings, body)
+        body = _with_intent_command_context(
+            webhook, action, intent_failure_comment(action, failures)
+        )
+        if _post_comment(webhook, settings, body) is not None:
+            _delete_triggering_comment_after_replacement(
+                webhook,
+                settings,
+                requested_comment_id if isinstance(requested_comment_id, int) else None,
+            )
         return {**event, "intent_failed": True, "intent_failures": [failure.message for failure in failures]}
     if failure is not None or record is None:
         failures = [failure] if failure is not None else [IntentGateFailure("intent gate failed")]
-        body = intent_failure_comment(action, failures)
-        _post_comment(webhook, settings, body)
+        body = _with_intent_command_context(
+            webhook, action, intent_failure_comment(action, failures)
+        )
+        if _post_comment(webhook, settings, body) is not None:
+            _delete_triggering_comment_after_replacement(
+                webhook,
+                settings,
+                requested_comment_id if isinstance(requested_comment_id, int) else None,
+            )
         return {**event, "intent_failed": True, "intent_failures": [item.message for item in failures]}
     summaries = [f"- `{folder}`: pinned plan from execution `{record['source_run_id']}`" for folder in record["folders"]]
     body = intent_success_comment(
@@ -101,7 +209,20 @@ def create_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         ),
         plan_summaries=summaries,
     )
-    _post_comment(webhook, settings, body)
+    body = _with_intent_command_context(webhook, action, body)
+    intent_comment_id = _post_comment(webhook, settings, body)
+    if isinstance(intent_comment_id, int):
+        store_intent_comment_metadata(
+            record["token"],
+            requested_comment_id=requested_comment_id if isinstance(requested_comment_id, int) else None,
+            requested_comment_body=requested_comment_body if isinstance(requested_comment_body, str) else None,
+            intent_comment_id=intent_comment_id,
+        )
+        _delete_triggering_comment_after_replacement(
+            webhook,
+            settings,
+            requested_comment_id if isinstance(requested_comment_id, int) else None,
+        )
     return {**event, "intent_created": True, "intent_token": record["token"]}
 
 
@@ -125,10 +246,50 @@ def confirm_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         repo_name=repo_name,
     )
     if failures or confirmed is None:
-        body = intent_failure_comment(action, failures or [IntentGateFailure("confirmation failed")])
-        _post_comment(webhook, settings, body)
+        body = _with_intent_command_context(
+            webhook,
+            action,
+            intent_failure_comment(
+                action, failures or [IntentGateFailure("confirmation failed")]
+            ),
+        )
+        confirmation_comment_id = (
+            webhook.get("comment_id") if isinstance(webhook.get("comment_id"), int) else None
+        )
+        if _post_comment(webhook, settings, body) is not None:
+            related_ids: list[int | None] = [confirmation_comment_id]
+            record = get_intent(token)
+            if record is not None:
+                related_ids.extend([record.intent_comment_id, record.requested_comment_id])
+            _delete_comments_after_replacement(webhook, settings, related_ids)
+            _delete_stale_confirm_token_comments_after_replacement(
+                webhook,
+                settings,
+                token,
+                exclude_comment_ids={
+                    comment_id
+                    for comment_id in related_ids
+                    if isinstance(comment_id, int)
+                },
+            )
         return {**event, "intent_failed": True, "intent_failures": [item.message for item in failures]}
     _record_confirmed_pipeline_metadata(event, confirmed)
+    intent_comment_id = confirmed.get("intent_comment_id")
+    confirmation_comment_id = (
+        webhook.get("comment_id") if isinstance(webhook.get("comment_id"), int) else None
+    )
+    if isinstance(intent_comment_id, int):
+        _delete_triggering_comment_after_replacement(webhook, settings, intent_comment_id)
+    _delete_stale_confirm_token_comments_after_replacement(
+        webhook,
+        settings,
+        token,
+        exclude_comment_ids={
+            comment_id
+            for comment_id in (confirmation_comment_id, intent_comment_id)
+            if isinstance(comment_id, int)
+        },
+    )
     webhook_updates: dict[str, Any] = {"commit_hash": commit_hash}
     if isinstance(confirmed.get("pipeline"), str):
         webhook_updates["pipeline"] = confirmed["pipeline"]
@@ -152,5 +313,9 @@ def confirm_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         "commit_hash": commit_hash,
         "webhook_info": {**webhook, **webhook_updates},
         "confirm_token": None,
+        "consumed_confirm_token": token,
         "intent_confirmed": True,
+        "requested_comment_id": confirmed.get("requested_comment_id"),
+        "requested_comment_body": confirmed.get("requested_comment_body"),
+        "intent_comment_id": confirmed.get("intent_comment_id"),
     }

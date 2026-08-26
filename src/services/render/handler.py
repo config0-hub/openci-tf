@@ -36,6 +36,12 @@ from src.domain.engine.summary import (
 from src.platform.aws.s3 import get_bounded_json, list_text_prefix
 from src.platform.aws.ssm import get_github_token
 from src.platform.github.client import GitHubClient, comment_url
+from src.platform.github.command_comment_cleanup import (
+    delete_acknowledged_command_comment,
+    delete_acknowledged_command_comments,
+    delete_stale_confirm_token_comments,
+    defer_command_comment_cleanup,
+)
 from src.domain.github.comment_object_id import should_emit_comment_object_marker
 from src.services.render.artifact_access import (
     _artifact_list_prefix,
@@ -51,6 +57,8 @@ from src.services.render.comments import (
     _delete_generated_comment,
     _delete_transient_status_comment,
     _managed_comment_marker as _comments_managed_comment_marker,
+    _with_cleanup_warnings,
+    _with_command_context,
 )
 from src.services.render.registry_update import (
     _resolve_run_id,
@@ -313,9 +321,26 @@ def _render_early_placeholder(event: dict[str, Any]) -> dict[str, Any]:
     run_id = _resolve_run_id(event)
     token = get_github_token(event["settings"]["ssm_openci_tf_github_token"])
     client = GitHubClient(token)
-    body = status_comment_in_progress(commit_hash, console_url, run_id)
+    body = _with_command_context(
+        event,
+        status_comment_in_progress(commit_hash, console_url, run_id),
+        run_id=run_id,
+    )
     comment_id = client.create_comment(repo, pr, body)
-    return {"early_placeholder_rendered": True, "status_comment_id": comment_id}
+    cleanup_warnings: list[str] = []
+    action = str(event.get("action") or webhook.get("action") or "plan")
+    if not defer_command_comment_cleanup(action):
+        cleanup_warnings.extend(
+            delete_acknowledged_command_comment(
+                client,
+                repo,
+                webhook.get("comment_id") if isinstance(webhook.get("comment_id"), int) else None,
+            )
+        )
+    return _with_cleanup_warnings(
+        {"early_placeholder_rendered": True, "status_comment_id": comment_id},
+        cleanup_warnings,
+    )
 
 
 def _render_placeholder(event: dict[str, Any]) -> dict[str, Any]:
@@ -369,7 +394,7 @@ def _render_placeholder(event: dict[str, Any]) -> dict[str, Any]:
             client,
             repo,
             pr,
-            body,
+            _with_command_context(event, body, run_id=run_id),
             action,
             folder,
         )
@@ -377,12 +402,23 @@ def _render_placeholder(event: dict[str, Any]) -> dict[str, Any]:
         client,
         repo,
         pr,
-        pending_summary(folders, skipped, action=action),
+        _with_command_context(
+            event, pending_summary(folders, skipped, action=action), run_id=run_id
+        ),
         action,
         "all",
         report_all=_summary_uses_report_all(action),
     )
-    return {"placeholder_rendered": True}
+    cleanup_warnings: list[str] = []
+    if not defer_command_comment_cleanup(action):
+        cleanup_warnings.extend(
+            delete_acknowledged_command_comment(
+                client,
+                repo,
+                webhook.get("comment_id") if isinstance(webhook.get("comment_id"), int) else None,
+            )
+        )
+    return _with_cleanup_warnings({"placeholder_rendered": True}, cleanup_warnings)
 
 
 def _resolved_no_op_reason(event: dict[str, Any]) -> str | None:
@@ -397,6 +433,7 @@ def _resolved_no_op_reason(event: dict[str, Any]) -> str | None:
 def _render_no_op(event: dict[str, Any], reason: str) -> dict[str, Any]:
     run_id = _resolve_run_id(event)
     action = event["action"]
+    cleanup_warnings: list[str] = []
     if _uses_github_pr(event):
         webhook = event["webhook_info"]
         repo, pr = webhook["repo_name"], webhook["pr_number"]
@@ -406,18 +443,28 @@ def _render_no_op(event: dict[str, Any], reason: str) -> dict[str, Any]:
             client,
             repo,
             pr,
-            f"## Plan skipped\n\n{reason}.",
-            action,
+            _with_command_context(event, f"## Plan skipped\n\n{reason}.", run_id=run_id),
+            "plan",
             "all",
         )
-        _delete_transient_status_comment(client, repo, pr, run_id)
+        cleanup_warnings = _delete_transient_status_comment(client, repo, pr, run_id) or []
+        cleanup_warnings.extend(
+            delete_acknowledged_command_comment(
+                client,
+                repo,
+                webhook.get("comment_id") if isinstance(webhook.get("comment_id"), int) else None,
+            )
+        )
     _update_run_registry(event, [], action, skipped=[])
-    return {
-        "execution_failed": False,
-        "rendered": True,
-        "no_op": True,
-        "no_op_reason": reason,
-    }
+    return _with_cleanup_warnings(
+        {
+            "execution_failed": False,
+            "rendered": True,
+            "no_op": True,
+            "no_op_reason": reason,
+        },
+        cleanup_warnings,
+    )
 
 
 def _uses_github_pr(event: dict[str, Any]) -> bool:
@@ -453,8 +500,14 @@ def _render_pipeline_failure(event: dict[str, Any]) -> dict[str, Any]:
         client = GitHubClient(token)
         link = console_url or "the Step Functions console"
         body = f" openci-tf pipeline failed at {failure_label} — see execution {link}"
-        _delete_and_repost_unmanaged(client, repo, pr, body, "pipeline-failure")
-        _delete_transient_status_comment(client, repo, pr, run_id)
+        _delete_and_repost_unmanaged(
+            client, repo, pr, _with_command_context(event, body, run_id=run_id), "pipeline-failure"
+        )
+        cleanup_warnings = _delete_transient_status_comment(client, repo, pr, run_id) or []
+        return _with_cleanup_warnings(
+            {"pipeline_failure_rendered": True, "failed_step": failed_step},
+            cleanup_warnings,
+        )
     return {"pipeline_failure_rendered": True, "failed_step": failed_step}
 
 
@@ -609,6 +662,13 @@ def _normalize_config_resolution_error(event: dict[str, Any]) -> dict[str, Any]:
         "outcomes": [outcome],
         "skipped": [],
         "no_op_reason": None,
+        "folders": state.get("folders", []),
+        "all_flag": state.get("all_flag", False),
+        "affected_flag": state.get("affected_flag", False),
+        "requested_comment_id": state.get("requested_comment_id"),
+        "requested_comment_body": state.get("requested_comment_body"),
+        "intent_comment_id": state.get("intent_comment_id"),
+        "consumed_confirm_token": state.get("consumed_confirm_token"),
     }
 
 
@@ -701,22 +761,27 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 repo,
                 pr,
                 _append_footer(
-                    _render_folder_body(
-                        folder,
-                        outcome,
-                        artifacts,
-                        action=action,
-                        commit_hash=commit_hash,
-                        console_url=console_url,
+                    _with_command_context(
+                        event,
+                        _render_folder_body(
+                            folder,
+                            outcome,
+                            artifacts,
+                            action=action,
+                            commit_hash=commit_hash,
+                            console_url=console_url,
+                            run_id=run_id,
+                            repo=repo,
+                            render_items=render_items,
+                            manifest_s3_uri=outcome.get("manifest_s3_uri")
+                            if isinstance(outcome.get("manifest_s3_uri"), str)
+                            else (outcome.get("pointers") or {}).get("manifest")
+                            if isinstance(outcome.get("pointers"), dict)
+                            else None,
+                            pr_number=scoped_pr,
+                        ),
                         run_id=run_id,
-                        repo=repo,
-                        render_items=render_items,
-                        manifest_s3_uri=outcome.get("manifest_s3_uri")
-                        if isinstance(outcome.get("manifest_s3_uri"), str)
-                        else (outcome.get("pointers") or {}).get("manifest")
-                        if isinstance(outcome.get("pointers"), dict)
-                        else None,
-                        pr_number=scoped_pr,
+                        comments_removed=True,
                     ),
                     pipeline_footer,
                 ),
@@ -734,14 +799,19 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             repo,
             pr,
             _append_footer(
-                summary(
-                    render_items,
-                    artifacts_by_folder,
-                    action=action,
-                    folder_urls=folder_urls,
-                    commit_hash=commit_hash,
-                    console_url=console_url,
-                    steps=event.get("steps") if isinstance(event.get("steps"), list) else None,
+                _with_command_context(
+                    event,
+                    summary(
+                        render_items,
+                        artifacts_by_folder,
+                        action=action,
+                        folder_urls=folder_urls,
+                        commit_hash=commit_hash,
+                        console_url=console_url,
+                        steps=event.get("steps") if isinstance(event.get("steps"), list) else None,
+                    ),
+                    run_id=run_id,
+                    comments_removed=True,
                 ),
                 pipeline_footer,
             ),
@@ -759,7 +829,43 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             "all",
             report_all=_summary_uses_report_all(action),
         )
-    _delete_transient_status_comment(client, repo, pr, _resolve_run_id(event))
+    cleanup_warnings = _delete_transient_status_comment(client, repo, pr, _resolve_run_id(event)) or []
+    if action in {"apply", "destroy"}:
+        explicit_ids = [
+            webhook.get("comment_id") if isinstance(webhook.get("comment_id"), int) else None,
+            event.get("requested_comment_id")
+            if isinstance(event.get("requested_comment_id"), int)
+            else None,
+            event.get("intent_comment_id")
+            if isinstance(event.get("intent_comment_id"), int)
+            else None,
+        ]
+        cleanup_warnings.extend(
+            delete_acknowledged_command_comments(client, repo, explicit_ids)
+        )
+        stale_token = event.get("consumed_confirm_token") or event.get("confirm_token")
+        if isinstance(stale_token, str) and stale_token:
+            cleanup_warnings.extend(
+                delete_stale_confirm_token_comments(
+                    client,
+                    repo,
+                    pr,
+                    stale_token,
+                    exclude_comment_ids={
+                        comment_id
+                        for comment_id in explicit_ids
+                        if isinstance(comment_id, int)
+                    },
+                )
+            )
+    else:
+        cleanup_warnings.extend(
+            delete_acknowledged_command_comment(
+                client,
+                repo,
+                webhook.get("comment_id") if isinstance(webhook.get("comment_id"), int) else None,
+            )
+        )
     _update_run_registry(event, outcomes, action, skipped=skipped_items)
     terminal = _terminal_status(outcomes, skipped_items)
     if action == "report" and isinstance(pr, int):
@@ -770,4 +876,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             terminal=terminal,
         )
     logger.info("render handler completed", extra={"run_id": run_id, "action": action})
-    return {"execution_failed": terminal != "succeeded", "rendered": True}
+    return _with_cleanup_warnings(
+        {"execution_failed": terminal != "succeeded", "rendered": True},
+        cleanup_warnings,
+    )
