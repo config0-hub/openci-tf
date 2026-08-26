@@ -255,16 +255,16 @@ deploy:
     ./scripts/write_tfvars.sh infra/deploy "aws_region={{OPENCI_TF_REGION}}" "image_tag=${IMAGE_TAG}" "target_account_ids=${TARGET_ACCOUNT_IDS}" "run_history_retention_days=${RUN_HISTORY_RETENTION_DAYS}" "run_folder_max_concurrency=${RUN_FOLDER_MAX_CONCURRENCY}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_lifecycle_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}" "api_caller_policy_json=${API_CALLER_POLICY_JSON}" "provision_legacy_executor_local=${PROVISION_LEGACY_EXECUTOR_LOCAL}" "enable_apply=${ENABLE_APPLY}" "aws_console_start_url=${AWS_CONSOLE_START_URL}" "aws_console_role_name=${AWS_CONSOLE_ROLE_NAME}"
     ./scripts/generate_backend.sh "$BUCKET" deploy "{{OPENCI_TF_REGION}}" infra/deploy "{{OPENCI_TF_PROJECT}}-tf-locks"
     terraform -chdir=infra/deploy init -reconfigure -input=false
-    # Fresh installs need ECR before the image push. Upgrades skip the targeted
-    # apply because migration moved blocks require a complete, un-targeted plan.
+    # Fresh installs and interrupted deploys need module.ecr in state before push.
+    # Upgrades skip the targeted apply when module.ecr already satisfies plan.
     set +e
-    ./scripts/ecr_repo_probe.sh "{{OPENCI_TF_PROJECT}}" "{{OPENCI_TF_REGION}}"
-    ECR_PROBE_RC=$?
+    terraform -chdir=infra/deploy plan -input=false -target=module.ecr -detailed-exitcode >/dev/null
+    ECR_PLAN_RC=$?
     set -e
-    case "$ECR_PROBE_RC" in
-      0) echo "ECR repository {{OPENCI_TF_PROJECT}} already exists; skipping bootstrap target apply" ;;
-      1) terraform -chdir=infra/deploy apply -input=false -auto-approve -target=module.ecr ;;
-      *) echo "ERROR: indeterminate ECR repository probe; aborting deploy" >&2; exit 1 ;;
+    case "$ECR_PLAN_RC" in
+      0) echo "ECR module already satisfied; skipping bootstrap target apply" ;;
+      2) terraform -chdir=infra/deploy apply -input=false -auto-approve -target=module.ecr ;;
+      *) echo "ERROR: terraform plan for module.ecr failed; aborting deploy" >&2; exit 1 ;;
     esac
     just docker-push
     terraform -chdir=infra/deploy apply -input=false -auto-approve
