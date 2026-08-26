@@ -44,8 +44,7 @@ locals {
 }
 
 resource "aws_iam_role" "executor_remote" {
-  count = var.provision_legacy_executor_remote ? 1 : 0
-  name  = local.executor_remote_role_name
+  name = local.executor_remote_role_name
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -73,9 +72,8 @@ resource "aws_iam_role" "executor_remote" {
 }
 
 resource "aws_iam_role_policy" "executor_remote" {
-  count = var.provision_legacy_executor_remote ? 1 : 0
-  name  = "${local.executor_remote_role_name}-policy"
-  role  = aws_iam_role.executor_remote[0].id
+  name = "${local.executor_remote_role_name}-policy"
+  role = aws_iam_role.executor_remote.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -216,13 +214,13 @@ resource "aws_iam_role_policy" "executor_remote" {
 }
 
 resource "aws_iam_role_policy_attachment" "executor_remote_read_only" {
-  count      = var.provision_legacy_executor_remote && !var.enable_apply ? 1 : 0
-  role       = aws_iam_role.executor_remote[0].name
+  count      = var.enable_apply ? 0 : 1
+  role       = aws_iam_role.executor_remote.name
   policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
 }
 
 resource "aws_iam_role_policy_attachment" "executor_remote_power_user" {
-  count      = var.provision_legacy_executor_remote && var.enable_apply ? 1 : 0
-  role       = aws_iam_role.executor_remote[0].name
+  count      = var.enable_apply ? 1 : 0
+  role       = aws_iam_role.executor_remote.name
   policy_arn = "arn:aws:iam::aws:policy/PowerUserAccess"
 }

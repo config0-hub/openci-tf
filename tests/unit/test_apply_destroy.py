@@ -990,7 +990,7 @@ def test_create_handler_failure_posts_context_before_deleting_command(
     assert "## tf apply refused" in posted[0]
 
 
-def test_create_handler_success_deletes_requested_command_after_intent_comment(
+def test_create_handler_success_keeps_requested_command_until_terminal_render(
     monkeypatch,
 ):
     monkeypatch.setattr(
@@ -1043,7 +1043,7 @@ def test_create_handler_success_deletes_requested_command_after_intent_comment(
     result = create_handler(event, None)
 
     assert result["intent_created"] is True
-    assert deleted == [44]
+    assert deleted == []
 
 
 def test_confirm_handler_failure_deletes_confirmation_intent_and_requested_comments(
@@ -1108,7 +1108,7 @@ def test_confirm_handler_failure_deletes_confirmation_intent_and_requested_comme
     assert stale_tokens == ["abc123"]
 
 
-def test_confirm_handler_success_deletes_intent_request_comment(monkeypatch):
+def test_confirm_handler_success_deletes_intent_and_confirmation_comments(monkeypatch):
     monkeypatch.setattr(
         "src.services.intent.handler._current_pr_head_sha",
         lambda *_args, **_kwargs: "a" * 40,
@@ -1129,11 +1129,11 @@ def test_confirm_handler_success_deletes_intent_request_comment(monkeypatch):
             },
         ),
     )
-    deleted: list[int | None] = []
+    deleted_batches: list[list[int | None]] = []
     stale_tokens: list[str | None] = []
     monkeypatch.setattr(
-        "src.services.intent.handler._delete_triggering_comment_after_replacement",
-        lambda _webhook, _settings, comment_id: deleted.append(comment_id),
+        "src.services.intent.handler._delete_comments_after_replacement",
+        lambda _webhook, _settings, comment_ids: deleted_batches.append(list(comment_ids)),
     )
     monkeypatch.setattr(
         "src.services.intent.handler._delete_stale_confirm_token_comments_after_replacement",
@@ -1157,7 +1157,9 @@ def test_confirm_handler_success_deletes_intent_request_comment(monkeypatch):
 
     assert result["intent_confirmed"] is True
     assert result["consumed_confirm_token"] == "abc123"
-    assert deleted == [11]
+    # Intent comment and the confirmation comment (spent token) go now; the
+    # request comment (10) waits for the terminal render.
+    assert deleted_batches == [[11, 55]]
     assert stale_tokens == ["abc123"]
 
 
@@ -1222,7 +1224,7 @@ def test_confirm_handler_forces_pinned_intent_folder_selection(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        "src.services.intent.handler._delete_triggering_comment_after_replacement",
+        "src.services.intent.handler._delete_comments_after_replacement",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -1273,7 +1275,7 @@ def test_confirm_handler_records_pipeline_metadata_when_registry_enabled(monkeyp
         ),
     )
     monkeypatch.setattr(
-        "src.services.intent.handler._delete_triggering_comment_after_replacement",
+        "src.services.intent.handler._delete_comments_after_replacement",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(

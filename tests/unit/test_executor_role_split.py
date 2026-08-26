@@ -170,11 +170,15 @@ def test_executor_poweruser_policy_renders_under_terraform_test() -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_target_connect_declares_provision_legacy_variable():
-    variables = (_REPO_ROOT / "infra/modules/target-connect/variables.tf").read_text(
-        encoding="utf-8"
-    )
-    assert "provision_legacy_executor_remote" in variables
+def test_target_connect_has_no_legacy_migration_surface():
+    module = _REPO_ROOT / "infra/modules/target-connect"
+    for path in (module / "variables.tf", module / "main.tf", module / "outputs.tf"):
+        assert "provision_legacy_executor_remote" not in path.read_text(encoding="utf-8")
+    root = _REPO_ROOT / "infra/target-connect"
+    for path in (root / "variables.tf", root / "main.tf"):
+        assert "provision_legacy_executor_remote" not in path.read_text(encoding="utf-8")
+    main = (module / "main.tf").read_text(encoding="utf-8")
+    assert 'resource "aws_iam_role" "executor_remote" {\n  name' in main
 
 
 def test_legacy_remote_policy_denies_new_split_state_roots():
@@ -191,13 +195,13 @@ def test_legacy_remote_attachment_respects_enable_apply():
     source = (_REPO_ROOT / "infra/modules/target-connect/main.tf").read_text(
         encoding="utf-8"
     )
-    assert "provision_legacy_executor_remote && !var.enable_apply" in source
-    assert "provision_legacy_executor_remote && var.enable_apply" in source
+    assert "count      = var.enable_apply ? 0 : 1" in source
+    assert "count      = var.enable_apply ? 1 : 0" in source
 
 
 def test_target_connect_root_passes_enable_apply_to_legacy_module():
     source = (_REPO_ROOT / "infra/target-connect/main.tf").read_text(encoding="utf-8")
-    assert "enable_apply                     = var.enable_apply" in source
+    assert "enable_apply             = var.enable_apply" in source
 
 
 def test_deploy_and_target_recipes_read_enable_apply_from_ssm():
@@ -208,7 +212,7 @@ def test_deploy_and_target_recipes_read_enable_apply_from_ssm():
     target_script = (_REPO_ROOT / "scripts/target_aws_role.sh").read_text(
         encoding="utf-8"
     )
-    assert "provision_legacy_executor_remote" in target_script
+    assert "provision_legacy_executor_remote" not in target_script
     assert "enable_apply" in target_script
     assert 'TFVARS+=("enable_apply=${ENABLE_APPLY}")' in target_script
 

@@ -12,9 +12,19 @@ from src.domain.formatters.artifacts import _redact_confirm_token
 
 _TABLE_HEADER = "| Time | Command | Status |"
 _TABLE_SEP = "|------|---------|--------|"
+# Command cells are written through sanitize_audit_command, so a cell never
+# contains a backtick and every pipe is the GitHub table escape "\\|".
 _ROW_RE = re.compile(
-    r"^\|\s*(?P<time>[^|]+?)\s*\|\s*`(?P<command>[^`]+)`\s*\|\s*(?P<status>accepted|not supported)\s*\|\s*$"
+    r"^\|\s*(?P<time>[^|]+?)\s*\|\s*`(?P<command>(?:[^`|\\]|\\\||\\(?!\|))+)`\s*\|\s*(?P<status>accepted|not supported)\s*\|\s*$"
 )
+MAX_AUDIT_ROWS = 200
+
+
+def sanitize_audit_command(command_text: str) -> str:
+    """Collapse whitespace, drop backticks, and escape pipes for a table cell."""
+    collapsed = " ".join(command_text.split()).replace("`", "")
+    unescaped = collapsed.replace("\\|", "|")
+    return unescaped.replace("|", "\\|")
 
 
 def _usage_fragments() -> list[str]:
@@ -52,9 +62,17 @@ def unsupported_command_help_comment() -> str:
     return f"## openci-tf: command not accepted\n\n{command_usage_line()}"
 
 
+_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M UTC"
+
+
 def format_command_timestamp(when: datetime | None = None) -> str:
     moment = when or datetime.now(timezone.utc)
-    return moment.strftime("%Y-%m-%d %H:%M UTC")
+    return moment.strftime(_TIMESTAMP_FORMAT)
+
+
+def parse_command_timestamp(value: str) -> datetime:
+    """Inverse of format_command_timestamp; raises ValueError on any other shape."""
+    return datetime.strptime(value.strip(), _TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc)
 
 
 def format_commands_run_marker(repo_name: str, pr_number: int) -> str:
@@ -100,8 +118,10 @@ def format_command_audit_comment(
         _TABLE_SEP,
     ]
     for time_value, command_text, status in rows:
-        redacted = _redact_confirm_token(command_text)
-        lines.append(f"| {time_value} | `{redacted}` | {status} |")
+        cell = sanitize_audit_command(_redact_confirm_token(command_text))
+        if not cell:
+            raise ValueError("audit command cell is empty after sanitizing")
+        lines.append(f"| {time_value} | `{cell}` | {status} |")
     lines.append("")
     lines.append(format_commands_run_marker(repo_name, pr_number))
     return "\n".join(lines)
@@ -127,6 +147,7 @@ def append_audit_row(
         created_at = timestamp
         rows = []
     rows.append((timestamp, redacted_command, status))
+    rows = rows[-MAX_AUDIT_ROWS:]
     return format_command_audit_comment(
         created_at=created_at,
         rows=rows,

@@ -110,7 +110,6 @@ validate_state_bucket
 HUB_ROLE_ARN="arn:aws:iam::${HUB_ACCOUNT_ID}:role/${PROJECT}-hub-lambda-exec"
 TARGET_STATE_ARN="arn:aws:s3:::${STATE_BUCKET}"
 LOCK_TABLE="${PROJECT}-tf-locks"
-PROVISION_LEGACY="$(./scripts/ssm_config.sh get-or provision_legacy_executor_remote true)"
 ENABLE_APPLY="$(./scripts/ssm_config.sh get-or enable_apply false)"
 
 if [ "$ACTION" = "create" ]; then
@@ -164,7 +163,6 @@ TFVARS=(
 	"state_bucket_arn=${TARGET_STATE_ARN}"
 )
 if [ "$ROLE_KIND" = "readonly" ]; then
-	TFVARS+=("provision_legacy_executor_remote=${PROVISION_LEGACY}")
 	TFVARS+=("enable_apply=${ENABLE_APPLY}")
 fi
 ./scripts/write_tfvars.sh "$TF_ROOT" "${TFVARS[@]}"

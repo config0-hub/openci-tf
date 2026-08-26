@@ -218,11 +218,9 @@ def create_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             requested_comment_body=requested_comment_body if isinstance(requested_comment_body, str) else None,
             intent_comment_id=intent_comment_id,
         )
-        _delete_triggering_comment_after_replacement(
-            webhook,
-            settings,
-            requested_comment_id if isinstance(requested_comment_id, int) else None,
-        )
+    # The user's request comment stays until the terminal apply/destroy
+    # render deletes it (render/handler.py); only the intent comment replaces
+    # it here.
     return {**event, "intent_created": True, "intent_token": record["token"]}
 
 
@@ -278,8 +276,11 @@ def confirm_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     confirmation_comment_id = (
         webhook.get("comment_id") if isinstance(webhook.get("comment_id"), int) else None
     )
-    if isinstance(intent_comment_id, int):
-        _delete_triggering_comment_after_replacement(webhook, settings, intent_comment_id)
+    # The token is consumed, so the confirmation comment carrying it goes now;
+    # the terminal render deletes it again as an idempotent pass (404 is fine).
+    _delete_comments_after_replacement(
+        webhook, settings, [intent_comment_id, confirmation_comment_id]
+    )
     _delete_stale_confirm_token_comments_after_replacement(
         webhook,
         settings,

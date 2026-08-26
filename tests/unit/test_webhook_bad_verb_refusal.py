@@ -64,6 +64,9 @@ def _wire_webhook(monkeypatch):
         def find_comment_by_tag(self, *_args, **_kwargs):
             return None
 
+        def find_comments_by_tag(self, *_args, **_kwargs):
+            return []
+
         def get_comment_body(self, *_args, **_kwargs):
             return None
 

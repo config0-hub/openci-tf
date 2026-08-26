@@ -99,6 +99,9 @@ def _wire_webhook(monkeypatch, clone_dir: str, *, pr_state: str = "open"):
                     return cid
             return None
 
+        def find_comments_by_tag(self, repo, pr, tag):
+            return [cid for cid, body in audit_bodies.items() if tag in body]
+
         def get_comment_body(self, repo, comment_id):
             return audit_bodies.get(comment_id)
 

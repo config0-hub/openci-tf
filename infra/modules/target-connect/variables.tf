@@ -23,13 +23,7 @@ variable "lock_table_arn" {
 }
 
 variable "enable_apply" {
-  description = "Legacy IAM migration only: when true, attach PowerUserAccess to executor-remote; runtime intent gating uses DynamoDB enable_apply"
+  description = "When true, attach PowerUserAccess to executor-remote; runtime intent gating uses DynamoDB enable_apply"
   type        = bool
   default     = false
-}
-
-variable "provision_legacy_executor_remote" {
-  description = "When true, retain the legacy executor-remote IAM role for pre-split upgrades; set false via target-account install SSM to retire durably"
-  type        = bool
-  default     = true
 }

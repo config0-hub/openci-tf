@@ -30,13 +30,12 @@ locals {
 }
 
 module "target_connect" {
-  source                           = "../modules/target-connect"
-  role_prefix                      = var.project_name
-  hub_lambda_exec_role_arn         = local.hub_lambda_exec_role_arn
-  state_bucket_arn                 = local.state_bucket_arn
-  lock_table_arn                   = local.lock_table_arn
-  provision_legacy_executor_remote = var.provision_legacy_executor_remote
-  enable_apply                     = var.enable_apply
+  source                   = "../modules/target-connect"
+  role_prefix              = var.project_name
+  hub_lambda_exec_role_arn = local.hub_lambda_exec_role_arn
+  state_bucket_arn         = local.state_bucket_arn
+  lock_table_arn           = local.lock_table_arn
+  enable_apply             = var.enable_apply
 }
 
 module "executor_readonly" {

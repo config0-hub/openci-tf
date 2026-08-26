@@ -28,9 +28,3 @@ variable "enable_apply" {
   type        = bool
   default     = false
 }
-
-variable "provision_legacy_executor_remote" {
-  description = "When true, retain legacy executor-remote in target-connect state; persisted in target-account install SSM"
-  type        = bool
-  default     = true
-}
