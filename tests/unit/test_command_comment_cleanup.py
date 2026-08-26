@@ -16,17 +16,27 @@ from src.platform.github.command_comment_cleanup import (
 
 
 class _Client:
-    def __init__(self, *, delete_error: Exception | None = None, matches: list[int] | None = None):
+    def __init__(
+        self,
+        *,
+        delete_error: Exception | None = None,
+        matches: list[tuple[int, str]] | None = None,
+    ):
         self.deleted: list[int] = []
         self._delete_error = delete_error
         self._matches = matches or []
+
+    def token_login(self) -> str:
+        return "openci-bot"
 
     def delete_comment(self, _repo: str, comment_id: int) -> None:
         if self._delete_error is not None:
             raise self._delete_error
         self.deleted.append(comment_id)
 
-    def find_comment_ids_by_body_substring(self, _repo: str, _pr: int, needle: str) -> list[int]:
+    def find_comments_by_body_substring(
+        self, _repo: str, _pr: int, needle: str
+    ) -> list[tuple[int, str]]:
         if needle == "confirm abc123":
             return list(self._matches)
         return []
@@ -40,7 +50,7 @@ def test_delete_acknowledged_command_comment_treats_missing_as_non_fatal():
 
 
 def test_delete_stale_confirm_token_comments_skips_excluded_ids():
-    client = _Client(matches=[10, 11, 12])
+    client = _Client(matches=[(10, "openci-bot"), (11, "openci-bot"), (12, "openci-bot")])
     warnings = delete_stale_confirm_token_comments(
         client,
         "o/r",
@@ -52,8 +62,15 @@ def test_delete_stale_confirm_token_comments_skips_excluded_ids():
     assert client.deleted == [10, 12]
 
 
+def test_delete_stale_confirm_token_comments_never_deletes_human_comments():
+    client = _Client(matches=[(10, "openci-bot"), (12, "alice")])
+    warnings = delete_stale_confirm_token_comments(client, "o/r", 1, "abc123")
+    assert warnings == []
+    assert client.deleted == [10]
+
+
 def test_delete_stale_confirm_token_comments_noop_without_token():
-    client = _Client(matches=[10])
+    client = _Client(matches=[(10, "openci-bot")])
     warnings = delete_stale_confirm_token_comments(client, "o/r", 1, None)
     assert warnings == []
     assert client.deleted == []

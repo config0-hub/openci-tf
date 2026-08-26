@@ -10,6 +10,7 @@ from src.domain.command.grammar import ParseError, parse_command
     [
         ("tf plan pipeline data/primary", "plan", False),
         ("tf plan --destroy pipeline data/primary", "plan", True),
+        ("tf drift pipeline data/primary", "drift", False),
     ],
 )
 def test_pipeline_safe_grammar_accepts(text: str, action: str, destroy: bool) -> None:
@@ -43,7 +44,10 @@ def test_apply_pipeline_grammar_accepts_step_cursor(text: str, step: int) -> Non
 @pytest.mark.parametrize(
     "text,match",
     [
-        ("tf drift pipeline data/primary", "unknown verb"),
+        ("tf drift", "only supported as tf drift pipeline"),
+        ("tf drift infra/vpc", "only supported as tf drift pipeline"),
+        ("tf drift --destroy pipeline data/primary", "only supported as tf drift pipeline"),
+        ("tf drift pipeline", "pipeline <name>"),
         ("tf report pipeline data/primary", "report is not supported"),
         ("tf plan pipeline data/primary all", "pipeline <name>"),
         ("tf plan all pipeline data/primary", "expected"),

@@ -32,7 +32,7 @@ def test_tf_plan_all_is_rejected():
 
 
 def test_tf_drift_is_rejected():
-    with pytest.raises(ParseError, match="unknown verb"):
+    with pytest.raises(ParseError, match="only supported as tf drift pipeline"):
         parse_command("tf drift infra/vpc")
 
 

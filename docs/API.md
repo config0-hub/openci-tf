@@ -54,8 +54,12 @@ Pipeline run:
 `pipeline` is mutually exclusive with `folders`; `folder_mode` may be omitted or
 set to `pipeline`. API callers can create `plan`, `drift`, and `report` runs, but
 `report` is not supported for pipelines. GitHub webhook ingress uses `explicit`
-folder selection from parsed `tf plan <folder-or-csv>` and
-`tf plan --destroy <folder-or-csv>` comments only.
+folder selection from `tf plan <folder-or-csv>` and
+`tf plan --destroy <folder-or-csv>`, `all` from bare `tf report`, and `pipeline`
+from `tf plan pipeline <name>`, `tf plan --destroy pipeline <name>`, and
+`tf drift pipeline <name>`. Folder-targeted or bare `tf drift` is only available
+through the API. Every accepted or rejected `tf` comment is recorded in the
+durable audit comment described in [docs/GITHUB_WEBHOOK.md](GITHUB_WEBHOOK.md).
 
 ## Retention
 
@@ -186,4 +190,5 @@ table or runtime gate.
 
 ## Future apply contract (disabled)
 
-openci-tf verbs remain `plan`, `drift`, and `report` only. A future human-controlled apply outside this API would need the exact `plan.tfplan` S3 URI from the manifest plus matching metadata, checksum, expiry, repository, pinned SHA, account, folder, attempt, and runtime verification before using the binary.
+API verbs remain `plan`, `drift`, and `report` only; PR apply and destroy use
+the gated flow in [docs/APPLY.md](APPLY.md). A future human-controlled apply outside this API would need the exact `plan.tfplan` S3 URI from the manifest plus matching metadata, checksum, expiry, repository, pinned SHA, account, folder, attempt, and runtime verification before using the binary.

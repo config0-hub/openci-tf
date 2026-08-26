@@ -76,9 +76,12 @@ def test_terminal_apply_deletes_request_intent_and_confirm_comments(monkeypatch)
         def delete_comment(self, *_args):
             return None
 
-        def find_comment_ids_by_body_substring(self, _repo, _pr, needle):
+        def token_login(self):
+            return "openci-bot"
+
+        def find_comments_by_body_substring(self, _repo, _pr, needle):
             assert "confirm deadbeef" in needle
-            return [99]
+            return [(99, "openci-bot")]
 
     monkeypatch.setattr(
         render,

@@ -3,10 +3,24 @@
 `openci-tf` is a safe-path GitHub PR automation service. Authentication requires a
 collaborator with write or admin permission, a pinned PR head SHA, and a non-fork
 pull request. The command surface is comment-driven: `tf plan <folder-or-csv>`,
-`tf plan --destroy <folder-or-csv>`, `tf report`, `tf apply <folder-or-csv>`,
-and `tf destroy <folder-or-csv>`. PR open/synchronize events do not start runs; only supported `tf ...` issue
-comments do. Apply and destroy are rejected both by the resolver and the
-inner state machine.
+`tf plan --destroy <folder-or-csv>`, `tf plan [--destroy] pipeline <name>`,
+`tf drift pipeline <name>`, `tf report`, `tf apply <folder-or-csv>`,
+`tf apply pipeline <name> [step <n>]`, and `tf destroy <folder-or-csv>`. PR
+open/synchronize events do not start runs; only supported `tf ...` issue
+comments do. Apply and destroy run only through the confirm-token flow in
+APPLY.md; the read lane rejects them.
+
+Every `tf` comment is first written to one durable audit comment per PR
+(marker `comment_object_id: <repo>:::pr-<n>::commands-run`, `accepted` or
+`not supported` rows keyed by GitHub delivery id, 200 rows and 60,000
+characters at most, confirm tokens redacted). The write is serialized by a
+60 second per-PR lock in the locks table, and an accepted row that cannot be
+written stops the run with `502`. Invalid syntax gets a transient help comment
+that is deleted with the user's comment after 10 seconds; closed, merged, or
+unreadable (403/404) pull requests get a short ignore comment. Read-lane user
+comments are deleted once acknowledged; apply/destroy request, intent, and
+confirmation comments are deleted only by the terminal render, and stale token
+sweeps touch bot-authored comments only. See GITHUB_WEBHOOK.md.
 
 The outer state machine routes the safe verbs, resolves folders, renders in-progress
 placeholders, applies locks, starts a bounded-concurrency Map, and renders final

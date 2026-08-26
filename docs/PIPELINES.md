@@ -36,6 +36,7 @@ Limits and rejects:
 
 - `tf plan pipeline <name>`
 - `tf plan --destroy pipeline <name>`
+- `tf drift pipeline <name>`
 - `tf apply pipeline <name> [step <n>]`
 - `tf apply confirm <token>`
 

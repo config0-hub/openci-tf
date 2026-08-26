@@ -39,6 +39,11 @@ def parse_command(text: str) -> Command:
     verb = tokens[1].lower()
     if verb == "validate":
         raise ParseError("validate is not a supported command; use tf plan")
+    if verb == "drift":
+        # Pipeline drift stays supported; bare and folder-targeted drift are not.
+        if len(tokens) > 2 and tokens[2].lower() == "pipeline":
+            return _parse_read_only_pipeline_command(verb, tokens[2:], destroy_flag=False)
+        raise ParseError("tf drift is only supported as tf drift pipeline <name>")
     if verb not in _PUBLIC_VERBS:
         raise ParseError(f"unknown verb: {verb!r}")
 

@@ -11,6 +11,7 @@ from typing import Any
 import requests
 from botocore.exceptions import BotoCoreError, ClientError
 
+from src.core.errors import LockHeldError
 from src.core.logging import get_logger
 from src.core.models import Command
 from src.domain.authorization import can_trigger
@@ -24,6 +25,7 @@ from src.domain.formatters.artifacts import (
     closed_pr_rejection_comment,
 )
 from src.domain.formatters.command_audit import unsupported_command_help_comment
+from src.platform.aws.audit_lock import locks_table
 from src.platform.aws.dynamo import get_repo_settings
 from src.platform.aws.ssm import get_github_token
 from src.platform.github.client import (
@@ -51,6 +53,9 @@ from src.services.webhook.validate import verify_signature
 logger = get_logger(__name__)
 
 _UNSUPPORTED_REJECTION_SLEEP_SECONDS = 10
+# Failures that make a best-effort audit row or acknowledgement comment impossible.
+_AUDIT_BEST_EFFORT_ERRORS = (requests.RequestException, LockHeldError, BotoCoreError, ClientError)
+_SAFE_ACTIONS = frozenset({"plan", "report", "plan_destroy", "drift"})
 
 
 def _response(status: int, body: dict[str, Any]) -> dict[str, Any]:
@@ -81,6 +86,7 @@ def _record_audit_and_maybe_delete_command(
     comment_body: str,
     status: str,
     *,
+    delivery_id: str,
     delete_comment: bool,
 ) -> None:
     record_command_audit(
@@ -89,6 +95,8 @@ def _record_audit_and_maybe_delete_command(
         pr_number,
         command_text=comment_body,
         status=status,
+        delivery_id=delivery_id,
+        lock_table=locks_table(),
     )
     if delete_comment:
         delete_acknowledged_command_comment(client, repo, comment_id)
@@ -100,6 +108,7 @@ def _handle_unsupported_tf_command(
     pr_number: int,
     comment_id: int | None,
     comment_body: str,
+    delivery_id: str,
 ) -> None:
     record_command_audit(
         client,
@@ -107,6 +116,8 @@ def _handle_unsupported_tf_command(
         pr_number,
         command_text=comment_body,
         status="not supported",
+        delivery_id=delivery_id,
+        lock_table=locks_table(),
     )
     rejection_id = client.create_comment(repo, pr_number, unsupported_command_help_comment())
     time.sleep(_UNSUPPORTED_REJECTION_SLEEP_SECONDS)
@@ -124,6 +135,12 @@ def _post_command_rejection_and_cleanup(
 ) -> None:
     client.create_comment(repo, pr_number, body)
     delete_acknowledged_command_comment(client, repo, comment_id)
+
+
+def _is_unreadable_pr_error(error: requests.RequestException) -> bool:
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    return status in {403, 404}
 
 
 def _github_info_dict(info: Any) -> dict[str, Any]:
@@ -164,6 +181,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     if info.event_type == "pull_request":
         return _response(200, {"message": "Event ignored", "reason": "pull_request_event"})
     pr_state: str | None = None
+    pr_unreadable = False
     try:
         token = get_github_token(settings.ssm_openci_tf_github_token)
         if info.pr_api_url:
@@ -174,9 +192,15 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 info.commit_hash = pr.get("head", {}).get("sha")
                 info.head_repo_name = pr.get("head", {}).get("repo", {}).get("full_name")
                 info.base_repo_name = pr.get("base", {}).get("repo", {}).get("full_name")
-    except (requests.RequestException, BotoCoreError, ClientError):
+    except requests.RequestException as error:
+        # A 403/404 on the PR itself is unreadable state for a tf command: it is
+        # acknowledged like a closed PR below. Anything else stays a 502.
+        if not _is_unreadable_pr_error(error) or info.event_type != "issue_comment" or not info.pr_number:
+            return _response(502, {"error": "Unable to pin pull request head"})
+        pr_unreadable = True
+    except (BotoCoreError, ClientError):
         return _response(502, {"error": "Unable to pin pull request head"})
-    if info.pr_number and (not info.commit_hash or not info.head_repo_name or not info.base_repo_name):
+    if info.pr_number and not pr_unreadable and (not info.commit_hash or not info.head_repo_name or not info.base_repo_name):
         return _response(422, {"error": "Missing pull request head"})
     head_repo = info.head_repo_name
     base_repo = info.base_repo_name
@@ -215,6 +239,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 info.pr_number,
                 command_text=info.comment_body or "",
                 status="not supported",
+                delivery_id=delivery_id,
+                lock_table=locks_table(),
             )
             _post_command_rejection_and_cleanup(
                 client=client,
@@ -223,7 +249,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 comment_id=info.comment_id,
                 body=rejection_body,
             )
-        except requests.RequestException:
+        except _AUDIT_BEST_EFFORT_ERRORS:
             logger.warning(
                 "failed to post closed-PR rejection comment for pr %s",
                 info.pr_number,
@@ -244,8 +270,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     pr_number=info.pr_number,
                     comment_id=info.comment_id,
                     comment_body=info.comment_body or "",
+                    delivery_id=delivery_id,
                 )
-            except requests.RequestException:
+            except _AUDIT_BEST_EFFORT_ERRORS:
                 logger.warning(
                     "failed to handle unsupported tf command for pr %s",
                     info.pr_number,
@@ -264,13 +291,17 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 info.comment_id,
                 info.comment_body or "",
                 "accepted",
+                delivery_id=delivery_id,
                 delete_comment=not defer_command_comment_cleanup(cmd.action),
             )
-        except requests.RequestException:
+        except _AUDIT_BEST_EFFORT_ERRORS as error:
+            # Fail closed: no durable accepted row means no run.
             logger.warning(
-                "failed to record command audit for pr %s",
+                "failed to record accepted command audit for pr %s: %s",
                 info.pr_number,
+                error,
             )
+            return _response(502, {"error": "Unable to record command audit"})
     action = cmd.effective_action
     folders = list(cmd.folders)
     all_flag = bool(cmd.all_flag)
@@ -294,7 +325,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         except OrchestrationError:
             return _response(502, {"error": "Unable to start run"})
         return _response(200, {"message": "Accepted", "run_id": run_id, "created": created})
-    if action not in {"plan", "report", "plan_destroy"}:
+    if action not in _SAFE_ACTIONS:
         return _response(200, {"message": "Unsafe action ignored"})
     request = github_run_request(
         _github_info_dict(info),

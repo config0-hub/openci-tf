@@ -61,6 +61,26 @@ Set `enable_apply` when registering an account (`just register-account ... --ena
 
 Intent creation (`tf apply <folders>` / `tf destroy <folders>`) still enters the read outer machine only. Confirmation (`tf apply confirm <token>`) atomically revalidates token, head SHA, and pinned plan, then starts exactly one mutation outer machine.
 
+## PR comment lifecycle
+
+1. `tf apply <folders>` is recorded as `accepted` in the durable audit comment
+   (see [docs/GITHUB_WEBHOOK.md](GITHUB_WEBHOOK.md)). The request comment is
+   not deleted yet.
+2. Intent creation posts the intent comment with `tf <action> confirm <token>`.
+3. `tf apply confirm <token>` is recorded as `accepted` with the token redacted.
+   `confirm_handler` consumes the token but deletes nothing on success.
+4. The terminal apply/destroy comment is posted with a command context block.
+   Only then does the render handler delete the request, intent, and
+   confirmation comments by id and sweep bot-authored comments that still
+   contain the spent token.
+5. If confirmation fails, the failure comment is posted first and the same
+   three comments are deleted afterwards.
+
+Early mutation failures (before or during confirmation) render a failure comment
+through `RenderPipelineFailure`; the mutation start input initializes
+`requested_comment_id`, `requested_comment_body`, `intent_comment_id`, and
+`consumed_confirm_token` to null so that route always has its inputs.
+
 ## Token semantics
 
 - 6–8 hex characters, crypto-random

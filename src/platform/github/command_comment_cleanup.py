@@ -59,14 +59,19 @@ def delete_stale_confirm_token_comments(
     *,
     exclude_comment_ids: set[int] | None = None,
 ) -> list[str]:
-    """Delete any PR comments still containing a one-time confirm token."""
+    """Delete bot-authored PR comments still containing a one-time confirm token.
+
+    Only comments written by the token owner (the bot login) are swept. A human
+    comment that merely quotes ``confirm <token>`` is never deleted by content.
+    """
     if not isinstance(token, str) or not token.strip():
         return []
     excluded = exclude_comment_ids or set()
     needle = f"confirm {token.strip()}"
+    bot_login = client.token_login()
     warnings: list[str] = []
-    for comment_id in client.find_comment_ids_by_body_substring(repo, pr_number, needle):
-        if comment_id in excluded:
+    for comment_id, author_login in client.find_comments_by_body_substring(repo, pr_number, needle):
+        if comment_id in excluded or author_login != bot_login:
             continue
         warnings.extend(delete_acknowledged_command_comment(client, repo, comment_id))
     return warnings

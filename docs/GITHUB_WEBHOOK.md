@@ -7,10 +7,62 @@ and the GitHub control token. The endpoint is the deploy output plus
 signatures are verified. Raw Terraform is fallback; the `just` recipe is
 canonical.
 
-Issue comments that start with the `tf` command prefix but name an unknown verb
-receive one refusal comment listing the accepted verbs. No run is started. Comments
-that do not use the `tf` prefix, or that use a known verb with invalid syntax,
-are ignored with `200 {"message": "Event ignored"}` and no PR comment.
+## Command set
+
+Only these issue comments start work on an open, non-fork pull request from a
+collaborator with write or admin permission:
+
+- `tf plan <folder-or-csv>` and `tf plan --destroy <folder-or-csv>`
+- `tf plan pipeline <name>` and `tf plan --destroy pipeline <name>`
+- `tf drift pipeline <name>`
+- `tf report` (all folders; folder targets are rejected)
+- `tf apply <folder-or-csv>`, `tf apply pipeline <name> [step <n>]`,
+  `tf destroy <folder-or-csv>`, and their `confirm <token>` forms (see
+  [docs/APPLY.md](APPLY.md))
+
+Bare `tf plan`, `tf plan all`, bare or folder-targeted `tf drift`, and
+`tf report <folder>` are rejected. PR `opened` and `synchronize` events start
+nothing and return `200 {"reason": "pull_request_event"}`. Comments that do not
+start with `tf` are ignored with no PR comment.
+
+## Durable audit comment
+
+Every `tf` comment from an authorized user is recorded in one bot comment per
+pull request before anything else happens. The comment carries the marker
+`comment_object_id: <repo>:::pr-<n>::commands-run`, a usage line, and a table
+of `| Time | Command | Status |` rows. Status is `accepted` or `not supported`.
+Each row ends with a hidden `<!-- d:<github-delivery-id> -->` so a redelivered
+webhook does not append a second row. Command cells are truncated at 200
+characters with a `[truncated sha256:<prefix>]` suffix; the table keeps at most
+200 rows and the body stays under 60,000 characters by dropping the oldest rows.
+Confirm tokens are written as `confirm <redacted>`.
+
+Writes to the comment are serialized per PR with a 60 second DynamoDB lock in
+the locks table (`audit_lock` in `src/platform/aws`); contention retries for
+about five seconds. If the `accepted` row cannot be written, the webhook returns
+`502` and starts no run. `not supported` rows are best effort.
+
+## Rejected commands and closed or unreadable pull requests
+
+A `tf` comment with invalid syntax gets a `not supported` row and a transient
+help comment listing the accepted forms. After 10 seconds the help comment and
+the user's comment are deleted; the response is `200 {"reason": "invalid_command"}`.
+
+A `tf` comment on a closed or merged pull request, on a pull request whose state
+is missing, or on one GitHub answers with `403` or `404` gets a `not supported`
+row, a short "ignored" comment, and the user's comment is deleted. The response
+is `200 {"reason": "pull_request_not_open"}`. Other GitHub or SSM errors while
+reading the pull request return `502`.
+
+## Command comment cleanup
+
+For read-lane commands the user's comment is deleted right after the audit row
+exists. For `apply` and `destroy` the request, intent, and confirmation comments
+stay on the PR until the terminal apply/destroy comment is posted; the render
+handler then deletes those exact comment ids and sweeps only bot-authored
+comments that still contain the spent `confirm <token>`. Human comments are
+never deleted by content match. Status comments include a command context block
+naming the triggering command with the token redacted.
 
 The webhook secret is separate from the GitHub control PAT and any private-module
 execution token:

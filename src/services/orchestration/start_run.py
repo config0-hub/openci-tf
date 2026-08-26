@@ -35,6 +35,14 @@ class OrchestrationError(RuntimeError):
     """Raised when run orchestration cannot proceed."""
 
 
+MUTATION_OPTIONAL_INPUT_KEYS = (
+    "requested_comment_id",
+    "requested_comment_body",
+    "intent_comment_id",
+    "consumed_confirm_token",
+)
+
+
 def _settings_dict(settings: RepoSettings) -> dict[str, Any]:
     return {
         "trigger_id": settings.trigger_id,
@@ -92,6 +100,11 @@ def build_step_function_input(request: RunRequest, settings: RepoSettings, run_i
             payload["intent_confirm"] = True
         if github_metadata.get("confirm_token"):
             payload["confirm_token"] = github_metadata["confirm_token"]
+        if github_metadata.get("intent_confirm"):
+            # The mutation renderer's Parameters read these paths on every
+            # route, including failures before confirm_handler fills them.
+            for key in MUTATION_OPTIONAL_INPUT_KEYS:
+                payload.setdefault(key, None)
     return payload
 
 

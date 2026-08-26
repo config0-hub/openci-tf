@@ -1108,7 +1108,7 @@ def test_confirm_handler_failure_deletes_confirmation_intent_and_requested_comme
     assert stale_tokens == ["abc123"]
 
 
-def test_confirm_handler_success_deletes_intent_and_confirmation_comments(monkeypatch):
+def test_confirm_handler_success_leaves_comments_for_terminal_render(monkeypatch):
     monkeypatch.setattr(
         "src.services.intent.handler._current_pr_head_sha",
         lambda *_args, **_kwargs: "a" * 40,
@@ -1157,10 +1157,12 @@ def test_confirm_handler_success_deletes_intent_and_confirmation_comments(monkey
 
     assert result["intent_confirmed"] is True
     assert result["consumed_confirm_token"] == "abc123"
-    # Intent comment and the confirmation comment (spent token) go now; the
-    # request comment (10) waits for the terminal render.
-    assert deleted_batches == [[11, 55]]
-    assert stale_tokens == ["abc123"]
+    # Nothing is deleted on success: the terminal render removes the request,
+    # intent, and confirmation comments after the apply/destroy comment exists.
+    assert deleted_batches == []
+    assert stale_tokens == []
+    assert result["requested_comment_id"] == 10
+    assert result["intent_comment_id"] == 11
 
 
 def test_intent_record_comment_metadata_round_trips_through_registry(monkeypatch):

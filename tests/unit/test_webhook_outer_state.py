@@ -16,6 +16,7 @@ from src.services.resolve import validate_and_resolve
 from src.services.resolve.handler import handler as parse_command
 from src.services.run_folder import prepare_and_submit
 from src.services.webhook import handler as webhook
+from tests.helpers.fake_locks_table import FakeLocksTable
 
 _FULL_SHA = "a" * 40
 _GUID_A = "38355582-3487-2086-500a-1b2c3d4e5f60"
@@ -115,6 +116,7 @@ def _wire_webhook(monkeypatch, clone_dir: str, *, pr_state: str = "open"):
     monkeypatch.setattr(webhook, "get_collaborator_permission", lambda *_: "write")
     monkeypatch.setattr(webhook, "start_run_from_request", fake_start)
     monkeypatch.setattr(webhook, "GitHubClient", FakeClient)
+    monkeypatch.setattr(webhook, "locks_table", FakeLocksTable)
     return started, posted, deleted, audit_bodies
 
 
@@ -452,13 +454,115 @@ def test_webhook_rejects_bare_tf_plan(monkeypatch):
     assert len(deleted) == 2
 
 
-def test_webhook_rejects_tf_drift(monkeypatch):
+@pytest.mark.parametrize("command", ["tf drift infra/vpc", "tf drift"])
+def test_webhook_rejects_tf_drift(monkeypatch, command):
     started, posted, deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
-    response = webhook.handler(_event("tf drift infra/vpc"), None)
+    response = webhook.handler(_event(command), None)
     assert json.loads(response["body"])["reason"] == "invalid_command"
     assert started == []
     audit_body = next(body for body, _ in posted if "## openci-tf commands" in body)
-    assert "| `tf drift infra/vpc` | not supported |" in audit_body
+    assert f"| `{command}` | not supported |" in audit_body
+
+
+def test_webhook_drift_pipeline_starts_run(monkeypatch):
+    started, posted, _deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
+    response = webhook.handler(_event("tf drift pipeline data/primary"), None)
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["message"] == "Accepted"
+    assert len(started) == 1
+    outer_input = json.loads(started[0]["input"])
+    assert outer_input["action"] == "drift"
+    assert outer_input["pipeline"] == "data/primary"
+    audit_body = next(body for body, _ in posted if "## openci-tf commands" in body)
+    assert "| `tf drift pipeline data/primary` | accepted |" in audit_body
+
+
+def test_webhook_audit_row_carries_delivery_id_and_redelivery_is_idempotent(monkeypatch):
+    started, posted, _deleted, audit = _wire_webhook(monkeypatch, "", pr_state="open")
+    webhook.handler(_event("tf plan infra/vpc"), None)
+    webhook.handler(_event("tf plan infra/vpc"), None)
+    assert len(started) == 2
+    body = next(iter(audit.values()))
+    assert body.count(f"<!-- d:{_GUID_A} -->") == 1
+    assert body.count("| `tf plan infra/vpc` | accepted |") == 1
+
+
+def test_webhook_accepted_audit_failure_returns_502_and_starts_nothing(monkeypatch):
+    started, _posted, deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
+
+    def failing_audit(*_args, **_kwargs):
+        raise requests.RequestException("github down")
+
+    monkeypatch.setattr(webhook, "record_command_audit", failing_audit)
+    response = webhook.handler(_event("tf plan infra/vpc"), None)
+    assert response["statusCode"] == 502
+    assert json.loads(response["body"])["error"] == "Unable to record command audit"
+    assert started == []
+    assert deleted == []
+
+
+def test_webhook_accepted_audit_lock_contention_returns_502(monkeypatch):
+    started, _posted, _deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
+    table = FakeLocksTable()
+    table.items[("audit-lock", "org/repo#pr-7")] = {"holder": "other", "expires_at": 10**12}
+    monkeypatch.setattr(webhook, "locks_table", lambda: table)
+    monkeypatch.setattr("src.platform.github.command_audit.time.sleep", lambda _s: None)
+    response = webhook.handler(_event("tf plan infra/vpc"), None)
+    assert response["statusCode"] == 502
+    assert started == []
+
+
+def test_webhook_unsupported_audit_failure_stays_best_effort(monkeypatch):
+    slept: list[float] = []
+    monkeypatch.setattr(webhook.time, "sleep", lambda seconds: slept.append(seconds))
+    started, _posted, _deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
+
+    def failing_audit(*_args, **_kwargs):
+        raise requests.RequestException("github down")
+
+    monkeypatch.setattr(webhook, "record_command_audit", failing_audit)
+    response = webhook.handler(_event("tf banana"), None)
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["reason"] == "invalid_command"
+    assert started == []
+
+
+def _http_error(status: int) -> requests.HTTPError:
+    response = requests.Response()
+    response.status_code = status
+    return requests.HTTPError(response=response)
+
+
+@pytest.mark.parametrize("status", [403, 404])
+def test_webhook_unreadable_pr_is_acknowledged_like_closed(monkeypatch, status):
+    started, posted, deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
+
+    def unreadable_get_pr(*_):
+        raise _http_error(status)
+
+    monkeypatch.setattr(webhook, "get_pull_request", unreadable_get_pr)
+    response = webhook.handler(_event("tf plan infra/vpc"), None)
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["reason"] == "pull_request_not_open"
+    assert started == []
+    audit_body = next(body for body, _ in posted if "## openci-tf commands" in body)
+    assert "| `tf plan infra/vpc` | not supported |" in audit_body
+    assert any(body.startswith("openci-tf ignored the command") for body, _ in posted)
+    assert deleted == [42]
+
+
+@pytest.mark.parametrize("error", [_http_error(500), requests.ConnectionError("down")])
+def test_webhook_other_pr_read_errors_return_502(monkeypatch, error):
+    started, posted, _deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
+
+    def failing_get_pr(*_):
+        raise error
+
+    monkeypatch.setattr(webhook, "get_pull_request", failing_get_pr)
+    response = webhook.handler(_event("tf plan infra/vpc"), None)
+    assert response["statusCode"] == 502
+    assert started == []
+    assert posted == []
 
 
 def test_webhook_report_still_starts_run(monkeypatch):
@@ -521,6 +625,7 @@ def test_webhook_closed_pr_rejection_still_ignored_when_comment_post_fails(monke
     monkeypatch.setattr(webhook, "get_collaborator_permission", lambda *_: "write")
     monkeypatch.setattr(webhook, "start_run_from_request", fake_start)
     monkeypatch.setattr(webhook, "GitHubClient", FailingClient)
+    monkeypatch.setattr(webhook, "locks_table", FakeLocksTable)
 
     response = webhook.handler(_event("tf plan infra/vpc"), None)
     assert response["statusCode"] == 200

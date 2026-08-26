@@ -4,7 +4,13 @@
 
 from datetime import datetime, timezone
 
+import pytest
+from botocore.exceptions import ClientError
+
+from src.core.errors import LockHeldError
 from src.domain.formatters.command_audit import (
+    MAX_AUDIT_BODY_CHARS,
+    MAX_AUDIT_COMMAND_CHARS,
     MAX_AUDIT_ROWS,
     append_audit_row,
     command_usage_line,
@@ -14,12 +20,14 @@ from src.domain.formatters.command_audit import (
     parse_command_timestamp,
     unsupported_command_help_comment,
 )
+from src.platform.github import command_audit as audit_module
 from src.platform.github.command_audit import record_command_audit
+from tests.helpers.fake_locks_table import FakeLocksTable
 
 _WHEN = datetime(2026, 8, 18, 10, 3, tzinfo=timezone.utc)
 
 
-def _append(body, command_text, status="accepted", when=_WHEN):
+def _append(body, command_text, status="accepted", when=_WHEN, delivery_id=None):
     return append_audit_row(
         body,
         command_text=command_text,
@@ -27,6 +35,7 @@ def _append(body, command_text, status="accepted", when=_WHEN):
         when=when,
         repo_name="org/repo",
         pr_number=7,
+        delivery_id=delivery_id,
     )
 
 
@@ -40,8 +49,8 @@ def test_audit_comment_matches_desired_example_shape():
     body = format_command_audit_comment(
         created_at=created,
         rows=[
-            (created, "tf report", "accepted"),
-            ("2026-08-18 10:07 UTC", "tf banana", "not supported"),
+            (created, "tf report", "accepted", "d-1"),
+            ("2026-08-18 10:07 UTC", "tf banana", "not supported", None),
         ],
         repo_name="org/repo",
         pr_number=29,
@@ -49,9 +58,10 @@ def test_audit_comment_matches_desired_example_shape():
     assert body.startswith("## openci-tf commands")
     assert command_usage_line() in body
     assert f"Created: {created}" in body
-    assert "| `tf report` | accepted |" in body
-    assert "| `tf banana` | not supported |" in body
+    assert "| `tf report` | accepted |<!-- d:d-1 -->" in body
+    assert "| `tf banana` | not supported |\n" in body
     assert "comment_object_id: org/repo:::pr-29::commands-run" in body
+    assert [row[3] for row in parse_audit_rows(body)] == ["d-1", None]
 
 
 def test_append_audit_row_redacts_confirm_tokens():
@@ -119,6 +129,103 @@ def test_parse_command_timestamp_inverts_format():
     assert parse_command_timestamp("2026-08-18 10:03 UTC") == _WHEN
 
 
+def test_append_audit_row_skips_duplicate_delivery_id():
+    body = _append(None, "tf plan infra/a", delivery_id="guid-1")
+    again = _append(body, "tf plan infra/a", delivery_id="guid-1")
+    assert again == body
+    assert len(parse_audit_rows(again)) == 1
+    other = _append(again, "tf plan infra/a", delivery_id="guid-2")
+    assert len(parse_audit_rows(other)) == 2
+
+
+def test_append_audit_row_bounds_oversized_command():
+    huge = "tf plan " + "a" * 65_536
+    body = _append(None, huge, status="not supported", delivery_id="guid-1")
+    assert len(body) < MAX_AUDIT_BODY_CHARS
+    rows = parse_audit_rows(body)
+    assert len(rows) == 1
+    cell = rows[0][1]
+    assert cell.startswith(huge[:MAX_AUDIT_COMMAND_CHARS])
+    assert " [truncated sha256:" in cell
+    assert len(cell) < MAX_AUDIT_COMMAND_CHARS + 40
+
+
+def test_append_audit_row_keeps_total_body_under_limit():
+    body = None
+    for index in range(MAX_AUDIT_ROWS):
+        body = _append(body, f"tf plan {'x' * 250} {index}", delivery_id=f"{index:036d}")
+    assert len(body) <= MAX_AUDIT_BODY_CHARS
+    rows = parse_audit_rows(body)
+    assert rows[-1][3] == f"{MAX_AUDIT_ROWS - 1:036d}"
+    assert len(rows) < MAX_AUDIT_ROWS
+
+
+class _SimpleAuditClient:
+    def __init__(self) -> None:
+        self.comments: dict[int, str] = {}
+        self.updates = 0
+
+    def find_comment_by_tag(self, _repo, _pr, tag):
+        return next((cid for cid, body in self.comments.items() if tag in body), None)
+
+    def find_comments_by_tag(self, _repo, _pr, tag):
+        return [cid for cid, body in self.comments.items() if tag in body]
+
+    def get_comment_body(self, _repo, comment_id):
+        return self.comments.get(comment_id)
+
+    def create_comment(self, _repo, _pr, body):
+        self.comments[100] = body
+        return 100
+
+    def update_comment(self, _repo, comment_id, body):
+        self.updates += 1
+        self.comments[comment_id] = body
+
+    def delete_comment(self, _repo, comment_id):
+        del self.comments[comment_id]
+
+
+def test_record_command_audit_is_idempotent_per_delivery_and_releases_lock():
+    client = _SimpleAuditClient()
+    table = FakeLocksTable()
+    for _ in range(2):
+        record_command_audit(
+            client, "org/repo", 7, command_text="tf plan infra/a", status="accepted",
+            delivery_id="guid-1", lock_table=table, when=_WHEN,
+        )
+    assert [row[1] for row in parse_audit_rows(client.comments[100])] == ["tf plan infra/a"]
+    assert client.updates == 0
+    assert table.items == {}
+
+
+def test_record_command_audit_retries_then_fails_on_lock_contention(monkeypatch):
+    client = _SimpleAuditClient()
+    table = FakeLocksTable()
+    table.items[("audit-lock", "org/repo#pr-7")] = {"holder": "other", "expires_at": 10**12}
+    slept: list[float] = []
+    monkeypatch.setattr(audit_module.time, "sleep", lambda seconds: slept.append(seconds))
+    with pytest.raises(LockHeldError):
+        record_command_audit(
+            client, "org/repo", 7, command_text="tf report", status="accepted",
+            delivery_id="guid-1", lock_table=table,
+        )
+    assert 4.0 <= sum(slept) <= 6.0
+    assert client.comments == {}
+
+
+def test_record_command_audit_propagates_non_condition_dynamo_errors():
+    class BrokenTable:
+        def put_item(self, **_kwargs):
+            raise ClientError({"Error": {"Code": "ProvisionedThroughputExceededException"}}, "PutItem")
+
+    with pytest.raises(ClientError):
+        record_command_audit(
+            _SimpleAuditClient(), "org/repo", 7, command_text="tf report", status="accepted",
+            delivery_id="guid-1", lock_table=BrokenTable(),
+        )
+
+
 class _DuplicateAuditClient:
     """Fake client where a concurrent first-ever audit comment already exists."""
 
@@ -155,7 +262,8 @@ class _DuplicateAuditClient:
 def test_record_command_audit_merges_concurrent_duplicate_comments():
     client = _DuplicateAuditClient()
     kept = record_command_audit(
-        client, "org/repo", 7, command_text="tf report", status="accepted", when=_WHEN
+        client, "org/repo", 7, command_text="tf report", status="accepted", when=_WHEN,
+        delivery_id="guid-1", lock_table=FakeLocksTable(),
     )
     assert kept == 100
     assert client.deleted == [201]

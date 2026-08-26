@@ -10,6 +10,7 @@ import pytest
 
 from src.core.models import RepoSettings
 from src.services.webhook import handler as webhook
+from tests.helpers.fake_locks_table import FakeLocksTable
 
 _FULL_SHA = "a" * 40
 _GUID_A = "38355582-3487-2086-500a-1b2c3d4e5f60"
@@ -74,6 +75,7 @@ def _wire_webhook(monkeypatch):
             return None
 
     monkeypatch.setattr(webhook, "GitHubClient", FakeClient)
+    monkeypatch.setattr(webhook, "locks_table", FakeLocksTable)
     monkeypatch.setattr(webhook, "get_repo_settings", lambda _: SETTINGS)
     monkeypatch.setattr(webhook, "get_github_token", lambda _: "token")
     monkeypatch.setattr(webhook, "get_pull_request", fake_get_pr)

@@ -272,25 +272,8 @@ def confirm_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             )
         return {**event, "intent_failed": True, "intent_failures": [item.message for item in failures]}
     _record_confirmed_pipeline_metadata(event, confirmed)
-    intent_comment_id = confirmed.get("intent_comment_id")
-    confirmation_comment_id = (
-        webhook.get("comment_id") if isinstance(webhook.get("comment_id"), int) else None
-    )
-    # The token is consumed, so the confirmation comment carrying it goes now;
-    # the terminal render deletes it again as an idempotent pass (404 is fine).
-    _delete_comments_after_replacement(
-        webhook, settings, [intent_comment_id, confirmation_comment_id]
-    )
-    _delete_stale_confirm_token_comments_after_replacement(
-        webhook,
-        settings,
-        token,
-        exclude_comment_ids={
-            comment_id
-            for comment_id in (confirmation_comment_id, intent_comment_id)
-            if isinstance(comment_id, int)
-        },
-    )
+    # The request, intent, and confirmation comments stay until the terminal
+    # apply/destroy comment exists; the render handler deletes them then.
     webhook_updates: dict[str, Any] = {"commit_hash": commit_hash}
     if isinstance(confirmed.get("pipeline"), str):
         webhook_updates["pipeline"] = confirmed["pipeline"]

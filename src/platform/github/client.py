@@ -24,6 +24,18 @@ class GitHubClient:
             "Authorization": f"token {token}",
             "Accept": "application/vnd.github.v3+json",
         })
+        self._token_login: str | None = None
+
+    def token_login(self) -> str:
+        """Return the login of the token owner (GET /user); cached per client."""
+        if self._token_login is None:
+            resp = self.session.get(f"{GITHUB_API}/user")
+            resp.raise_for_status()
+            login = resp.json().get("login")
+            if not isinstance(login, str) or not login:
+                raise ValueError("GitHub /user returned no login for the configured token")
+            self._token_login = login
+        return self._token_login
 
     def create_comment(self, repo: str, pr_number: int, body: str) -> int:
         """Create a PR comment. Returns comment_id."""
@@ -82,10 +94,19 @@ class GitHubClient:
         self, repo: str, pr_number: int, needle: str
     ) -> list[int]:
         """Find all PR comment ids whose body contains ``needle``."""
+        return [
+            comment_id
+            for comment_id, _login in self.find_comments_by_body_substring(repo, pr_number, needle)
+        ]
+
+    def find_comments_by_body_substring(
+        self, repo: str, pr_number: int, needle: str
+    ) -> list[tuple[int, str]]:
+        """Find ``(comment_id, author_login)`` for PR comments whose body contains ``needle``."""
         if not needle:
             return []
         url = f"{GITHUB_API}/repos/{repo}/issues/{pr_number}/comments"
-        matches: list[int] = []
+        matches: list[tuple[int, str]] = []
         page = 1
         while True:
             resp = self.session.get(url, params={"page": page, "per_page": 100})
@@ -95,7 +116,8 @@ class GitHubClient:
                 break
             for comment in comments:
                 if needle in comment.get("body", ""):
-                    matches.append(comment["id"])
+                    login = (comment.get("user") or {}).get("login")
+                    matches.append((comment["id"], login if isinstance(login, str) else ""))
             page += 1
         return matches
 

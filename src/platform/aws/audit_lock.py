@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: 2026 Config0, Inc.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Short-lived per-PR lock serializing durable audit comment read-modify-write."""
+
+from __future__ import annotations
+
+import os
+from typing import Any, cast
+
+import boto3
+from botocore.exceptions import ClientError
+
+from src.core.errors import LockHeldError
+
+AUDIT_LOCK_TTL_SECONDS = 60
+
+
+def locks_table() -> Any:
+    """Return the DynamoDB locks table named by LOCKS_TABLE_NAME."""
+    name = os.environ.get("LOCKS_TABLE_NAME")
+    if not name:
+        raise RuntimeError("LOCKS_TABLE_NAME is not configured")
+    return cast(Any, boto3.resource("dynamodb")).Table(name)
+
+
+def _key(repo: str, pr_number: int) -> dict[str, str]:
+    return {"pk": "audit-lock", "sk": f"{repo}#pr-{pr_number}"}
+
+
+def acquire(table: Any, repo: str, pr_number: int, holder: str, now: int, ttl: int = AUDIT_LOCK_TTL_SECONDS) -> None:
+    """Take the PR audit lock; raises LockHeldError when another holder owns a live lease."""
+    if ttl <= 0:
+        raise ValueError("audit lock ttl must be positive")
+    try:
+        table.put_item(
+            Item={**_key(repo, pr_number), "holder": holder, "expires_at": now + ttl},
+            ConditionExpression="attribute_not_exists(pk) OR expires_at < :now",
+            ExpressionAttributeValues={":now": now},
+        )
+    except ClientError as error:
+        if error.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+        raise LockHeldError(f"audit lock held for {repo}#{pr_number}") from error
+
+
+def release(table: Any, repo: str, pr_number: int, holder: str) -> None:
+    """Release only the named holder; a lost or expired lease is a no-op."""
+    try:
+        table.delete_item(
+            Key=_key(repo, pr_number),
+            ConditionExpression="holder = :holder",
+            ExpressionAttributeValues={":holder": holder},
+        )
+    except ClientError as error:
+        if error.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
