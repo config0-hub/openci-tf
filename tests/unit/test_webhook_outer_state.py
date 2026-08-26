@@ -8,6 +8,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+import requests
 
 from src.core.models import RepoSettings
 from src.domain.engine.outer_map_state import merge_map_item
@@ -59,8 +60,11 @@ def _repository(tmp_path) -> str:
     return str(tmp_path)
 
 
-def _wire_webhook(monkeypatch, clone_dir: str):
+def _wire_webhook(monkeypatch, clone_dir: str, *, pr_state: str = "open"):
     started: list[dict] = []
+    posted: list[tuple[str, str]] = []
+    deleted: list[int] = []
+    audit_bodies: dict[int, str] = {}
 
     def fake_start(request):
         from src.services.orchestration.start_run import build_step_function_input
@@ -69,12 +73,46 @@ def _wire_webhook(monkeypatch, clone_dir: str):
         started.append({"input": json.dumps(payload)})
         return "run-id-test", True
 
+    def fake_get_pr(*_):
+        return {
+            "state": pr_state,
+            "head": {"sha": _FULL_SHA, "repo": {"full_name": "org/repo"}},
+            "base": {"repo": {"full_name": "org/repo"}},
+        }
+
+    class FakeClient:
+        def __init__(self, _token):
+            pass
+
+        def create_comment(self, repo, pr, body):
+            cid = 9000 + len(posted) + 1
+            posted.append((body, f"{repo}#{pr}"))
+            audit_bodies[cid] = body
+            return cid
+
+        def delete_comment(self, repo, comment_id):
+            deleted.append(comment_id)
+
+        def find_comment_by_tag(self, repo, pr, tag):
+            for cid, body in audit_bodies.items():
+                if tag in body:
+                    return cid
+            return None
+
+        def get_comment_body(self, repo, comment_id):
+            return audit_bodies.get(comment_id)
+
+        def update_comment(self, repo, comment_id, body):
+            audit_bodies[comment_id] = body
+            posted.append((body, f"{repo}#audit-update"))
+
     monkeypatch.setattr(webhook, "get_repo_settings", lambda _: SETTINGS)
     monkeypatch.setattr(webhook, "get_github_token", lambda _: "token")
-    monkeypatch.setattr(webhook, "get_pull_request", lambda *_: {"head": {"sha": _FULL_SHA, "repo": {"full_name": "org/repo"}}, "base": {"repo": {"full_name": "org/repo"}}})
+    monkeypatch.setattr(webhook, "get_pull_request", fake_get_pr)
     monkeypatch.setattr(webhook, "get_collaborator_permission", lambda *_: "write")
     monkeypatch.setattr(webhook, "start_run_from_request", fake_start)
-    return started
+    monkeypatch.setattr(webhook, "GitHubClient", FakeClient)
+    return started, posted, deleted, audit_bodies
 
 
 def _mock_account_alias(monkeypatch):
@@ -87,7 +125,7 @@ def _mock_account_alias(monkeypatch):
 
 def test_webhook_starts_thin_safe_lane_and_validate_resolves_it(tmp_path, monkeypatch):
     clone_dir = _repository(tmp_path)
-    started = _wire_webhook(monkeypatch, clone_dir)
+    started, _posted, _deleted, _audit = _wire_webhook(monkeypatch, clone_dir)
     assert webhook.handler(_event(), None)["statusCode"] == 200
     outer_input = json.loads(started[0]["input"])
     assert "folder_configs" not in outer_input
@@ -190,7 +228,7 @@ def test_map_item_execution_id_matches_prepare_for_its_attempt(tmp_path, monkeyp
 
 
 def test_webhook_rejects_bad_delivery_header(monkeypatch):
-    started = _wire_webhook(monkeypatch, "")
+    started, _posted, _deleted, _audit = _wire_webhook(monkeypatch, "")
     response = webhook.handler(_event(delivery="not-a-delivery-id"), None)
     assert response["statusCode"] == 400
     assert started == []
@@ -218,13 +256,15 @@ def _pull_request_event(*, delivery: str | None = _GUID_A, action: str = "synchr
 
 @pytest.mark.parametrize("action", ["opened", "synchronize"])
 def test_pull_request_events_are_ignored_without_starting_run(monkeypatch, action):
-    started = _wire_webhook(monkeypatch, "")
+    started, posted, deleted, _audit = _wire_webhook(monkeypatch, "")
     response = webhook.handler(_pull_request_event(action=action), None)
     assert response["statusCode"] == 200
     body = json.loads(response["body"])
     assert body["message"] == "Event ignored"
     assert body["reason"] == "pull_request_event"
     assert started == []
+    assert posted == []
+    assert deleted == []
 
 
 def test_pull_request_parse_command_returns_noop():
@@ -329,3 +369,174 @@ def test_webhook_run_request_maps_pipeline_to_step_function_input():
     assert payload["folders"] == []
     assert payload["all_flag"] is False
     assert payload["affected_flag"] is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "tf plan infra/vpc",
+        "tf destroy infra/vpc",
+        "tf destroy confirm deadbeef",
+    ],
+)
+def test_webhook_ignores_commands_on_closed_pull_request(monkeypatch, command):
+    started, posted, deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="closed")
+    response = webhook.handler(_event(command), None)
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["message"] == "Event ignored"
+    assert body["reason"] == "pull_request_not_open"
+    assert started == []
+    assert len(posted) >= 1
+    rejection = next(body for body, _ in posted if body.startswith("openci-tf ignored the command"))
+    assert "deadbeef" not in rejection
+    assert "closed or merged" in rejection
+    assert deleted == [42]
+
+
+def test_webhook_open_pull_request_still_starts_run(monkeypatch):
+    started, posted, deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
+    response = webhook.handler(_event("tf plan infra/vpc"), None)
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["message"] == "Accepted"
+    assert len(started) == 1
+    assert any("## openci-tf commands" in body for body, _ in posted)
+    assert "| `tf plan infra/vpc` | accepted |" in next(
+        body for body, _ in posted if "## openci-tf commands" in body
+    )
+    assert deleted == [42]
+
+
+def test_webhook_unsupported_tf_command_audit_and_transient_help(monkeypatch):
+    slept: list[float] = []
+    monkeypatch.setattr(webhook.time, "sleep", lambda seconds: slept.append(seconds))
+    started, posted, deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
+    response = webhook.handler(_event("tf banana"), None)
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["reason"] == "invalid_command"
+    assert started == []
+    audit_body = next(body for body, _ in posted if "## openci-tf commands" in body)
+    assert "| `tf banana` | not supported |" in audit_body
+    help_body = next(body for body, _ in posted if "command not accepted" in body)
+    assert help_body.startswith("## openci-tf: command not accepted")
+    assert slept == [10]
+    assert 42 in deleted
+    assert any(cid != 42 for cid in deleted)
+
+
+def test_webhook_rejects_tf_plan_all_with_audit_not_supported(monkeypatch):
+    started, posted, deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
+    response = webhook.handler(_event("tf plan all"), None)
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["reason"] == "invalid_command"
+    assert started == []
+    audit_body = next(body for body, _ in posted if "## openci-tf commands" in body)
+    assert "| `tf plan all` | not supported |" in audit_body
+    assert 42 in deleted
+    assert len(deleted) == 2
+
+
+def test_webhook_rejects_bare_tf_plan(monkeypatch):
+    started, posted, deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
+    response = webhook.handler(_event("tf plan"), None)
+    assert json.loads(response["body"])["reason"] == "invalid_command"
+    assert started == []
+    audit_body = next(body for body, _ in posted if "## openci-tf commands" in body)
+    assert "| `tf plan` | not supported |" in audit_body
+    assert 42 in deleted
+    assert len(deleted) == 2
+
+
+def test_webhook_rejects_tf_drift(monkeypatch):
+    started, posted, deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
+    response = webhook.handler(_event("tf drift infra/vpc"), None)
+    assert json.loads(response["body"])["reason"] == "invalid_command"
+    assert started == []
+    audit_body = next(body for body, _ in posted if "## openci-tf commands" in body)
+    assert "| `tf drift infra/vpc` | not supported |" in audit_body
+
+
+def test_webhook_report_still_starts_run(monkeypatch):
+    started, posted, deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
+    response = webhook.handler(_event("tf report"), None)
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["message"] == "Accepted"
+    assert len(started) == 1
+    audit_body = next(body for body, _ in posted if "## openci-tf commands" in body)
+    assert "| `tf report` | accepted |" in audit_body
+    assert deleted == [42]
+
+
+def test_webhook_redacts_confirm_comment_body_in_run_metadata(monkeypatch):
+    started, posted, _deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
+    response = webhook.handler(_event("tf destroy confirm deadbeef"), None)
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["message"] == "Accepted"
+    assert len(started) == 1
+    outer_input = json.loads(started[0]["input"])
+    assert outer_input["webhook_info"]["comment_body"] == "tf destroy confirm <redacted>"
+    assert "deadbeef" not in outer_input["webhook_info"]["comment_body"]
+    assert outer_input["confirm_token"] == "deadbeef"
+    assert any("## openci-tf commands" in body for body, _ in posted)
+
+
+def test_webhook_closed_pr_rejection_still_ignored_when_comment_post_fails(monkeypatch):
+    started: list[bool] = []
+
+    def fake_start(_request):
+        started.append(True)
+        return "run-id-test", True
+
+    def failing_get_pr(*_):
+        return {
+            "state": "closed",
+            "head": {"sha": _FULL_SHA, "repo": {"full_name": "org/repo"}},
+            "base": {"repo": {"full_name": "org/repo"}},
+        }
+
+    class FailingClient:
+        def __init__(self, _token):
+            pass
+
+        def create_comment(self, *_args, **_kwargs):
+            raise requests.RequestException("network down")
+
+        def find_comment_by_tag(self, *_args, **_kwargs):
+            return None
+
+        def get_comment_body(self, *_args, **_kwargs):
+            return None
+
+        def update_comment(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.setattr(webhook, "get_repo_settings", lambda _: SETTINGS)
+    monkeypatch.setattr(webhook, "get_github_token", lambda _: "token")
+    monkeypatch.setattr(webhook, "get_pull_request", failing_get_pr)
+    monkeypatch.setattr(webhook, "get_collaborator_permission", lambda *_: "write")
+    monkeypatch.setattr(webhook, "start_run_from_request", fake_start)
+    monkeypatch.setattr(webhook, "GitHubClient", FailingClient)
+
+    response = webhook.handler(_event("tf plan infra/vpc"), None)
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["reason"] == "pull_request_not_open"
+    assert started == []
+
+
+def test_webhook_missing_pr_state_treated_as_closed(monkeypatch):
+    started, posted, deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
+
+    def get_pr_without_state(*_):
+        return {
+            "head": {"sha": _FULL_SHA, "repo": {"full_name": "org/repo"}},
+            "base": {"repo": {"full_name": "org/repo"}},
+        }
+
+    monkeypatch.setattr(webhook, "get_pull_request", get_pr_without_state)
+    response = webhook.handler(_event("tf plan infra/vpc"), None)
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["reason"] == "pull_request_not_open"
+    assert started == []
+    assert deleted == [42]

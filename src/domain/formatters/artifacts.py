@@ -143,6 +143,198 @@ def extract_infracost_monthly(text: str) -> str:
     return formatted
 
 
+_CONFIRM_TOKEN_RE = re.compile(r"\b(confirm)\s+(\S+)", re.IGNORECASE)
+
+
+def _redact_confirm_token(text: str) -> str:
+    return _CONFIRM_TOKEN_RE.sub(r"\1 <redacted>", text)
+
+
+def _describe_command_line(
+    action: str,
+    *,
+    folders: list[str] | None = None,
+    all_flag: bool = False,
+    affected_flag: bool = False,
+    comment_body: str | None = None,
+    pipeline: str | None = None,
+    pipeline_step: int | None = None,
+) -> str:
+    if comment_body and comment_body.strip():
+        first_line = comment_body.strip().splitlines()[0].strip()
+        return _redact_confirm_token(first_line)
+    verb = action
+    if action == "plan_destroy":
+        verb = "plan --destroy"
+    if action == "report" and all_flag:
+        return "tf report"
+    parts = [f"tf {verb}"]
+    if pipeline:
+        parts.append("pipeline")
+        parts.append(pipeline)
+        if pipeline_step is not None and pipeline_step > 1:
+            parts.append("step")
+            parts.append(str(pipeline_step))
+    elif affected_flag:
+        parts.append("affected")
+    elif folders:
+        parts.extend(folders)
+    return " ".join(parts)
+
+
+def _triggering_comment_line(
+    comment_id: int | None,
+    *,
+    comment_link: str | None = None,
+    removed: bool = False,
+) -> str | None:
+    if comment_id is None:
+        return None
+    if removed or not comment_link:
+        return f"- triggering comment id: `{comment_id}` (removed after acknowledgement)"
+    return f"- triggering comment: [{comment_id}]({comment_link})"
+
+
+def command_context_block(
+    *,
+    action: str,
+    folders: list[str] | None = None,
+    all_flag: bool = False,
+    affected_flag: bool = False,
+    comment_body: str | None = None,
+    comment_id: int | None = None,
+    comment_link: str | None = None,
+    run_id: str | None = None,
+    commit_hash: str | None = None,
+    comment_removed: bool = False,
+    pipeline: str | None = None,
+    pipeline_step: int | None = None,
+) -> str:
+    """Concise command-scoped header for bot PR comments."""
+    command_line = _describe_command_line(
+        action,
+        folders=folders,
+        all_flag=all_flag,
+        affected_flag=affected_flag,
+        comment_body=comment_body,
+        pipeline=pipeline,
+        pipeline_step=pipeline_step,
+    )
+    lines = ["### openci-tf command", "", f"- command: `{command_line}`"]
+    trigger_line = _triggering_comment_line(
+        comment_id,
+        comment_link=comment_link,
+        removed=comment_removed,
+    )
+    if trigger_line:
+        lines.append(trigger_line)
+    if run_id:
+        lines.append(f"- run id: `{run_id}`")
+    if commit_hash:
+        lines.append(f"- commit: `{_short_hash(commit_hash)}`")
+    return "\n".join(lines)
+
+
+def mutation_command_context_block(
+    *,
+    action: str,
+    requested_comment_body: str | None,
+    requested_comment_id: int | None = None,
+    requested_comment_link: str | None = None,
+    confirmation_comment_body: str | None = None,
+    confirmation_comment_id: int | None = None,
+    confirmation_comment_link: str | None = None,
+    run_id: str | None = None,
+    commit_hash: str | None = None,
+    comments_removed: bool = False,
+) -> str:
+    """Command header for terminal apply/destroy comments with both request and confirm."""
+    requested_line = _describe_command_line(
+        action,
+        folders=None,
+        comment_body=requested_comment_body,
+    )
+    confirmation_line = (
+        _redact_confirm_token(
+            confirmation_comment_body.strip().splitlines()[0].strip()
+        )
+        if confirmation_comment_body and confirmation_comment_body.strip()
+        else f"tf {action} confirm <redacted>"
+    )
+    lines = [
+        "### openci-tf command",
+        "",
+        f"- requested command: `{requested_line}`",
+        f"- confirmation command: `{confirmation_line}`",
+    ]
+    if requested_comment_id is not None:
+        if comments_removed or not requested_comment_link:
+            lines.append(
+                f"- requested comment id: `{requested_comment_id}` (removed after acknowledgement)"
+            )
+        else:
+            lines.append(
+                f"- requested comment: [{requested_comment_id}]({requested_comment_link})"
+            )
+    if confirmation_comment_id is not None:
+        if comments_removed or not confirmation_comment_link:
+            lines.append(
+                f"- confirmation comment id: `{confirmation_comment_id}` (removed after acknowledgement)"
+            )
+        else:
+            lines.append(
+                f"- confirmation comment: [{confirmation_comment_id}]({confirmation_comment_link})"
+            )
+    if run_id:
+        lines.append(f"- run id: `{run_id}`")
+    if commit_hash:
+        lines.append(f"- commit: `{_short_hash(commit_hash)}`")
+    return "\n".join(lines)
+
+
+def invalid_command_rejection_comment(
+    *,
+    parse_error: str,
+    comment_id: int | None = None,
+    comment_link: str | None = None,
+    comment_body: str | None = None,
+) -> str:
+    """Bot comment when a PR command fails grammar validation."""
+    trigger = (
+        f"[comment {comment_id}]({comment_link})"
+        if comment_id is not None and comment_link
+        else (f"comment `{comment_id}`" if comment_id is not None else "your comment")
+    )
+    detail = ""
+    if comment_body and comment_body.strip():
+        redacted = _redact_confirm_token(comment_body.strip().splitlines()[0].strip())
+        detail = f"\n\nRejected command ({trigger}): `{redacted}`"
+    return f"openci-tf rejected the command: {parse_error}.{detail}"
+
+
+def closed_pr_rejection_comment(
+    *,
+    comment_id: int | None = None,
+    comment_link: str | None = None,
+    comment_body: str | None = None,
+) -> str:
+    """Bot comment when a command is ignored because the PR is closed or merged."""
+    trigger = (
+        f"[comment {comment_id}]({comment_link})"
+        if comment_id is not None and comment_link
+        else (f"comment `{comment_id}`" if comment_id is not None else "your comment")
+    )
+    detail = ""
+    if comment_body and comment_body.strip():
+        redacted = _redact_confirm_token(comment_body.strip().splitlines()[0].strip())
+        detail = f"\n\nIgnored command ({trigger}): `{redacted}`"
+    return (
+        "openci-tf ignored the command because this pull request is closed or merged. "
+        "Commands must be posted on an open pull request."
+        + detail
+    )
+
+
 _PLAN_SUMMARY_ACTIONS = frozenset({"plan", "report", "plan_destroy"})
 
 

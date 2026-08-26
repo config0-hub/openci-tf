@@ -6,6 +6,9 @@ from pathlib import Path
 import pytest
 
 from src.domain.formatters.artifacts import (
+    closed_pr_rejection_comment,
+    command_context_block,
+    mutation_command_context_block,
     folder_comment,
     infracost,
     initialize,
@@ -178,3 +181,47 @@ def test_folder_comment_uses_derived_error_when_present():
     )
     assert "iam:GetRole" in rendered
     assert "unknown error" not in rendered
+
+
+def test_command_context_block_redacts_confirm_token():
+    block = command_context_block(
+        action="destroy",
+        comment_body="tf destroy confirm super-secret-token",
+        comment_id=42,
+        comment_link="https://github.com/org/repo/pull/1#issuecomment-42",
+        run_id="run-1",
+        commit_hash="a" * 40,
+    )
+    assert "### openci-tf command" in block
+    assert "super-secret-token" not in block
+    assert "confirm <redacted>" in block
+    assert "- triggering comment: [42]" in block
+
+
+def test_closed_pr_rejection_comment_does_not_echo_confirm_token():
+    body = closed_pr_rejection_comment(
+        comment_id=99,
+        comment_link="https://github.com/org/repo/pull/1#issuecomment-99",
+        comment_body="tf destroy confirm abcdef123456",
+    )
+    assert body.startswith("openci-tf ignored")
+    assert "abcdef123456" not in body
+    assert "confirm <redacted>" in body
+
+
+def test_mutation_command_context_block_redacts_and_lists_both_commands():
+    block = mutation_command_context_block(
+        action="apply",
+        requested_comment_body="tf apply terraform/eu-west-1/02-ec2",
+        requested_comment_id=10,
+        confirmation_comment_body="tf apply confirm secret-token",
+        confirmation_comment_id=11,
+        run_id="run-apply",
+        commit_hash="a" * 40,
+        comments_removed=True,
+    )
+    assert "- requested command: `tf apply terraform/eu-west-1/02-ec2`" in block
+    assert "- confirmation command: `tf apply confirm <redacted>`" in block
+    assert "secret-token" not in block
+    assert "requested comment id: `10` (removed after acknowledgement)" in block
+    assert "confirmation comment id: `11` (removed after acknowledgement)" in block

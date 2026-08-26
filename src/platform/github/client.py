@@ -38,6 +38,16 @@ class GitHubClient:
         resp = self.session.patch(url, json={"body": body})
         resp.raise_for_status()
 
+    def get_comment_body(self, repo: str, comment_id: int) -> str | None:
+        """Fetch the body of one PR issue comment."""
+        url = f"{GITHUB_API}/repos/{repo}/issues/comments/{comment_id}"
+        resp = self.session.get(url)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        body = resp.json().get("body")
+        return body if isinstance(body, str) else None
+
     def delete_comment(self, repo: str, comment_id: int) -> None:
         """Delete a PR comment."""
         url = f"{GITHUB_API}/repos/{repo}/issues/comments/{comment_id}"
@@ -66,8 +76,16 @@ class GitHubClient:
         self, repo: str, pr_number: int, tag: str
     ) -> list[int]:
         """Find all PR comments containing the search tag."""
+        return self.find_comment_ids_by_body_substring(repo, pr_number, tag)
+
+    def find_comment_ids_by_body_substring(
+        self, repo: str, pr_number: int, needle: str
+    ) -> list[int]:
+        """Find all PR comment ids whose body contains ``needle``."""
+        if not needle:
+            return []
         url = f"{GITHUB_API}/repos/{repo}/issues/{pr_number}/comments"
-        matches = []
+        matches: list[int] = []
         page = 1
         while True:
             resp = self.session.get(url, params={"page": page, "per_page": 100})
@@ -76,7 +94,7 @@ class GitHubClient:
             if not comments:
                 break
             for comment in comments:
-                if tag in comment.get("body", ""):
+                if needle in comment.get("body", ""):
                     matches.append(comment["id"])
             page += 1
         return matches

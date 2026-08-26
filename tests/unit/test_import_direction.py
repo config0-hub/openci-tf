@@ -12,8 +12,21 @@ DOMAIN_TO_PLATFORM_ALLOWED = frozenset({
     ("domain/intent/plan_lookup.py", "src.platform.aws.s3"),
     ("domain/locks/run_lock.py", "src.platform.aws.dynamo_transactions"),
 })
+# ratchet: platform may import pure domain formatters only
+PLATFORM_TO_DOMAIN_ALLOWED = frozenset({
+    ("platform/github/command_audit.py", "src.domain.formatters.command_audit"),
+})
+
+
 def violations(edges):
-    return [(source, target) for source, target in edges if source in LAYERS and target in LAYERS and (source == "core" or LAYERS[target] > LAYERS[source])]
+    return [
+        (source, target)
+        for source, target in edges
+        if source in LAYERS
+        and target in LAYERS
+        and (source == "core" or LAYERS[target] > LAYERS[source])
+        and not (source == "platform" and target == "domain")
+    ]
 def imported_names(node):
     return ([node.module] if isinstance(node, ast.ImportFrom) and node.module else []) + [name.name for name in node.names] if isinstance(node, (ast.Import, ast.ImportFrom)) else []
 def test_seeded_upward_import_is_detected(): assert violations([("core", "platform")])
@@ -32,6 +45,21 @@ def test_domain_to_platform_edges_match_ratchet():
             for name in imported_names(node):
                 if name == "src.platform" or name.startswith("src.platform."): edges.add((path.relative_to("src").as_posix(), name))
     assert edges == DOMAIN_TO_PLATFORM_ALLOWED, {"unexpected": sorted(edges - DOMAIN_TO_PLATFORM_ALLOWED), "stale_allowlist": sorted(DOMAIN_TO_PLATFORM_ALLOWED - edges)}
+
+
+def test_platform_to_domain_edges_match_ratchet():
+    edges = set()
+    for path in Path("src/platform").rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text())):
+            for name in imported_names(node):
+                if name.startswith("src.domain."):
+                    edges.add((path.relative_to("src").as_posix(), name))
+    assert edges == PLATFORM_TO_DOMAIN_ALLOWED, {
+        "unexpected": sorted(edges - PLATFORM_TO_DOMAIN_ALLOWED),
+        "stale_allowlist": sorted(PLATFORM_TO_DOMAIN_ALLOWED - edges),
+    }
+
+
 def test_no_cross_package_relative_imports():
     offenders = [(path.as_posix(), node.level, node.module) for path in Path("src").rglob("*.py") for node in ast.walk(ast.parse(path.read_text())) if isinstance(node, ast.ImportFrom) and node.level >= 2]
     assert not offenders, offenders

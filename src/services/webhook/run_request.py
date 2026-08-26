@@ -69,6 +69,7 @@ def github_run_request(
             "comment_id": info.get("comment_id"),
             "event_type": info.get("event_type"),
             "username": info.get("username"),
+            "comment_body": info.get("comment_body"),
             "confirm_token": confirm_token,
             "intent_create": intent_create,
             "intent_confirm": intent_confirm,
