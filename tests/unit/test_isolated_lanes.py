@@ -200,3 +200,18 @@ def test_read_inner_rendered_poll_does_not_require_codebuild_build_id():
     probe = definition["States"]["ProbeDone"]
     assert "Parameters" not in probe
     assert probe["ResultPath"] == "$.probe"
+
+
+def test_read_lane_render_parameters_do_not_reference_intent_only_keys():
+    # Read-only executions are started from webhook/API run requests, which never
+    # carry intent comment metadata. A JSONPath Parameters entry for a missing key
+    # raises States.Runtime, and the RenderPR Catch would swallow it, so no PR
+    # comment would be posted. Only the mutation outer machine may reference these.
+    for key in (
+        "requested_comment_id",
+        "requested_comment_body",
+        "intent_comment_id",
+        "consumed_confirm_token",
+    ):
+        assert f'"{key}.$"' not in READ_OUTER, key
+        assert f'"{key}.$"' in APPLY_OUTER, key
