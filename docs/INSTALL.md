@@ -70,6 +70,12 @@ just install     # bootstrap -> foundation -> engine -> deploy (hub readonly via
 just verify      # aws CLI checks: buckets, KMS, lambdas, SFNs, roles, SSM, source copies
 ```
 
+`just install` and `just uninstall` print per-phase elapsed times to stderr as each
+component runs (for example `>> bootstrap start` and `<< terraform-apply done in 2m 15s`).
+The same timing lines appear when you run individual component recipes such as
+`just bootstrap` or `just deploy`. Read them from the terminal or capture stderr in
+install logs (for example `/tmp/openci-round2/install/phase1-install.log`).
+
 `just install` provisions `openci-tf-executor-readonly` in the hub account via `just deploy`
 (hub-setup module). Opt in to mutation IAM separately with `just target-create-aws-poweruser`
 in each account that should allow apply/destroy. Deploy creates three outer state machines

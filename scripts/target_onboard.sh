@@ -2,6 +2,10 @@
 # Target-account onboarding: verify identity, existing state bucket, SSM tfvars, target-connect.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=phase_timing.sh
+source "$SCRIPT_DIR/phase_timing.sh"
+
 PROJECT="${OPENCI_TF_PROJECT:-openci-tf}"
 HUB_ACCOUNT_ID=""
 STATE_BUCKET=""
@@ -40,6 +44,9 @@ if [ -z "$STATE_BUCKET" ]; then
   STATE_BUCKET="${PROJECT}-state-${TARGET_ACCOUNT_ID}"
 fi
 
+LOCK_TABLE="${PROJECT}-tf-locks"
+
+verify_prerequisites() {
 set +e
 ./scripts/bucket_exists.sh "$STATE_BUCKET"
 probe_rc=$?
@@ -55,7 +62,6 @@ case "$probe_rc" in
     ;;
 esac
 
-LOCK_TABLE="${PROJECT}-tf-locks"
 set +e
 LOCK_STATUS="$(aws dynamodb describe-table --table-name "$LOCK_TABLE" --query 'Table.TableStatus' --output text)"
 lock_probe_rc=$?
@@ -68,16 +74,24 @@ if [ "$LOCK_STATUS" != "ACTIVE" ]; then
   echo "ERROR: target lock table ${LOCK_TABLE} is not ACTIVE (status=${LOCK_STATUS})" >&2
   exit 1
 fi
+}
+phase_timing_run verify-prerequisites verify_prerequisites
 
 HUB_ROLE_ARN="arn:aws:iam::${HUB_ACCOUNT_ID}:role/${PROJECT}-hub-lambda-exec"
 TARGET_STATE_ARN="arn:aws:s3:::${STATE_BUCKET}"
 
+onboard_ssm_config() {
 ./scripts/ssm_config.sh set hub_lambda_exec_role_arn "$HUB_ROLE_ARN"
 ./scripts/ssm_config.sh set target_state_bucket_arn "$TARGET_STATE_ARN"
+}
+phase_timing_run ssm-config onboard_ssm_config
 
 echo "target onboard: account=${TARGET_ACCOUNT_ID} bucket=${STATE_BUCKET} lock_table=${LOCK_TABLE} hub=${HUB_ACCOUNT_ID}"
+onboard_readonly_role() {
 if [ -n "${STATE_BUCKET_ARG:-}" ]; then
   just target-create-aws-readonly "$HUB_ACCOUNT_ID" "$STATE_BUCKET"
 else
   just target-create-aws-readonly "$HUB_ACCOUNT_ID"
 fi
+}
+phase_timing_run target-create-aws-readonly onboard_readonly_role

@@ -38,8 +38,11 @@ config action key value="":
 bootstrap:
     #!/usr/bin/env bash
     set -euo pipefail
+    # shellcheck source=scripts/phase_timing.sh
+    source ./scripts/phase_timing.sh
     ACCT="$(aws sts get-caller-identity --query Account --output text)"
     BUCKET="{{OPENCI_TF_PROJECT}}-state-${ACCT}"
+    bootstrap_terraform_apply() {
     ./scripts/write_tfvars.sh infra/bootstrap "aws_region={{OPENCI_TF_REGION}}"
     set +e; ./scripts/bucket_exists.sh "$BUCKET"; probe_rc=$?; set -e
     [ "$probe_rc" = 0 ] || [ "$probe_rc" = 1 ] || exit "$probe_rc"
@@ -92,7 +95,9 @@ bootstrap:
         terraform -chdir=infra/bootstrap init -migrate-state -force-copy -input=false
         rm -f infra/bootstrap/terraform.tfstate infra/bootstrap/terraform.tfstate.backup
     fi
-    ./scripts/upload_source.sh "$BUCKET" bootstrap . infra/bootstrap
+    }
+    phase_timing_run terraform-apply bootstrap_terraform_apply
+    phase_timing_run upload-source ./scripts/upload_source.sh "$BUCKET" bootstrap . infra/bootstrap
 
 # Destroys the state bucket (after emptying it) and the lock table. Handles
 # partial first-install failures: bucket and lock table are recovered
@@ -100,9 +105,12 @@ bootstrap:
 bootstrap-destroy:
     #!/usr/bin/env bash
     set -euo pipefail
+    # shellcheck source=scripts/phase_timing.sh
+    source ./scripts/phase_timing.sh
     ACCT="$(aws sts get-caller-identity --query Account --output text)"
     BUCKET="{{OPENCI_TF_PROJECT}}-state-${ACCT}"
     LOCK_TABLE="{{OPENCI_TF_PROJECT}}-tf-locks"
+    bootstrap_destroy_terraform() {
     ./scripts/write_tfvars.sh infra/bootstrap "aws_region={{OPENCI_TF_REGION}}"
     set +e; ./scripts/bucket_exists.sh "$BUCKET"; bucket_rc=$?; set -e
     [ "$bucket_rc" = 0 ] || [ "$bucket_rc" = 1 ] || exit "$bucket_rc"
@@ -163,7 +171,9 @@ bootstrap-destroy:
     else
         echo "no state bucket, local state, or lock table; nothing to destroy"
     fi
-    ./scripts/cleanup_operator_footprint.sh
+    }
+    phase_timing_run terraform-destroy bootstrap_destroy_terraform
+    phase_timing_run operator-cleanup ./scripts/cleanup_operator_footprint.sh
     # Post-destroy verification on EVERY path: both resources must be gone,
     # and an indeterminate probe (403/expired STS) must fail, not pass.
     set +e; ./scripts/bucket_exists.sh "$BUCKET"; post_bucket_rc=$?; set -e
@@ -174,8 +184,11 @@ bootstrap-destroy:
 foundation:
     #!/usr/bin/env bash
     set -euo pipefail
+    # shellcheck source=scripts/phase_timing.sh
+    source ./scripts/phase_timing.sh
     ACCT="$(aws sts get-caller-identity --query Account --output text)"
     BUCKET="{{OPENCI_TF_PROJECT}}-state-${ACCT}"
+    foundation_apply() {
     TMP_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or tmp_lifecycle_days 3)"
     PACKAGE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or package_lifecycle_days 30)"
     DONE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or done_lifecycle_days 365)"
@@ -184,13 +197,18 @@ foundation:
     ./scripts/generate_backend.sh "$BUCKET" foundation "{{OPENCI_TF_REGION}}" infra/foundation "{{OPENCI_TF_PROJECT}}-tf-locks"
     terraform -chdir=infra/foundation init -reconfigure -input=false
     terraform -chdir=infra/foundation apply -input=false -auto-approve
-    ./scripts/upload_source.sh "$BUCKET" foundation . infra/foundation
+    }
+    phase_timing_run terraform-apply foundation_apply
+    phase_timing_run upload-source ./scripts/upload_source.sh "$BUCKET" foundation . infra/foundation
 
 foundation-destroy:
     #!/usr/bin/env bash
     set -euo pipefail
+    # shellcheck source=scripts/phase_timing.sh
+    source ./scripts/phase_timing.sh
     ACCT="$(aws sts get-caller-identity --query Account --output text)"
     BUCKET="{{OPENCI_TF_PROJECT}}-state-${ACCT}"
+    foundation_destroy() {
     TMP_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or tmp_lifecycle_days 3)"
     PACKAGE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or package_lifecycle_days 30)"
     DONE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or done_lifecycle_days 365)"
@@ -199,10 +217,15 @@ foundation-destroy:
     ./scripts/generate_backend.sh "$BUCKET" foundation "{{OPENCI_TF_REGION}}" infra/foundation "{{OPENCI_TF_PROJECT}}-tf-locks"
     terraform -chdir=infra/foundation init -reconfigure -input=false
     terraform -chdir=infra/foundation destroy -input=false -auto-approve
+    }
+    phase_timing_run terraform-destroy foundation_destroy
 
 engine:
     #!/usr/bin/env bash
     set -euo pipefail
+    # shellcheck source=scripts/phase_timing.sh
+    source ./scripts/phase_timing.sh
+    engine_install() {
     ENGINE_ROOT="{{ENGINE_REPO_PATH}}"
     if [ -f "${ENGINE_ROOT}/justfile" ]; then
       ENGINE_PROJECT="{{OPENCI_TF_PROJECT}}" just --justfile "${ENGINE_ROOT}/justfile" --working-directory "${ENGINE_ROOT}" install
@@ -210,10 +233,15 @@ engine:
       chmod +x ./scripts/engine_install.sh
       ./scripts/engine_install.sh "${ENGINE_ROOT}"
     fi
+    }
+    phase_timing_run engine-install engine_install
 
 engine-destroy:
     #!/usr/bin/env bash
     set -euo pipefail
+    # shellcheck source=scripts/phase_timing.sh
+    source ./scripts/phase_timing.sh
+    engine_uninstall() {
     ENGINE_ROOT="{{ENGINE_REPO_PATH}}"
     if [ -f "${ENGINE_ROOT}/justfile" ]; then
       ENGINE_PROJECT="{{OPENCI_TF_PROJECT}}" just --justfile "${ENGINE_ROOT}/justfile" --working-directory "${ENGINE_ROOT}" uninstall
@@ -221,6 +249,8 @@ engine-destroy:
       chmod +x ./scripts/engine_uninstall.sh
       ./scripts/engine_uninstall.sh "${ENGINE_ROOT}"
     fi
+    }
+    phase_timing_run engine-uninstall engine_uninstall
 
 # Build the openci-tf Lambda container image at the fixed IMAGE_VERSION and push it to ECR.
 docker-push:
@@ -237,6 +267,8 @@ docker-push:
 deploy:
     #!/usr/bin/env bash
     set -euo pipefail
+    # shellcheck source=scripts/phase_timing.sh
+    source ./scripts/phase_timing.sh
     ACCT="$(aws sts get-caller-identity --query Account --output text)"
     BUCKET="{{OPENCI_TF_PROJECT}}-state-${ACCT}"
     TARGET_ACCOUNT_IDS="$(./scripts/ssm_config.sh get target_account_ids)" || { echo "ERROR: set target accounts first: just config set target_account_ids '[\"123456789012\"]'" >&2; exit 1; }
@@ -253,8 +285,12 @@ deploy:
     AWS_CONSOLE_START_URL="$(./scripts/ssm_config.sh get-or aws_console_start_url '')"
     AWS_CONSOLE_ROLE_NAME="$(./scripts/ssm_config.sh get-or aws_console_role_name '')"
     ./scripts/write_tfvars.sh infra/deploy "aws_region={{OPENCI_TF_REGION}}" "image_tag=${IMAGE_TAG}" "target_account_ids=${TARGET_ACCOUNT_IDS}" "run_history_retention_days=${RUN_HISTORY_RETENTION_DAYS}" "run_folder_max_concurrency=${RUN_FOLDER_MAX_CONCURRENCY}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_lifecycle_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}" "api_caller_policy_json=${API_CALLER_POLICY_JSON}" "provision_legacy_executor_local=${PROVISION_LEGACY_EXECUTOR_LOCAL}" "enable_apply=${ENABLE_APPLY}" "aws_console_start_url=${AWS_CONSOLE_START_URL}" "aws_console_role_name=${AWS_CONSOLE_ROLE_NAME}"
+    deploy_terraform_init() {
     ./scripts/generate_backend.sh "$BUCKET" deploy "{{OPENCI_TF_REGION}}" infra/deploy "{{OPENCI_TF_PROJECT}}-tf-locks"
     terraform -chdir=infra/deploy init -reconfigure -input=false
+    }
+    phase_timing_run terraform-init deploy_terraform_init
+    deploy_ecr_bootstrap() {
     # Fresh installs and interrupted deploys need module.ecr in state before push.
     # Upgrades skip the targeted apply when module.ecr already satisfies plan.
     set +e
@@ -266,13 +302,20 @@ deploy:
       2) terraform -chdir=infra/deploy apply -input=false -auto-approve -target=module.ecr ;;
       *) echo "ERROR: terraform plan for module.ecr failed; aborting deploy" >&2; exit 1 ;;
     esac
-    just docker-push
+    }
+    phase_timing_run ecr-bootstrap deploy_ecr_bootstrap
+    phase_timing_run engine-image just docker-push
+    deploy_terraform_apply() {
     terraform -chdir=infra/deploy apply -input=false -auto-approve
-    ./scripts/upload_source.sh "$BUCKET" deploy . infra/deploy infra/modules/hub-setup
+    }
+    phase_timing_run terraform-apply deploy_terraform_apply
+    phase_timing_run upload-source ./scripts/upload_source.sh "$BUCKET" deploy . infra/deploy infra/modules/hub-setup
 
 deploy-destroy:
     #!/usr/bin/env bash
     set -euo pipefail
+    # shellcheck source=scripts/phase_timing.sh
+    source ./scripts/phase_timing.sh
     ACCT="$(aws sts get-caller-identity --query Account --output text)"
     BUCKET="{{OPENCI_TF_PROJECT}}-state-${ACCT}"
     TARGET_ACCOUNT_IDS="$(./scripts/ssm_config.sh get-or target_account_ids '[]')"
@@ -288,11 +331,14 @@ deploy-destroy:
     ENABLE_APPLY="$(./scripts/ssm_config.sh get-or enable_apply false)"
     AWS_CONSOLE_START_URL="$(./scripts/ssm_config.sh get-or aws_console_start_url '')"
     AWS_CONSOLE_ROLE_NAME="$(./scripts/ssm_config.sh get-or aws_console_role_name '')"
+    deploy_destroy() {
     ./scripts/write_tfvars.sh infra/deploy "aws_region={{OPENCI_TF_REGION}}" "image_tag=${IMAGE_TAG}" "target_account_ids=${TARGET_ACCOUNT_IDS}" "run_history_retention_days=${RUN_HISTORY_RETENTION_DAYS}" "run_folder_max_concurrency=${RUN_FOLDER_MAX_CONCURRENCY}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_lifecycle_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}" "api_caller_policy_json=${API_CALLER_POLICY_JSON}" "provision_legacy_executor_local=${PROVISION_LEGACY_EXECUTOR_LOCAL}" "enable_apply=${ENABLE_APPLY}" "aws_console_start_url=${AWS_CONSOLE_START_URL}" "aws_console_role_name=${AWS_CONSOLE_ROLE_NAME}"
     ./scripts/generate_backend.sh "$BUCKET" deploy "{{OPENCI_TF_REGION}}" infra/deploy "{{OPENCI_TF_PROJECT}}-tf-locks"
     terraform -chdir=infra/deploy init -reconfigure -input=false
     ./scripts/terraform_unlock_stale_lock.sh infra/deploy "$BUCKET" deploy "{{OPENCI_TF_PROJECT}}-tf-locks"
     terraform -chdir=infra/deploy destroy -input=false -auto-approve
+    }
+    phase_timing_run terraform-destroy deploy_destroy
 
 # Target account: provision or remove the executor-readonly role only.
 target-create-aws-readonly hub_account_id state_bucket="":
@@ -417,16 +463,28 @@ target-connect-destroy:
 
 # Full install: bootstrap -> foundation -> engine -> deploy (hub readonly via hub-setup)
 install:
-    @just bootstrap
-    @just foundation
-    @just engine
-    @just deploy
-    @echo "install complete — hub readonly owned by deploy; run 'just verify'"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # shellcheck source=scripts/phase_timing.sh
+    source ./scripts/phase_timing.sh
+    phase_timing_total_begin
+    journey_rc=0
+    phase_timing_run bootstrap just bootstrap || journey_rc=$?
+    phase_timing_run foundation just foundation || journey_rc=$?
+    phase_timing_run engine just engine || journey_rc=$?
+    phase_timing_run deploy just deploy || journey_rc=$?
+    phase_timing_total_end install "$journey_rc"
+    [ "$journey_rc" -eq 0 ] || exit "$journey_rc"
+    echo "install complete — hub readonly owned by deploy; run 'just verify'"
 
 # Exact reverse of install. Set OPENCI_TF_KEEP_STATE=yes|no to skip the prompt.
 uninstall:
     #!/usr/bin/env bash
     set -euo pipefail
+    # shellcheck source=scripts/phase_timing.sh
+    source ./scripts/phase_timing.sh
+    phase_timing_total_begin
+    journey_rc=0
     KEEP="${OPENCI_TF_KEEP_STATE:-}"
     if [ -z "$KEEP" ]; then
         if [ -t 0 ]; then
@@ -444,7 +502,7 @@ uninstall:
     set -e
     case "$probe_rc" in
       0)
-        just target-delete-aws-poweruser "$HUB_ACCOUNT_ID"
+        phase_timing_run poweruser-delete just target-delete-aws-poweruser "$HUB_ACCOUNT_ID" || journey_rc=$?
         ;;
       1)
         ;;
@@ -453,24 +511,37 @@ uninstall:
         exit 1
         ;;
     esac
-    just deploy-destroy
-    just engine-destroy
-    just foundation-destroy
+    phase_timing_run deploy-destroy just deploy-destroy || journey_rc=$?
+    phase_timing_run engine-destroy just engine-destroy || journey_rc=$?
+    phase_timing_run foundation-destroy just foundation-destroy || journey_rc=$?
     if [ "$KEEP" = "yes" ]; then
         echo "keeping state bucket + lock table + source copies as the surviving record"
     else
-        just bootstrap-destroy
+        phase_timing_run bootstrap-destroy just bootstrap-destroy || journey_rc=$?
     fi
+    ssm_cleanup() {
     ./scripts/ssm_config.sh delete-all
     SSM_CONFIG_PROJECT=engine ./scripts/ssm_config.sh delete-all
-    ./scripts/cleanup_operator_footprint.sh
+    }
+    phase_timing_run ssm-cleanup ssm_cleanup || journey_rc=$?
+    phase_timing_run operator-cleanup ./scripts/cleanup_operator_footprint.sh || journey_rc=$?
+    phase_timing_total_end uninstall "$journey_rc"
+    [ "$journey_rc" -eq 0 ] || exit "$journey_rc"
     echo "uninstall complete — run 'just verify-clean'"
 
 verify:
-    ./scripts/verify.sh present
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # shellcheck source=scripts/phase_timing.sh
+    source ./scripts/phase_timing.sh
+    phase_timing_run verify ./scripts/verify.sh present
 
 verify-clean:
-    ./scripts/verify.sh clean
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # shellcheck source=scripts/phase_timing.sh
+    source ./scripts/phase_timing.sh
+    phase_timing_run verify-clean ./scripts/verify.sh clean
 
 # --- operator utilities ---------------------------------------------------------
 
@@ -495,11 +566,17 @@ account-set-apply *ARGS:
 target-onboard *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
+    # shellcheck source=scripts/phase_timing.sh
+    source ./scripts/phase_timing.sh
     hub_account_id="${1:?Usage: just target-onboard <hub_account_id> [state_bucket]}"
     state_bucket="${2:-}"
     args=(--hub-account-id "$hub_account_id")
     if [ -n "$state_bucket" ]; then args+=(--state-bucket "$state_bucket"); fi
-    ./scripts/target_onboard.sh "${args[@]}"
+    phase_timing_total_begin
+    journey_rc=0
+    phase_timing_run target-onboard ./scripts/target_onboard.sh "${args[@]}" || journey_rc=$?
+    phase_timing_total_end target-onboard "$journey_rc"
+    [ "$journey_rc" -eq 0 ] || exit "$journey_rc"
 
 # Hub account: append target_account_ids, redeploy IAM, then register alias.
 register-target *ARGS:
