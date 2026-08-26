@@ -134,8 +134,8 @@ def test_summary_uses_icon_cells_without_legend():
     )
     assert "## Terraform Multi-Folder Summary" in rendered
     assert "[`vpc`](https://github.com/org/repo/pull/1#issuecomment-1)" in rendered
-    assert "| [`vpc`](https://github.com/org/repo/pull/1#issuecomment-1) | `123456789012` | clean | clean | $0 |" in rendered
-    assert "| [`eks`](https://github.com/org/repo/pull/1#issuecomment-2) | `210987654321` | changes | low | $12.50 |" in rendered
+    assert "| [`vpc`](https://github.com/org/repo/pull/1#issuecomment-1) | `123456789012` | no changes | clean | $0 |" in rendered
+    assert "| [`eks`](https://github.com/org/repo/pull/1#issuecomment-2) | `210987654321` | +15 ~0 -0 | low | $12.50 |" in rendered
     assert "Drift:" not in rendered
     assert "Security:" not in rendered
     assert "## CI Details" in rendered
@@ -161,8 +161,8 @@ def test_plan_all_summary_renders_drift_and_security_icons_for_each_folder():
             },
         },
     )
-    assert "| `terraform/ap-northeast-1` | `123456789012` | clean | clean | $0 |" in rendered
-    assert "| `terraform/eu-west-1` | `210987654321` | changes | high | $5.00 |" in rendered
+    assert "| `terraform/ap-northeast-1` | `123456789012` | no changes | clean | $0 |" in rendered
+    assert "| `terraform/eu-west-1` | `210987654321` | +2 ~1 -0 | high | $5.00 |" in rendered
     assert "Drift:" not in rendered
 
 
@@ -171,7 +171,7 @@ def test_summary_renders_not_configured_cost_column():
         [{"folder": "infra/a", "succeeded": True, "account_id": "123456789012"}],
         {"infra/a": {"tf/plan.out": "Plan: 0 to add, 0 to change, 0 to destroy", "tfsec.json": '{"results":[]}', "infracost.json": '{"skipped":true,"reason":"not configured"}'}},
     )
-    assert "| `infra/a` | `123456789012` | clean | clean | not configured |" in rendered
+    assert "| `infra/a` | `123456789012` | no changes | clean | not configured |" in rendered
 
 
 @pytest.mark.parametrize(
@@ -196,7 +196,7 @@ def test_summary_tfsec_security_unknown_unless_valid_empty(tfsec_payload, expect
         [{"folder": "infra/a", "succeeded": True, "account_id": "123456789012"}],
         {"infra/a": artifacts},
     )
-    assert f"| `infra/a` | `123456789012` | clean | {expected_security} |" in rendered
+    assert f"| `infra/a` | `123456789012` | no changes | {expected_security} |" in rendered
 
 
 def test_tfsec_formatter_omits_not_run_marker():
@@ -623,6 +623,6 @@ def test_render_plan_all_posts_linked_multi_folder_summary(monkeypatch):
     assert "## Terraform Multi-Folder Summary" in summary_body
     assert f"[`infra/a`]({comment_url('org/repo', 7, comment_ids['infra/a'])})" in summary_body
     assert f"[`infra/b`]({comment_url('org/repo', 7, comment_ids['infra/b'])})" in summary_body
-    assert "| clean | clean | $0 |" in summary_body
+    assert "| no changes | clean | $0 |" in summary_body
     assert "Legend" not in summary_body
     assert "Drift:" not in summary_body

@@ -95,6 +95,11 @@ is `true` when any folder authoritatively detected drift, `false` only when ever
 folder has an authoritative false result, and absent when the aggregate is
 unknown. Consumers must treat an absent field as an unknown drift result.
 
+On pull requests, multi-folder summary tables use a **Plan** column for `plan`,
+`report`, and `plan_destroy` runs. Cells show `+add ~change -destroy` counts or
+`no changes`. Only `drift` runs use a **Drift Check** column with `clean` or
+`changes`. Do not read plan delta counts as drift detection.
+
 Terminal execution status has precedence over the drift result: a failed or
 `infrastructure_error` run remains failed even if one completed folder recorded
 `drift_detected: true`. Consumers should classify failure first, then drift, then

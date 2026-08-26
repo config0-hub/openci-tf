@@ -143,6 +143,21 @@ def extract_infracost_monthly(text: str) -> str:
     return formatted
 
 
+_PLAN_SUMMARY_ACTIONS = frozenset({"plan", "report", "plan_destroy"})
+
+
+def _plan_cell(plan_text: str) -> str:
+    summary = extract_plan_summary(plan_text)
+    if not summary:
+        return "unknown"
+    add = int(summary["add"])
+    change = int(summary["change"])
+    destroy = int(summary["destroy"])
+    if add == 0 and change == 0 and destroy == 0:
+        return "no changes"
+    return f"+{add} ~{change} -{destroy}"
+
+
 def _drift_cell(plan_text: str) -> str:
     summary = extract_plan_summary(plan_text)
     if not summary:
@@ -150,6 +165,16 @@ def _drift_cell(plan_text: str) -> str:
     if all(int(summary[key]) == 0 for key in ("add", "change", "destroy")):
         return "clean"
     return "changes"
+
+
+def _summary_delta_header(action: str) -> str:
+    return "Plan" if action in _PLAN_SUMMARY_ACTIONS else "Drift Check"
+
+
+def _summary_delta_cell(action: str, plan_text: str) -> str:
+    if action in _PLAN_SUMMARY_ACTIONS:
+        return _plan_cell(plan_text)
+    return _drift_cell(plan_text)
 
 
 def _security_cell(tfsec_text: str) -> str:
@@ -486,12 +511,16 @@ def _summary_row(
 
 
 def pending_summary(
-    folders: list[dict[str, Any]], skipped: list[dict[str, Any]] | None = None
+    folders: list[dict[str, Any]],
+    skipped: list[dict[str, Any]] | None = None,
+    *,
+    action: str = "plan",
 ) -> str:
+    delta_header = _summary_delta_header(action)
     rows = [
         "## Terraform Multi-Folder Summary",
         "",
-        "| Folder | Account | Drift Check | Security | Cost |",
+        f"| Folder | Account | {delta_header} | Security | Cost |",
         "|--------|---------|------------|----------|------|",
     ]
     for item in folders:
@@ -630,18 +659,20 @@ def summary(
     outcomes: list[dict[str, Any]],
     artifacts_by_folder: dict[str, dict[str, str]] | None = None,
     *,
+    action: str = "plan",
     folder_urls: dict[str, str] | None = None,
     commit_hash: str = "",
     console_url: str | None = None,
     steps: list[list[str]] | None = None,
 ) -> str:
+    delta_header = _summary_delta_header(action)
     rows = ["## Terraform Multi-Folder Summary", ""]
     if steps is not None and len(steps) > 1:
         rows.extend(_pipeline_step_rows(steps, outcomes))
         rows.append("")
     rows.extend(
         [
-            "| Folder | Account | Drift Check | Security | Cost |",
+            f"| Folder | Account | {delta_header} | Security | Cost |",
             "|--------|---------|------------|----------|------|",
         ]
     )
@@ -662,7 +693,7 @@ def summary(
             drift, security, cost = "failed", "not run", "n/a"
         else:
             artifacts = (artifacts_by_folder or {}).get(folder, {})
-            drift = _drift_cell(artifacts.get("tf/plan.out", ""))
+            drift = _summary_delta_cell(action, artifacts.get("tf/plan.out", ""))
             security = _security_cell(artifacts.get("tfsec.json", ""))
             cost = _cost_cell(artifacts.get("infracost.json", "{}"))
         rows.append(

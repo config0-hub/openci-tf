@@ -40,6 +40,66 @@ def test_recorded_artifact_section_matches_golden(formatter, artifact, golden):
     assert formatter(_fixture_text(artifact)) == (FIXTURES / golden).read_text().rstrip("\n")
 
 
+def test_summary_plan_run_with_adds_only_shows_plan_counts():
+    account = "123456789012"
+    rendered = summary(
+        [{"folder": "infra/vpc", "succeeded": True, "account_id": account}],
+        {
+            "infra/vpc": {
+                "tf/plan.out": "Plan: 3 to add, 0 to change, 0 to destroy",
+                "tfsec.json": '{"results":[]}',
+                "infracost.json": '{"totalMonthlyCost":"0"}',
+            }
+        },
+        action="plan",
+    )
+    assert "| Folder | Account | Plan | Security | Cost |" in rendered
+    assert f"| `infra/vpc` | `{account}` | +3 ~0 -0 | clean | $0 |" in rendered
+
+
+def test_summary_plan_run_with_zero_delta_shows_no_changes():
+    account = "123456789012"
+    rendered = summary(
+        [{"folder": "infra/vpc", "succeeded": True, "account_id": account}],
+        {
+            "infra/vpc": {
+                "tf/plan.out": "Plan: 0 to add, 0 to change, 0 to destroy",
+                "tfsec.json": '{"results":[]}',
+                "infracost.json": '{"totalMonthlyCost":"0"}',
+            }
+        },
+        action="plan",
+    )
+    assert f"| `infra/vpc` | `{account}` | no changes | clean | $0 |" in rendered
+
+
+def test_summary_drift_run_keeps_drift_check_column():
+    account = "123456789012"
+    rendered = summary(
+        [{"folder": "infra/vpc", "succeeded": True, "account_id": account}],
+        {
+            "infra/vpc": {
+                "tf/plan.out": "Plan: 3 to add, 0 to change, 0 to destroy",
+                "tfsec.json": '{"results":[]}',
+                "infracost.json": '{"totalMonthlyCost":"0"}',
+            }
+        },
+        action="drift",
+    )
+    assert "| Folder | Account | Drift Check | Security | Cost |" in rendered
+    assert f"| `infra/vpc` | `{account}` | changes | clean | $0 |" in rendered
+
+
+def test_summary_drift_run_clean_when_no_delta():
+    account = "123456789012"
+    rendered = summary(
+        [{"folder": "infra/vpc", "succeeded": True, "account_id": account}],
+        {"infra/vpc": {"tf/plan.out": "Plan: 0 to add, 0 to change, 0 to destroy"}},
+        action="drift",
+    )
+    assert f"| `infra/vpc` | `{account}` | clean |" in rendered
+
+
 def test_summary_table_uses_real_artifact_producer_shapes():
     account = "123456789012"
     rendered = summary([
@@ -47,9 +107,9 @@ def test_summary_table_uses_real_artifact_producer_shapes():
         {"folder": "drift", "account_id": account, "succeeded": True},
         {"folder": "failed", "account_id": account, "status": "failed"},
         {"folder": "broken", "account_id": account, "status": "infrastructure_error"},
-    ], {"drift": {"tf/plan.out": "Plan: 0 to add, 1 to change, 0 to destroy", "tfsec.json": '{"results":[{"severity":"MEDIUM"}]}', "infracost.json": '{"totalMonthlyCost":"12.50"}'}})
-    assert "| Folder | Account | Drift Check | Security | Cost |" in rendered
-    assert f"| `drift` | `{account}` | changes | medium | $12.50 |" in rendered
+    ], {"drift": {"tf/plan.out": "Plan: 0 to add, 1 to change, 0 to destroy", "tfsec.json": '{"results":[{"severity":"MEDIUM"}]}', "infracost.json": '{"totalMonthlyCost":"12.50"}'}}, action="plan")
+    assert "| Folder | Account | Plan | Security | Cost |" in rendered
+    assert f"| `drift` | `{account}` | +0 ~1 -0 | medium | $12.50 |" in rendered
     assert f"| `broken` | `{account}` | failed | not run | n/a |" in rendered
 
 

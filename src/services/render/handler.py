@@ -377,7 +377,7 @@ def _render_placeholder(event: dict[str, Any]) -> dict[str, Any]:
         client,
         repo,
         pr,
-        pending_summary(folders, skipped),
+        pending_summary(folders, skipped, action=action),
         action,
         "all",
         report_all=_summary_uses_report_all(action),
@@ -737,6 +737,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 summary(
                     render_items,
                     artifacts_by_folder,
+                    action=action,
                     folder_urls=folder_urls,
                     commit_hash=commit_hash,
                     console_url=console_url,

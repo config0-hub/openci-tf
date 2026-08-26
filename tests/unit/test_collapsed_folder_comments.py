@@ -87,7 +87,7 @@ def test_pending_summary_includes_account_column():
         [{"folder": "infra/a", "account_id": _ACCOUNT}],
         [{"folder": "infra/b", "account_id": "210987654321", "status": "in_progress"}],
     )
-    assert "| Folder | Account | Drift Check | Security | Cost |" in rendered
+    assert "| Folder | Account | Plan | Security | Cost |" in rendered
     assert f"| `infra/a` | `{_ACCOUNT}` | in progress |" in rendered
     assert "| `infra/b` | `210987654321` | in progress |" in rendered
 
@@ -101,7 +101,7 @@ def test_summary_table_includes_account_column():
         ],
         {"infra/good": _artifacts()},
     )
-    assert "| Folder | Account | Drift Check | Security | Cost |" in rendered
+    assert "| Folder | Account | Plan | Security | Cost |" in rendered
     assert f"| `infra/good` | `{_ACCOUNT}` |" in rendered
     assert f"| `infra/bad` | `{_ACCOUNT}` | failed |" in rendered
     assert "| `config` | `—` | failed |" in rendered

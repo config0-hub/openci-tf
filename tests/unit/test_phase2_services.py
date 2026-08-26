@@ -793,7 +793,7 @@ def test_render_placeholder_still_posts_summary_when_all_folders_locked(monkeypa
         "skipped": [{"folder": "infra/a", "account_id": "123456789012", "status": "in_progress", "reply": "Run already in progress."}],
     }, None)
     assert result["placeholder_rendered"] is True
-    assert comments == [("## Terraform Multi-Folder Summary\n\n| Folder | Account | Drift Check | Security | Cost |\n|--------|---------|------------|----------|------|\n| `infra/a` | `123456789012` | in progress | in progress | in progress |", "summary")]
+    assert comments == [("## Terraform Multi-Folder Summary\n\n| Folder | Account | Plan | Security | Cost |\n|--------|---------|------------|----------|------|\n| `infra/a` | `123456789012` | in progress | in progress | in progress |", "summary")]
 
 
 def test_render_placeholder_uses_same_markers_as_final_render(monkeypatch):
