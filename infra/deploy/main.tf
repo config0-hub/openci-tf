@@ -26,13 +26,12 @@ data "aws_ecr_image" "openci_tf" {
 }
 
 module "hub_setup" {
-  source                          = "../modules/hub-setup"
-  role_prefix                     = var.project_name
-  target_account_ids              = var.target_account_ids
-  state_bucket_arn                = local.state_bucket_arn
-  lock_table_arn                  = data.aws_dynamodb_table.locks.arn
-  provision_legacy_executor_local = var.provision_legacy_executor_local
-  enable_apply                    = var.enable_apply
+  source             = "../modules/hub-setup"
+  role_prefix        = var.project_name
+  target_account_ids = var.target_account_ids
+  state_bucket_arn   = local.state_bucket_arn
+  lock_table_arn     = data.aws_dynamodb_table.locks.arn
+  enable_apply       = var.enable_apply
 }
 
 data "aws_sfn_state_machine" "engine_codebuild" {

@@ -25,16 +25,12 @@ def test_image_version_is_fixed_at_1_01() -> None:
 
 def test_deploy_paths_do_not_derive_or_accept_image_tags() -> None:
     justfile = (_REPO_ROOT / "justfile").read_text(encoding="utf-8")
-    retire_script = (_REPO_ROOT / "scripts/retire_legacy_executor.sh").read_text(
-        encoding="utf-8"
-    )
 
     assert "docker-push tag:" not in justfile
     assert "docker-push:" in justfile
     assert "get-or image_tag" not in justfile
     assert "git rev-parse --short HEAD" not in justfile
     assert justfile.count('IMAGE_TAG="$(./scripts/image_tag.sh)"') == 3
-    assert 'IMAGE_TAG="$(./scripts/image_tag.sh)"' in retire_script
 
 
 def test_terraform_resolves_fixed_tag_to_current_digest() -> None:

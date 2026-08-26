@@ -107,12 +107,6 @@ variable "api_caller_policy_json" {
   default = {}
 }
 
-variable "provision_legacy_executor_local" {
-  description = "When true, retain legacy executor-local in deploy state; persisted in hub install SSM"
-  type        = bool
-  default     = true
-}
-
 variable "enable_apply" {
   description = "Legacy IAM migration only: when true, attach PowerUserAccess to executor-local; runtime intent gating uses DynamoDB enable_apply"
   type        = bool

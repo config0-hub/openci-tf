@@ -293,11 +293,11 @@ that survive `terraform destroy`:
   (the full list is in `scripts/product_log_groups.sh`)
 - SSM parameters outside `/openci-tf/install/` under `/openci-tf/clone-token`,
   `/openci-tf/env`, `/openci-tf/infracost`, and `/openci-tf/webhook`
-- Legacy IAM roles `${OPENCI_TF_PROJECT}-executor-local` and
+- IAM roles `${OPENCI_TF_PROJECT}-executor-local` and
   `${OPENCI_TF_PROJECT}-executor-remote` when present
 
 `just verify-clean` fails if any of those log groups, operator SSM parameters,
-or legacy executor roles remain.
+or executor-local/executor-remote roles remain.
 
 `just deploy-destroy` (used during `uninstall`) calls
 `scripts/terraform_unlock_stale_lock.sh` before `terraform destroy`. If a

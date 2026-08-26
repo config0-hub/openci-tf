@@ -11,6 +11,6 @@ output "executor_readonly_role_arn" {
 }
 
 output "executor_local_role_arn" {
-  description = "ARN of the legacy same-account executor-local role (pre-split); empty when retired"
-  value       = length(aws_iam_role.executor_local) > 0 ? aws_iam_role.executor_local[0].arn : ""
+  description = "ARN of the same-account executor-local role"
+  value       = aws_iam_role.executor_local.arn
 }

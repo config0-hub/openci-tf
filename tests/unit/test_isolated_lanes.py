@@ -181,6 +181,16 @@ def test_mutation_prepare_iam_includes_codebuild_lookup():
     assert "engine_codebuild_project_arn" in main
 
 
+def test_mutation_inner_poll_and_collect_keep_build_id_optional():
+    # The poll state is named ProbeDone in this codebase. A folder without a
+    # CodeBuild build id must not fail on a missing JSONPath field in either
+    # the poll or the collect step of the mutation inner machine.
+    poll_block = _state_block(READ_INNER, "ProbeDone")
+    collect_block = _state_block(READ_INNER, "CollectMutation")
+    assert '"codebuild_build_id.$"' not in poll_block
+    assert '"codebuild_build_id.$"' not in collect_block
+
+
 def test_mutation_inner_probe_and_collect_keep_build_id_optional():
     from tests.helpers.rendered_run_folder_asl import (
         load_rendered_run_folder_definition,

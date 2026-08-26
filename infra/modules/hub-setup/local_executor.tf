@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Config0, Inc.
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# executor-local role — legacy same-account executor retained for pre-split state upgrades.
+# executor-local role - same-account executor used by the hub install.
 
 resource "aws_iam_role" "executor_local" {
-  count = var.provision_legacy_executor_local ? 1 : 0
-  name  = "${var.role_prefix}-executor-local"
+  name = "${var.role_prefix}-executor-local"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -24,9 +23,8 @@ resource "aws_iam_role" "executor_local" {
 }
 
 resource "aws_iam_role_policy" "executor_local" {
-  count = var.provision_legacy_executor_local ? 1 : 0
-  name  = "${var.role_prefix}-executor-local-policy"
-  role  = aws_iam_role.executor_local[0].id
+  name = "${var.role_prefix}-executor-local-policy"
+  role = aws_iam_role.executor_local.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -166,13 +164,13 @@ resource "aws_iam_role_policy" "executor_local" {
 }
 
 resource "aws_iam_role_policy_attachment" "executor_local_read_only" {
-  count      = var.provision_legacy_executor_local && !var.enable_apply ? 1 : 0
-  role       = aws_iam_role.executor_local[0].name
+  count      = var.enable_apply ? 0 : 1
+  role       = aws_iam_role.executor_local.name
   policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
 }
 
 resource "aws_iam_role_policy_attachment" "executor_local_power_user" {
-  count      = var.provision_legacy_executor_local && var.enable_apply ? 1 : 0
-  role       = aws_iam_role.executor_local[0].name
+  count      = var.enable_apply ? 1 : 0
+  role       = aws_iam_role.executor_local.name
   policy_arn = "arn:aws:iam::aws:policy/PowerUserAccess"
 }

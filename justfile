@@ -280,11 +280,10 @@ deploy:
     DONE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or done_lifecycle_days 365)"
     PLAN_RETENTION_DAYS="$(./scripts/ssm_config.sh get-or plan_retention_days 1)"
     API_CALLER_POLICY_JSON="$(./scripts/ssm_config.sh get-or api_caller_policy_json '{}')"
-    PROVISION_LEGACY_EXECUTOR_LOCAL="$(./scripts/ssm_config.sh get-or provision_legacy_executor_local true)"
     ENABLE_APPLY="$(./scripts/ssm_config.sh get-or enable_apply false)"
     AWS_CONSOLE_START_URL="$(./scripts/ssm_config.sh get-or aws_console_start_url '')"
     AWS_CONSOLE_ROLE_NAME="$(./scripts/ssm_config.sh get-or aws_console_role_name '')"
-    ./scripts/write_tfvars.sh infra/deploy "aws_region={{OPENCI_TF_REGION}}" "image_tag=${IMAGE_TAG}" "target_account_ids=${TARGET_ACCOUNT_IDS}" "run_history_retention_days=${RUN_HISTORY_RETENTION_DAYS}" "run_folder_max_concurrency=${RUN_FOLDER_MAX_CONCURRENCY}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_lifecycle_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}" "api_caller_policy_json=${API_CALLER_POLICY_JSON}" "provision_legacy_executor_local=${PROVISION_LEGACY_EXECUTOR_LOCAL}" "enable_apply=${ENABLE_APPLY}" "aws_console_start_url=${AWS_CONSOLE_START_URL}" "aws_console_role_name=${AWS_CONSOLE_ROLE_NAME}"
+    ./scripts/write_tfvars.sh infra/deploy "aws_region={{OPENCI_TF_REGION}}" "image_tag=${IMAGE_TAG}" "target_account_ids=${TARGET_ACCOUNT_IDS}" "run_history_retention_days=${RUN_HISTORY_RETENTION_DAYS}" "run_folder_max_concurrency=${RUN_FOLDER_MAX_CONCURRENCY}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_lifecycle_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}" "api_caller_policy_json=${API_CALLER_POLICY_JSON}" "enable_apply=${ENABLE_APPLY}" "aws_console_start_url=${AWS_CONSOLE_START_URL}" "aws_console_role_name=${AWS_CONSOLE_ROLE_NAME}"
     deploy_terraform_init() {
     ./scripts/generate_backend.sh "$BUCKET" deploy "{{OPENCI_TF_REGION}}" infra/deploy "{{OPENCI_TF_PROJECT}}-tf-locks"
     terraform -chdir=infra/deploy init -reconfigure -input=false
@@ -327,12 +326,11 @@ deploy-destroy:
     DONE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or done_lifecycle_days 365)"
     PLAN_RETENTION_DAYS="$(./scripts/ssm_config.sh get-or plan_retention_days 1)"
     API_CALLER_POLICY_JSON="$(./scripts/ssm_config.sh get-or api_caller_policy_json '{}')"
-    PROVISION_LEGACY_EXECUTOR_LOCAL="$(./scripts/ssm_config.sh get-or provision_legacy_executor_local true)"
     ENABLE_APPLY="$(./scripts/ssm_config.sh get-or enable_apply false)"
     AWS_CONSOLE_START_URL="$(./scripts/ssm_config.sh get-or aws_console_start_url '')"
     AWS_CONSOLE_ROLE_NAME="$(./scripts/ssm_config.sh get-or aws_console_role_name '')"
     deploy_destroy() {
-    ./scripts/write_tfvars.sh infra/deploy "aws_region={{OPENCI_TF_REGION}}" "image_tag=${IMAGE_TAG}" "target_account_ids=${TARGET_ACCOUNT_IDS}" "run_history_retention_days=${RUN_HISTORY_RETENTION_DAYS}" "run_folder_max_concurrency=${RUN_FOLDER_MAX_CONCURRENCY}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_lifecycle_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}" "api_caller_policy_json=${API_CALLER_POLICY_JSON}" "provision_legacy_executor_local=${PROVISION_LEGACY_EXECUTOR_LOCAL}" "enable_apply=${ENABLE_APPLY}" "aws_console_start_url=${AWS_CONSOLE_START_URL}" "aws_console_role_name=${AWS_CONSOLE_ROLE_NAME}"
+    ./scripts/write_tfvars.sh infra/deploy "aws_region={{OPENCI_TF_REGION}}" "image_tag=${IMAGE_TAG}" "target_account_ids=${TARGET_ACCOUNT_IDS}" "run_history_retention_days=${RUN_HISTORY_RETENTION_DAYS}" "run_folder_max_concurrency=${RUN_FOLDER_MAX_CONCURRENCY}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_lifecycle_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}" "api_caller_policy_json=${API_CALLER_POLICY_JSON}" "enable_apply=${ENABLE_APPLY}" "aws_console_start_url=${AWS_CONSOLE_START_URL}" "aws_console_role_name=${AWS_CONSOLE_ROLE_NAME}"
     ./scripts/generate_backend.sh "$BUCKET" deploy "{{OPENCI_TF_REGION}}" infra/deploy "{{OPENCI_TF_PROJECT}}-tf-locks"
     terraform -chdir=infra/deploy init -reconfigure -input=false
     ./scripts/terraform_unlock_stale_lock.sh infra/deploy "$BUCKET" deploy "{{OPENCI_TF_PROJECT}}-tf-locks"
@@ -377,36 +375,6 @@ target-delete-aws-poweruser hub_account_id state_bucket="":
     args=(--action destroy --role poweruser --hub-account-id "$hub_account_id")
     if [ -n "$state_bucket" ]; then args+=(--state-bucket "$state_bucket"); fi
     ./scripts/target_aws_role.sh "${args[@]}"
-
-# Hub account: retire or restore legacy executor-local durably (install SSM + deploy apply).
-retire-legacy-executor-local:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    ./scripts/retire_legacy_executor.sh --lane local
-
-restore-legacy-executor-local:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    ./scripts/retire_legacy_executor.sh --lane local --restore
-
-# Target account: retire or restore legacy executor-remote durably (target-account SSM + target-connect apply).
-retire-legacy-executor-remote hub_account_id state_bucket="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    hub_account_id="${1:?Usage: just retire-legacy-executor-remote <hub_account_id> [state_bucket]}"
-    state_bucket="${2:-}"
-    args=(--lane remote --hub-account-id "$hub_account_id")
-    if [ -n "$state_bucket" ]; then args+=(--state-bucket "$state_bucket"); fi
-    ./scripts/retire_legacy_executor.sh "${args[@]}"
-
-restore-legacy-executor-remote hub_account_id state_bucket="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    hub_account_id="${1:?Usage: just restore-legacy-executor-remote <hub_account_id> [state_bucket]}"
-    state_bucket="${2:-}"
-    args=(--lane remote --restore --hub-account-id "$hub_account_id")
-    if [ -n "$state_bucket" ]; then args+=(--state-bucket "$state_bucket"); fi
-    ./scripts/retire_legacy_executor.sh "${args[@]}"
 
 # Deprecated: use target-create-aws-readonly (readonly role only).
 # Public Function URL with application-level bearer auth. The Lambda role must

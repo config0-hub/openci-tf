@@ -32,9 +32,3 @@ variable "enable_apply" {
   type        = bool
   default     = false
 }
-
-variable "provision_legacy_executor_local" {
-  description = "When true, retain the legacy executor-local IAM role for pre-split upgrades; set false via install SSM to retire durably"
-  type        = bool
-  default     = true
-}

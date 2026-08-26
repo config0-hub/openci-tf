@@ -143,14 +143,31 @@ def test_executor_roles_doc_describes_current_role_ownership():
     assert "target-create-aws-poweruser" in text
 
 
-def test_hub_setup_declares_provision_legacy_variable():
-    variables = (_REPO_ROOT / "infra/modules/hub-setup/variables.tf").read_text(
-        encoding="utf-8"
+def test_hub_setup_has_no_legacy_migration_surface():
+    hub_setup = _REPO_ROOT / "infra/modules/hub-setup"
+    variables = (hub_setup / "variables.tf").read_text(encoding="utf-8")
+    assert "provision_legacy_executor_local" not in variables
+    assert not (hub_setup / "legacy_executor_moved.tf").exists()
+    assert not (hub_setup / "tests/legacy_upgrade.tftest.hcl").exists()
+    assert not (_REPO_ROOT / "scripts/retire_legacy_executor.sh").exists()
+    local_executor = (hub_setup / "local_executor.tf").read_text(encoding="utf-8")
+    assert "provision_legacy_executor_local" not in local_executor
+    assert 'resource "aws_iam_role" "executor_local" {\n  name' in local_executor
+
+
+def test_executor_poweruser_policy_renders_under_terraform_test() -> None:
+    result = subprocess.run(
+        [
+            "terraform",
+            f"-chdir={_REPO_ROOT / 'infra/modules/executor-poweruser'}",
+            "test",
+            "-filter=tests/policy_render.tftest.hcl",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
-    assert "provision_legacy_executor_local" in variables
-    assert (
-        "default     = true" in variables.split("provision_legacy_executor_local", 1)[1]
-    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_target_connect_declares_provision_legacy_variable():
@@ -183,10 +200,10 @@ def test_target_connect_root_passes_enable_apply_to_legacy_module():
     assert "enable_apply                     = var.enable_apply" in source
 
 
-def test_deploy_and_target_recipes_read_provision_legacy_from_ssm():
+def test_deploy_and_target_recipes_read_enable_apply_from_ssm():
     justfile = _JUSTFILE.read_text(encoding="utf-8")
     deploy_section = justfile.split("deploy:", 1)[1].split("deploy-destroy:", 1)[0]
-    assert "provision_legacy_executor_local" in deploy_section
+    assert "provision_legacy_executor_local" not in deploy_section
     assert "enable_apply" in deploy_section
     target_script = (_REPO_ROOT / "scripts/target_aws_role.sh").read_text(
         encoding="utf-8"
@@ -194,22 +211,12 @@ def test_deploy_and_target_recipes_read_provision_legacy_from_ssm():
     assert "provision_legacy_executor_remote" in target_script
     assert "enable_apply" in target_script
     assert 'TFVARS+=("enable_apply=${ENABLE_APPLY}")' in target_script
-    retire_script = (_REPO_ROOT / "scripts/retire_legacy_executor.sh").read_text(
-        encoding="utf-8"
-    )
-    assert "provision_legacy_executor_local" in retire_script
-    assert "provision_legacy_executor_remote" in retire_script
 
 
-def test_justfile_lists_legacy_retirement_recipes():
+def test_justfile_has_no_legacy_retirement_recipes():
     text = _JUSTFILE.read_text(encoding="utf-8")
-    for recipe in (
-        "retire-legacy-executor-local",
-        "restore-legacy-executor-local",
-        "retire-legacy-executor-remote",
-        "restore-legacy-executor-remote",
-    ):
-        assert recipe in text
+    assert "legacy-executor" not in text
+    assert "retire_legacy_executor" not in text
 
 
 def test_executor_roles_doc_describes_lane_binding_and_state_contract():
