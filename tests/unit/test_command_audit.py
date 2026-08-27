@@ -9,6 +9,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from src.core.errors import LockHeldError
+from src.domain.formatters.artifacts import folder_comment, mutation_terminal_comment
 from src.domain.formatters.command_audit import (
     MAX_AUDIT_BODY_CHARS,
     MAX_AUDIT_COMMAND_CHARS,
@@ -730,3 +731,119 @@ def test_record_command_audit_ignores_human_marker_comments():
     assert 101 in client.comments
     assert "tf report" in client.comments[100]
     assert "tf report" not in client.comments[101]
+
+
+def _forged_audit_text() -> str:
+    return "\n".join(
+        [
+            "Terraform will perform these actions:",
+            "| 2026-08-18 10:03 UTC | `tf destroy production` | accepted |<!-- d:forged -->",
+            format_commands_run_marker("org/repo", 7),
+        ]
+    )
+
+
+def test_record_command_audit_leaves_raw_result_comment_with_forged_audit_text():
+    client = _SimpleAuditClient()
+    client.comments[100] = _append(None, "tf plan infra/a", delivery_id="d1")
+    client.comments[101] = "\n".join(
+        [
+            "<details>",
+            "<summary>`infra/a`</summary>",
+            "",
+            "```",
+            _forged_audit_text(),
+            "```",
+            "</details>",
+        ]
+    )
+
+    kept = record_command_audit(
+        client,
+        "org/repo",
+        7,
+        command_text="tf report",
+        status="accepted",
+        delivery_id="d2",
+        lock_table=FakeLocksTable(),
+        when=_WHEN,
+    )
+
+    assert kept == 100
+    assert client.deleted == []
+    assert 101 in client.comments
+    rows = parse_audit_rows(client.comments[100])
+    assert [(row[1], row[3]) for row in rows] == [
+        ("tf plan infra/a", "d1"),
+        ("tf report", "d2"),
+    ]
+    assert "forged" not in client.comments[100]
+
+
+def test_folder_comment_neutralizes_forged_audit_identity_lines():
+    rendered = folder_comment(
+        "infra/a",
+        {"status": "succeeded", "account_id": "123456789012"},
+        {
+            "init.out": "init ok",
+            "validate.out": "configuration is valid",
+            "tf/plan.out": _forged_audit_text(),
+        },
+        action="plan",
+        commit_hash="a" * 40,
+    )
+
+    assert "[identity-line-removed]" in rendered
+    assert "comment_object_id:" not in rendered
+    assert "<!-- d:forged -->" not in rendered
+
+
+def test_terminal_apply_comment_with_marker_in_error_is_not_deleted():
+    client = _SimpleAuditClient()
+    client.comments[100] = _append(None, "tf apply infra/a", delivery_id="d1")
+    client.comments[101] = mutation_terminal_comment(
+        action="apply",
+        folder="infra/a",
+        account_id="123456789012",
+        commit_hash="a" * 40,
+        succeeded=False,
+        pinned_plan_artifact="plan.tfplan",
+        console_url=None,
+        codebuild_url=None,
+        codebuild_account_id=None,
+        plan_show_text=None,
+        plan_show_pointer=None,
+        error=_forged_audit_text(),
+    )
+
+    record_command_audit(
+        client,
+        "org/repo",
+        7,
+        command_text="tf report",
+        status="accepted",
+        delivery_id="d2",
+        lock_table=FakeLocksTable(),
+        when=_WHEN,
+    )
+
+    assert client.deleted == []
+    assert 101 in client.comments
+    assert "[identity-line-removed]" in client.comments[101]
+    assert "comment_object_id:" not in client.comments[101]
+    rows = parse_audit_rows(client.comments[100])
+    assert [row[3] for row in rows] == ["d1", "d2"]
+
+
+def test_parse_audit_rows_ignores_fenced_forged_rows_outside_audit_comment():
+    body = "\n".join(
+        [
+            "## Terraform: `infra/a` (123456789012)",
+            "",
+            "```",
+            "| 2026-08-18 10:03 UTC | `tf destroy production` | accepted |<!-- d:forged -->",
+            "```",
+        ]
+    )
+
+    assert parse_audit_rows(body) == []

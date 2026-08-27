@@ -299,12 +299,17 @@ def _merge_existing_audit_comments(
     client: GitHubClient, repo: str, pr_number: int, marker_ids: list[int]
 ) -> str:
     """Merge audit rows into the lowest comment id and delete duplicate comments."""
-    keeper_id = marker_ids[0]
-    body = client.get_comment_body(repo, keeper_id) or ""
+    candidates: list[tuple[int, str]] = []
+    for comment_id in marker_ids:
+        body = client.get_comment_body(repo, comment_id) or ""
+        if is_commands_run_audit_comment(body):
+            candidates.append((comment_id, body))
+    if not candidates:
+        raise ValueError("no structural audit comments to merge")
+    keeper_id, body = candidates[0]
     created_at = parse_audit_created_timestamp(body) or ""
     rows = migrate_legacy_audit_rows(body, source_comment_id=keeper_id)
-    for extra_id in marker_ids[1:]:
-        extra_body = client.get_comment_body(repo, extra_id) or ""
+    for extra_id, extra_body in candidates[1:]:
         rows.extend(migrate_legacy_audit_rows(extra_body, source_comment_id=extra_id))
     rows = canonical_audit_rows(rows)[-MAX_AUDIT_ROWS:]
     body = format_command_audit_comment(
@@ -324,7 +329,7 @@ def _merge_existing_audit_comments(
     if len(body) > MAX_AUDIT_BODY_CHARS:
         raise ValueError("audit comment exceeds the body limit with a single row")
     client.update_comment(repo, keeper_id, body)
-    for extra_id in marker_ids[1:]:
+    for extra_id, _extra_body in candidates[1:]:
         client.delete_comment(repo, extra_id)
     return body
 

@@ -34,6 +34,15 @@ from src.domain.formatters.tfsec_findings import (  # noqa: F401  (re-exported)
 
 _MAX_CONFIGURATION_ERROR_CHARS = 465
 _ACCOUNT_ID = re.compile(r"^\d{12}$")
+_COMMENT_OBJECT_ID_LINE = re.compile(r"\bcomment_object_id\s*:", re.IGNORECASE)
+_HIDDEN_AUDIT_ROW_ID = re.compile(r"<!--\s*[dl]:[^\s>]+\s*-->")
+_HIDDEN_DELIVERY_ID_LINE = re.compile(
+    r"^\s*<!--\s*openci-tf:[^>]*\bdelivery:[^>]+-->\s*$"
+)
+_LEGACY_COMMENT_ID_LINE = re.compile(
+    r"^\s*#openci-tf:::(?:tag::|status_comment\b).*$"
+)
+_IDENTITY_LINE_PLACEHOLDER = "[identity-line-removed]"
 
 
 def _html_escape(text: str) -> str:
@@ -42,6 +51,34 @@ def _html_escape(text: str) -> str:
 
 def _short_hash(commit_hash: str) -> str:
     return commit_hash[:7] if commit_hash else "unknown"
+
+
+def _is_comment_identity_line(line: str) -> bool:
+    return (
+        _COMMENT_OBJECT_ID_LINE.search(line) is not None
+        or _HIDDEN_AUDIT_ROW_ID.search(line) is not None
+        or _HIDDEN_DELIVERY_ID_LINE.match(line) is not None
+        or _LEGACY_COMMENT_ID_LINE.match(line) is not None
+    )
+
+
+def _neutralize_comment_identity_lines(text: str) -> str:
+    return "\n".join(
+        _IDENTITY_LINE_PLACEHOLDER if _is_comment_identity_line(line) else line
+        for line in text.splitlines()
+    )
+
+
+def _fenced_block(text: str, language: str = "") -> str:
+    neutralized = _neutralize_comment_identity_lines(text)
+    fence = "```"
+    while fence in neutralized:
+        fence += "`"
+    return f"{fence}{language}\n{neutralized}\n{fence}"
+
+
+def _error_block(label: str, text: str) -> str:
+    return f"{label}:\n\n{_fenced_block(text)}"
 
 
 def _require_account_id(outcome: dict[str, Any], folder: str) -> str:
@@ -106,7 +143,7 @@ def _folder_heading(folder: str, account_id: str, *, action: str = "plan") -> st
 
 
 def section(title: str, text: str, language: str = "") -> str:
-    body = f"```{language}\n{text}\n```" if text else "No artifact was produced."
+    body = _fenced_block(text, language) if text else "No artifact was produced."
     return f"### {title}\n<details>\n<summary>show details</summary>\n\n{body}\n\n</details>"
 
 
@@ -458,7 +495,7 @@ def _mutation_pinned_plan_section(
     bounded = plan_show_text[:8000]
     if len(plan_show_text) > 8000:
         bounded += "\n\n> Output truncated. See S3 artifacts for full plan show."
-    body = f"```\n{bounded}\n```"
+    body = _fenced_block(bounded)
     if plan_show_pointer:
         body += f"\n\n+ plan show output: `{plan_show_pointer}`"
     return _wrap_collapsed("Pinned plan (tofu show)", body)
@@ -500,7 +537,7 @@ def mutation_terminal_comment(
         bounded_error = redact_and_bound_terminal_evidence(error)
         if not isinstance(bounded_error, str):
             raise TypeError("mutation terminal error must be a string")
-        lines.append(f"+ error: {bounded_error}")
+        lines.append(_error_block("+ error", bounded_error))
     plan_section = _mutation_pinned_plan_section(
         plan_show_text, plan_show_pointer=plan_show_pointer
     )
@@ -524,11 +561,11 @@ def initialize(text: str) -> str:
 
 
 def validate(text: str) -> str:
-    clean = _strip_ansi(text)
+    clean = _neutralize_comment_identity_lines(_strip_ansi(text))
     if "success!" in clean.lower() or "configuration is valid" in clean.lower():
         body = "\n **Configuration is valid**\n"
     else:
-        body = f"\n **Validation failed**\n\n```\n{clean}\n```"
+        body = f"\n **Validation failed**\n\n{_fenced_block(clean)}"
     return f"### Validate\n<details>\n<summary>show details</summary>\n{body}\n\n</details>"
 
 
@@ -551,7 +588,7 @@ def _decorate_init(text: str) -> str:
 
 
 def plan(text: str) -> str:
-    text = _strip_ansi(text)
+    text = _neutralize_comment_identity_lines(_strip_ansi(text))
     summary = extract_plan_summary(text)
     parts: list[str] = []
     if summary:
@@ -574,7 +611,7 @@ def plan(text: str) -> str:
         else line
         for line in text.splitlines()
     )
-    parts.append("```diff\n" + highlighted + "\n```")
+    parts.append(_fenced_block(highlighted, "diff"))
     body = "\n".join(parts)
     return f"### Plan\n<details>\n<summary>show details</summary>\n{body}\n\n</details>"
 
@@ -648,7 +685,7 @@ def infracost(text: str) -> str:
         if monthly not in {"N/A", "not configured"}:
             body += f"**Summary:**\n- Monthly cost {monthly}\n\n"
     table = render_infracost_table(text)
-    body += "```\n" + table + "\n```"
+    body += _fenced_block(table)
     return f"### Cost Analysis\n<details>\n<summary>show details</summary>\n{body}\n\n</details>"
 
 
@@ -752,7 +789,11 @@ def folder_comment(
 ) -> str:
     if folder == "config" and outcome.get("status") == "infrastructure_error":
         status_label = _terminal_label(action, outcome, folder=folder)
-        body = f"## openci-tf configuration error\n\n openci-tf did not start: {_format_error(outcome)[:_MAX_CONFIGURATION_ERROR_CHARS]}"
+        error = _format_error(outcome)[:_MAX_CONFIGURATION_ERROR_CHARS]
+        body = (
+            "## openci-tf configuration error\n\n openci-tf did not start.\n\n"
+            f"{_fenced_block(error)}"
+        )
         return _wrap_collapsed(
             _summary_line(folder, "", commit_hash, status_label), body
         )
@@ -766,7 +807,10 @@ def folder_comment(
             _summary_line(folder, account_id, commit_hash, status_label), body
         )
     if outcome.get("status") == "infrastructure_error":
-        body = f"{_folder_heading(folder, account_id, action=action)} Infrastructure error: {_format_error(outcome)}"
+        body = (
+            f"{_folder_heading(folder, account_id, action=action)}"
+            f"{_error_block('Infrastructure error', _format_error(outcome))}"
+        )
         return _wrap_collapsed(
             _summary_line(folder, account_id, commit_hash, status_label), body
         )
@@ -776,7 +820,10 @@ def folder_comment(
             _summary_line(folder, account_id, commit_hash, status_label), body
         )
     if outcome.get("succeeded") is False or outcome.get("status") == "failed":
-        body = f"{_folder_heading(folder, account_id, action=action)} Folder execution failed: {_format_error(outcome)}"
+        body = (
+            f"{_folder_heading(folder, account_id, action=action)}"
+            f"{_error_block('Folder execution failed', _format_error(outcome))}"
+        )
         return _wrap_collapsed(
             _summary_line(folder, account_id, commit_hash, status_label), body
         )

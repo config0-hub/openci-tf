@@ -16,7 +16,10 @@ from src.domain.formatters.command_text import (
     redact_confirm_token,
     sanitize_command_line,
 )
-from src.domain.github.comment_object_id import body_has_commands_run_audit_marker
+from src.domain.github.comment_object_id import (
+    body_has_commands_run_audit_marker,
+    find_commands_run_marker,
+)
 
 _TABLE_HEADER = "| Time | Command | Status |"
 _TABLE_SEP = "|------|---------|--------|"
@@ -157,20 +160,73 @@ def _is_marker_bearing_audit_comment(body: str) -> bool:
     return is_commands_run_audit_comment(body)
 
 
+def _is_expected_audit_comment(body: str, *, repo_name: str, pr_number: int) -> bool:
+    return find_commands_run_marker(body) == {
+        "repo_name": repo_name,
+        "pr_number": str(pr_number),
+    }
+
+
+def _audit_table_bounds(body: str) -> tuple[list[str], int, int]:
+    lines = body.splitlines()
+    marker_index = next(
+        (index for index in range(len(lines) - 1, -1, -1) if lines[index].strip()),
+        None,
+    )
+    if marker_index is None:
+        raise ValueError("audit comment must end with one marker line")
+    created_indexes = [
+        index
+        for index, line in enumerate(lines[:marker_index])
+        if line.strip().startswith("Created:")
+    ]
+    if len(created_indexes) != 1:
+        raise ValueError(
+            "marker-bearing audit comment must contain exactly one Created line"
+        )
+    created_index = created_indexes[0]
+    table_region = lines[created_index + 1:marker_index]
+    header_indexes = [
+        index
+        for index, line in enumerate(table_region, start=created_index + 1)
+        if line.strip() == _TABLE_HEADER
+    ]
+    sep_indexes = [
+        index
+        for index, line in enumerate(table_region, start=created_index + 1)
+        if line.strip() == _TABLE_SEP
+    ]
+    if len(header_indexes) != 1 or len(sep_indexes) != 1:
+        raise ValueError("audit comment must contain exactly one audit table")
+    header_index = header_indexes[0]
+    sep_index = sep_indexes[0]
+    if sep_index != header_index + 1:
+        raise ValueError("audit table separator must follow the header")
+    for line in lines[created_index + 1:header_index]:
+        if line.strip():
+            raise ValueError("unexpected content before audit table")
+    for line in lines[marker_index + 1:]:
+        if line.strip():
+            raise ValueError("unexpected content after audit marker")
+    return lines, sep_index, marker_index
+
+
 def parse_audit_rows(body: str) -> list[AuditRow]:
+    if not _is_marker_bearing_audit_comment(body):
+        return []
+    lines, sep_index, marker_index = _audit_table_bounds(body)
     rows: list[AuditRow] = []
-    marker_bearing = _is_marker_bearing_audit_comment(body)
-    for line in body.splitlines():
+    in_row_block = True
+    for line in lines[sep_index + 1:marker_index]:
         stripped = line.strip()
+        if not stripped:
+            in_row_block = False
+            continue
+        if not in_row_block:
+            raise ValueError(f"unexpected content after audit table: {stripped}")
         match = _ROW_RE.match(stripped)
         if match is None:
-            if (
-                marker_bearing
-                and stripped.startswith("|")
-                and stripped not in {_TABLE_HEADER, _TABLE_SEP}
-            ):
-                raise ValueError(f"unparseable audit row: {stripped}")
-            continue
+            raise ValueError(f"unparseable audit row: {stripped}")
         rows.append(
             (
                 match.group("time").strip(),
@@ -228,7 +284,7 @@ def update_audit_row_status(
     if status not in {"accepted", "not supported"}:
         raise ValueError(f"unsupported audit status: {status!r}")
     _validate_hidden_id(delivery_id, field="delivery id")
-    if format_commands_run_marker(repo_name, pr_number) not in body:
+    if not _is_expected_audit_comment(body, repo_name=repo_name, pr_number=pr_number):
         return body
     created_at = parse_audit_created_timestamp(body)
     rows: list[AuditRow] = []
@@ -329,7 +385,7 @@ def append_audit_row(
     if delivery_id is not None:
         _validate_hidden_id(delivery_id, field="delivery id")
     redacted_command = normalized_command_context_line(command_text)
-    if body and format_commands_run_marker(repo_name, pr_number) in body:
+    if body and _is_expected_audit_comment(body, repo_name=repo_name, pr_number=pr_number):
         created_at = parse_audit_created_timestamp(body)
         if audit_row_exists_for_delivery(body, delivery_id):
             return body

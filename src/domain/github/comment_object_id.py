@@ -14,6 +14,7 @@ MANAGED_COMMENT_TYPES = frozenset(
 IMMUTABLE_TERMINAL_ACTIONS = frozenset({"apply", "destroy"})
 _MARKER_PREFIX = "comment_object_id:"
 _LEGACY_TAG_PREFIX = "openci-tf:::tag::"
+COMMANDS_RUN_AUDIT_HEADING = "## openci-tf commands"
 _TRANSIENT_HELP_MARKER = re.compile(
     r"^<!-- openci-tf:transient-help delivery:(?P<delivery_id>[^\s>]+) -->$"
 )
@@ -108,6 +109,14 @@ def find_comment_object_marker(body: str) -> dict[str, str] | None:
     return None
 
 
+def _first_non_empty_line(body: str) -> str | None:
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return None
+
+
 def _last_non_empty_line(body: str) -> str | None:
     for line in reversed(body.splitlines()):
         stripped = line.strip()
@@ -124,11 +133,12 @@ def parse_commands_run_marker(line: str) -> dict[str, str] | None:
 
 
 def find_commands_run_marker(body: str) -> dict[str, str] | None:
-    for line in body.splitlines():
-        parsed = parse_commands_run_marker(line)
-        if parsed is not None:
-            return parsed
-    return None
+    if _first_non_empty_line(body) != COMMANDS_RUN_AUDIT_HEADING:
+        return None
+    trailing = _last_non_empty_line(body)
+    if trailing is None:
+        return None
+    return parse_commands_run_marker(trailing)
 
 
 def body_has_commands_run_audit_marker(body: str) -> bool:
