@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 import requests
+from botocore.exceptions import ClientError
 
 from src.services.render import handler as render
 from src.services.render.comments import _delete_generated_comment, _with_command_context
@@ -74,10 +75,20 @@ def test_generated_marker_cleanup_deletes_only_bot_comments():
     assert marker_deleted == [100]
 
 
-def test_terminal_apply_deletes_request_intent_and_confirm_comments(monkeypatch):
+def test_terminal_apply_recovers_metadata_and_deletes_request_intent_and_confirm_comments(monkeypatch):
     monkeypatch.setenv("LOCKS_TABLE_NAME", "locks")
     monkeypatch.setenv("TMP_BUCKET_NAME", "tmp")
     monkeypatch.setattr(render, "get_github_token", lambda _: "token")
+    monkeypatch.setattr(
+        render,
+        "get_intent_record",
+        lambda token: {
+            "token": token,
+            "requested_comment_id": 10,
+            "requested_comment_body": "tf apply infra/a",
+            "intent_comment_id": 11,
+        },
+    )
     monkeypatch.setattr(render.boto3, "resource", lambda *_: SimpleNamespace(Table=lambda _: object()))
     monkeypatch.setattr(render, "list_text_prefix", lambda *_: {})
     monkeypatch.setattr(render, "_plan_artifact_metadata", lambda *_, **__: None)
@@ -117,9 +128,9 @@ def test_terminal_apply_deletes_request_intent_and_confirm_comments(monkeypatch)
 
     event = _plan_event(
         action="apply",
-        requested_comment_id=10,
-        requested_comment_body="tf apply infra/a",
-        intent_comment_id=11,
+        requested_comment_id=None,
+        requested_comment_body=None,
+        intent_comment_id=None,
         consumed_confirm_token="deadbeef",
         webhook_info={
             "repo_name": "org/repo",
@@ -268,6 +279,96 @@ def test_pipeline_failure_deletes_mutation_command_comments_and_sweeps_token(mon
     assert swept == [("deadbeef", {55, 10, 11})]
     assert posted[0].startswith("### openci-tf command")
     assert "requested command: `tf apply infra/a`" in posted[0]
+
+
+def test_render_pr_list_text_prefix_failure_fallback_posts_and_cleans_mutation_comments(monkeypatch):
+    monkeypatch.setenv("LOCKS_TABLE_NAME", "locks")
+    monkeypatch.setenv("TMP_BUCKET_NAME", "tmp")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setattr(render, "get_github_token", lambda _: "token")
+    monkeypatch.setattr(render.boto3, "resource", lambda *_: SimpleNamespace(Table=lambda _: object()))
+    monkeypatch.setattr(render.run_lock, "release", lambda *_, **__: None)
+    monkeypatch.setattr(render, "_plan_artifact_metadata", lambda *_, **__: None)
+    monkeypatch.setattr(
+        render,
+        "list_text_prefix",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ClientError({"Error": {"Code": "AccessDenied"}}, "ListObjectsV2")
+        ),
+    )
+    monkeypatch.setattr(render, "_delete_and_repost", lambda *_args, **_kwargs: 1)
+    monkeypatch.setattr(render, "_delete_generated_comment", lambda *_, **__: None)
+
+    class Client:
+        pass
+
+    monkeypatch.setattr(render, "GitHubClient", lambda _: Client())
+
+    terminal_event = _plan_event(
+        action="apply",
+        requested_comment_id=10,
+        requested_comment_body="tf apply infra/a",
+        intent_comment_id=11,
+        consumed_confirm_token="deadbeef",
+        webhook_info={
+            "repo_name": "org/repo",
+            "pr_number": 7,
+            "commit_hash": _FULL_SHA,
+            "trigger_id": "trigger",
+            "comment_id": 55,
+            "comment_body": "tf apply confirm deadbeef",
+        },
+        outcomes=[
+            {
+                "folder": "infra/a",
+                "account_id": "123456789012",
+                "execution_id": "run.abc.0",
+                "status": "failed",
+                "succeeded": False,
+            }
+        ],
+    )
+
+    with pytest.raises(ClientError):
+        render.handler(terminal_event, None)
+
+    posted: list[str] = []
+    deleted_batches: list[list[int | None]] = []
+    swept: list[tuple[str, set[int]]] = []
+
+    monkeypatch.setattr(
+        render,
+        "_delete_and_repost_unmanaged",
+        lambda _client, _repo, _pr, body, _suffix: posted.append(body) or 2,
+    )
+    monkeypatch.setattr(render, "_delete_transient_status_comment", lambda *_args: [])
+    monkeypatch.setattr(
+        render,
+        "delete_acknowledged_command_comments",
+        lambda _client, _repo, comment_ids: deleted_batches.append(list(comment_ids)) or [],
+    )
+    monkeypatch.setattr(
+        render,
+        "delete_stale_confirm_token_comments",
+        lambda _client, _repo, _pr, token, **kwargs: swept.append(
+            (token, set(kwargs["exclude_comment_ids"]))
+        )
+        or [],
+    )
+
+    result = render.handler(
+        {
+            **terminal_event,
+            "pipeline_failure": {"failed_step": "RenderPR"},
+            "execution_arn": "arn:aws:states:us-east-1:123456789012:execution:openci-tf:run",
+        },
+        None,
+    )
+
+    assert result["pipeline_failure_rendered"] is True
+    assert posted and "pipeline failed at RenderPR" in posted[0]
+    assert deleted_batches == [[55, 10, 11]]
+    assert swept == [("deadbeef", {55, 10, 11})]
 
 
 def test_read_only_pipeline_failure_does_not_delete_command_comments(monkeypatch):

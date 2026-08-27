@@ -7,7 +7,7 @@ from typing import Any
 
 from src.domain.intent.gates import evaluate_confirm_gates
 from src.domain.intent.models import IntentGateFailure
-from src.platform.aws.intent_registry import IntentTokenConflictError
+from src.platform.aws.intent_registry import IntentTokenConflictError, IntentTokenNotReadyError
 from src.services.intent.registry import get_intent, mark_intent_used
 
 
@@ -25,6 +25,12 @@ def confirm_intent(
         return [IntentGateFailure("unknown confirmation token")], None
     if record.action != action:
         return [IntentGateFailure(f"token is for tf {record.action}, not tf {action}")], None
+    if (
+        record.requested_comment_id is None
+        or record.requested_comment_body is None
+        or record.intent_comment_id is None
+    ):
+        return [IntentGateFailure("intent not ready; comment metadata is still publishing")], None
     failures = evaluate_confirm_gates(
         record=record,
         commit_hash=commit_hash,
@@ -36,7 +42,7 @@ def confirm_intent(
         return failures, None
     try:
         confirmed = mark_intent_used(token, trigger_id=trigger_id, pr_number=pr_number)
-    except IntentTokenConflictError as error:
+    except (IntentTokenConflictError, IntentTokenNotReadyError) as error:
         return [IntentGateFailure(str(error))], None
     folder_pins = {
         pin.folder: {

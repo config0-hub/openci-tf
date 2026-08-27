@@ -21,6 +21,10 @@ class IntentTokenConflictError(IntentRegistryError):
     pass
 
 
+class IntentTokenNotReadyError(IntentRegistryError):
+    pass
+
+
 def _table():
     name = os.environ.get("RUN_REGISTRY_TABLE_NAME")
     if not name:
@@ -58,6 +62,20 @@ def get_intent_record(token: str) -> dict[str, Any] | None:
 
 def delete_intent_record(token: str) -> None:
     _table().delete_item(Key={"pk": intent_pk(token), "sk": intent_sk()})
+
+
+def delete_unused_intent_record(token: str) -> bool:
+    try:
+        _table().delete_item(
+            Key={"pk": intent_pk(token), "sk": intent_sk()},
+            ConditionExpression="attribute_exists(pk) AND used = :false",
+            ExpressionAttributeValues={":false": False},
+        )
+    except ClientError as error:
+        if error.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
 
 
 def update_intent_comment_metadata(
@@ -102,7 +120,10 @@ def mark_intent_record_used(
             UpdateExpression="SET used = :used",
             ConditionExpression=(
                 "attribute_exists(pk) AND used = :false AND expires_at > :now "
-                "AND trigger_id = :trigger_id AND pr_number = :pr_number"
+                "AND trigger_id = :trigger_id AND pr_number = :pr_number "
+                "AND attribute_exists(requested_comment_id) "
+                "AND attribute_exists(requested_comment_body) "
+                "AND attribute_exists(intent_comment_id)"
             ),
             ExpressionAttributeValues={
                 ":used": True,
@@ -115,6 +136,20 @@ def mark_intent_record_used(
         )
     except ClientError as error:
         if error.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            item = get_intent_record(token)
+            if (
+                item
+                and item.get("used") is False
+                and item.get("expires_at", 0) > current
+                and item.get("trigger_id") == trigger_id
+                and item.get("pr_number") == pr_number
+                and (
+                    item.get("requested_comment_id") is None
+                    or item.get("requested_comment_body") is None
+                    or item.get("intent_comment_id") is None
+                )
+            ):
+                raise IntentTokenNotReadyError("intent not ready; comment metadata is still publishing") from error
             raise IntentTokenConflictError("token is missing, expired, or already used") from error
         raise
     item = normalize_dynamo_item(response.get("Attributes"))

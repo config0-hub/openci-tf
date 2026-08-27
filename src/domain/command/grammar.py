@@ -30,10 +30,11 @@ def unknown_verb_in_comment(text: str) -> str | None:
 _CONFIRM_TOKEN = re.compile(r"^[0-9a-f]{6,8}$")
 _PIPELINE_NAME = re.compile(r"^[A-Za-z0-9_./-]+$")
 _PIPELINE_STEP = re.compile(r"^[1-9][0-9]*$")
+_LINE_BOUNDARIES = frozenset("\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
 
 
 def parse_command(text: str) -> Command:
-    if "\n" in text or "\r" in text:
+    if any(char in text for char in _LINE_BOUNDARIES):
         raise ParseError("tf commands must be a single line")
     tokens = text.strip().split()
     if len(tokens) < 2 or tokens[0].lower() != "tf":

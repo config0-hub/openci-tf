@@ -7,6 +7,7 @@ from src.domain.intent.models import FolderPlanPin, IntentRecord
 from src.platform.aws.intent_registry import (
     IntentRegistryError,
     delete_intent_record,
+    delete_unused_intent_record,
     get_intent_record,
     mark_intent_record_used,
     put_intent_record,
@@ -137,3 +138,7 @@ def store_intent_comment_metadata(
 
 def delete_intent(token: str) -> None:
     delete_intent_record(token)
+
+
+def delete_unused_intent(token: str) -> bool:
+    return delete_unused_intent_record(token)

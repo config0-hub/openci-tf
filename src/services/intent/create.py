@@ -98,6 +98,8 @@ def _create_pipeline_apply_intent(
     pipeline_step: int,
     pr_number: int,
     commit_hash: str,
+    requested_comment_id: int | None = None,
+    requested_comment_body: str | None = None,
 ) -> tuple[IntentGateFailure | None, dict[str, Any] | None]:
     if pipeline_step < 1:
         return IntentGateFailure("pipeline step must be an integer >= 1"), None
@@ -169,6 +171,8 @@ def _create_pipeline_apply_intent(
         step_index=pipeline_step,
         step_count=step_count,
         pipeline_sha256=pipeline_hash,
+        requested_comment_id=requested_comment_id,
+        requested_comment_body=requested_comment_body,
     )
     try:
         put_intent(record)
@@ -186,6 +190,8 @@ def create_intent(
     commit_hash: str,
     pipeline: str | None = None,
     pipeline_step: int | None = None,
+    requested_comment_id: int | None = None,
+    requested_comment_body: str | None = None,
 ) -> tuple[IntentGateFailure | None, dict[str, Any] | None]:
     settings = get_repo_settings(trigger_id, with_webhook_secret=False)
     token = get_github_token(settings.ssm_openci_tf_github_token)
@@ -200,6 +206,8 @@ def create_intent(
             pipeline_step=1 if pipeline_step is None else pipeline_step,
             pr_number=pr_number,
             commit_hash=commit_hash,
+            requested_comment_id=requested_comment_id,
+            requested_comment_body=requested_comment_body,
         )
     folder_configs = _folder_configs_for_intent(settings=settings, commit_hash=commit_hash, folders=folders)
     result = evaluate_intent_gates(
@@ -213,8 +221,13 @@ def create_intent(
     )
     if not result.ok or result.record is None:
         return result.failures[0] if result.failures else IntentGateFailure("intent gate failed"), None
+    record = replace(
+        result.record,
+        requested_comment_id=requested_comment_id,
+        requested_comment_body=requested_comment_body,
+    )
     try:
-        put_intent(result.record)
+        put_intent(record)
     except IntentRegistryError as error:
         raise IntentCreationError(str(error)) from error
-    return None, result.record.to_dict()
+    return None, record.to_dict()

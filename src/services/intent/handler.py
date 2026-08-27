@@ -25,7 +25,7 @@ from src.platform.github.command_comment_cleanup import (
 )
 from src.services.intent.confirm import confirm_intent
 from src.services.intent.create import IntentCreationError, create_intent
-from src.services.intent.registry import delete_intent, get_intent, store_intent_comment_metadata
+from src.services.intent.registry import delete_unused_intent, get_intent, store_intent_comment_metadata
 
 logger = get_logger(__name__)
 
@@ -141,7 +141,7 @@ def _compensate_created_intent(
                 token,
             )
     finally:
-        delete_intent(token)
+        delete_unused_intent(token)
 
 
 def _current_pr_head_sha(settings: dict[str, Any], repo: str, pr_number: int) -> str:
@@ -161,6 +161,10 @@ def _intent_record_matches_current_request(
         and record.pr_number == pr_number
         and record.action == action
     )
+
+
+def _intent_is_not_ready(failures: list[IntentGateFailure]) -> bool:
+    return any(failure.message.startswith("intent not ready") for failure in failures)
 
 
 def _record_confirmed_pipeline_metadata(event: dict[str, Any], confirmed: dict[str, Any]) -> None:
@@ -210,6 +214,8 @@ def create_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             commit_hash=commit_hash,
             pipeline=event.get("pipeline") if isinstance(event.get("pipeline"), str) else None,
             pipeline_step=event.get("pipeline_step") if isinstance(event.get("pipeline_step"), int) else None,
+            requested_comment_id=requested_comment_id if isinstance(requested_comment_id, int) else None,
+            requested_comment_body=requested_comment_body if isinstance(requested_comment_body, str) else None,
         )
     except IntentCreationError as error:
         failures = [IntentGateFailure(str(error))]
@@ -275,8 +281,6 @@ def create_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         try:
             store_intent_comment_metadata(
                 record["token"],
-                requested_comment_id=requested_comment_id if isinstance(requested_comment_id, int) else None,
-                requested_comment_body=requested_comment_body if isinstance(requested_comment_body, str) else None,
                 intent_comment_id=intent_comment_id,
             )
         except (IntentRegistryError, BotoCoreError, ClientError):
@@ -325,30 +329,33 @@ def confirm_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         )
         if _post_comment(webhook, settings, body) is not None:
             related_ids: list[int | None] = [confirmation_comment_id]
-            record = get_intent(token)
-            record_matches_current_request = (
-                record is not None
-                and _intent_record_matches_current_request(
-                    record,
-                    trigger_id=trigger_id,
-                    pr_number=pr_number,
-                    action=action,
+            if not _intent_is_not_ready(failures):
+                record = get_intent(token)
+                record_matches_current_request = (
+                    record is not None
+                    and _intent_record_matches_current_request(
+                        record,
+                        trigger_id=trigger_id,
+                        pr_number=pr_number,
+                        action=action,
+                    )
                 )
-            )
-            if record_matches_current_request:
-                related_ids.extend([record.intent_comment_id, record.requested_comment_id])
-            _delete_comments_after_replacement(webhook, settings, related_ids)
-            if record is None or record_matches_current_request:
-                _delete_stale_confirm_token_comments_after_replacement(
-                    webhook,
-                    settings,
-                    token,
-                    exclude_comment_ids={
-                        comment_id
-                        for comment_id in related_ids
-                        if isinstance(comment_id, int)
-                    },
-                )
+                if record_matches_current_request:
+                    related_ids.extend([record.intent_comment_id, record.requested_comment_id])
+                _delete_comments_after_replacement(webhook, settings, related_ids)
+                if record is None or record_matches_current_request:
+                    _delete_stale_confirm_token_comments_after_replacement(
+                        webhook,
+                        settings,
+                        token,
+                        exclude_comment_ids={
+                            comment_id
+                            for comment_id in related_ids
+                            if isinstance(comment_id, int)
+                        },
+                    )
+            else:
+                _delete_comments_after_replacement(webhook, settings, related_ids)
         return {**event, "intent_failed": True, "intent_failures": [item.message for item in failures]}
     _record_confirmed_pipeline_metadata(event, confirmed)
     # The request, intent, and confirmation comments stay until the terminal

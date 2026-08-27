@@ -25,8 +25,38 @@ locals {
         "execution_arn.$"          = "$$.Execution.Id"
       }
       ResultPath = "$.render_flags"
-      Catch      = [{ ErrorEquals = ["States.ALL"], ResultPath = null, Next = "FinalizeAfterRenderFailure" }]
+      Catch      = [{ ErrorEquals = ["States.ALL"], ResultPath = "$.render_error", Next = "FailRenderPR" }]
       Next       = "RouteAfterRender"
+    }
+    FailRenderPR = {
+      Type       = "Pass"
+      Result     = { failed_step = "RenderPR" }
+      ResultPath = "$.pipeline_failure"
+      Next       = "RenderPRFailureComment"
+    }
+    RenderPRFailureComment = {
+      Type     = "Task"
+      Resource = local.lambda_arns["render-pr"]
+      Parameters = {
+        "pipeline_failure.$"       = "$.pipeline_failure"
+        "webhook_info.$"           = "$.webhook_info"
+        "settings.$"               = "$.settings"
+        "action.$"                 = "$.action"
+        "run_id.$"                 = "$.run_id"
+        "notification_target.$"    = "$.notification_target"
+        "folders.$"                = "$.folders"
+        "all_flag.$"               = "$.all_flag"
+        "affected_flag.$"          = "$.affected_flag"
+        "requested_comment_id.$"   = "$.requested_comment_id"
+        "requested_comment_body.$" = "$.requested_comment_body"
+        "intent_comment_id.$"      = "$.intent_comment_id"
+        "consumed_confirm_token.$" = "$.consumed_confirm_token"
+        "confirm_token.$"          = "$.confirm_token"
+        "execution_arn.$"          = "$$.Execution.Id"
+      }
+      ResultPath = null
+      Catch      = [{ ErrorEquals = ["States.ALL"], ResultPath = null, Next = "FinalizeAfterRenderFailure" }]
+      Next       = "FinalizeAfterRenderFailure"
     }
     RouteAfterRender = {
       Type = "Choice"

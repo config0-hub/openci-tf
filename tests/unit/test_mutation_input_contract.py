@@ -75,7 +75,12 @@ def _states_referencing_keys(definition: dict) -> set[str]:
 def test_every_mutation_parameters_block_reading_optional_keys_is_fed_by_start_input(resource):
     definition = render_mutation_outer_definition(resource)
     referencing = _states_referencing_keys(definition)
-    assert referencing == {"RenderPR", "RenderPlaceholder", "RenderPipelineFailure"}
+    assert referencing == {
+        "RenderPR",
+        "RenderPlaceholder",
+        "RenderPipelineFailure",
+        "RenderPRFailureComment",
+    }
     # Early failure routes reach RenderPipelineFailure before confirm_handler
     # has run, so the keys exist only because start_run initializes them.
     for early in ("FailParseCommand", "FailRouteAction"):
@@ -85,6 +90,24 @@ def test_every_mutation_parameters_block_reading_optional_keys_is_fed_by_start_i
         for key in MUTATION_OPTIONAL_INPUT_KEYS:
             assert parameters[f"{key}.$"] == f"$.{key}"
     assert definition["States"]["RenderPipelineFailure"]["Parameters"]["confirm_token.$"] == "$.confirm_token"
+
+
+@pytest.mark.parametrize("resource", ["openci_tf_apply", "openci_tf_destroy"])
+def test_render_pr_failure_posts_failure_comment_before_finalizing(resource):
+    definition = render_mutation_outer_definition(resource)
+    render_pr = definition["States"]["RenderPR"]
+    assert render_pr["Catch"] == [
+        {
+            "ErrorEquals": ["States.ALL"],
+            "ResultPath": "$.render_error",
+            "Next": "FailRenderPR",
+        }
+    ]
+    assert definition["States"]["FailRenderPR"]["Next"] == "RenderPRFailureComment"
+    render_failure = definition["States"]["RenderPRFailureComment"]
+    assert render_failure["Parameters"]["pipeline_failure.$"] == "$.pipeline_failure"
+    assert render_failure["Next"] == "FinalizeAfterRenderFailure"
+    assert render_failure["Catch"][0]["Next"] == "FinalizeAfterRenderFailure"
 
 
 def test_read_outer_parameters_do_not_reference_mutation_keys():

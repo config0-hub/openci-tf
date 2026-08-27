@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 import requests
-from botocore.exceptions import EndpointConnectionError
+from botocore.exceptions import ClientError, EndpointConnectionError
 
 from src.core.models import FolderConfig, MutationVerbConfig, RepoSettings
 from src.core.errors import ConfigValidationError
@@ -29,7 +29,7 @@ from src.services.intent.confirm import confirm_intent
 from src.services.intent.create import IntentCreationError, create_intent
 from src.services.intent import handler as intent_handler
 from src.services.intent.handler import confirm_handler, create_handler
-from src.services.intent.registry import mark_intent_used, put_intent, get_intent
+from src.services.intent.registry import delete_unused_intent, mark_intent_used, put_intent, get_intent
 from src.platform.aws.run_registry import RunRegistryError
 from src.services.render.handler import _pipeline_apply_footer
 
@@ -1000,9 +1000,11 @@ def test_create_handler_success_keeps_requested_command_until_terminal_render(
         "src.services.intent.handler._current_pr_head_sha",
         lambda *_args, **_kwargs: "a" * 40,
     )
-    monkeypatch.setattr(
-        "src.services.intent.handler.create_intent",
-        lambda **_kwargs: (
+    create_kwargs: dict[str, object] = {}
+
+    def fake_create_intent(**kwargs):
+        create_kwargs.update(kwargs)
+        return (
             None,
             {
                 "token": "abc123",
@@ -1013,12 +1015,19 @@ def test_create_handler_success_keeps_requested_command_until_terminal_render(
                 "folders": ["infra/vpc"],
                 "commit_hash": "a" * 40,
                 "expires_at": 9999999999,
+                "requested_comment_id": kwargs["requested_comment_id"],
+                "requested_comment_body": kwargs["requested_comment_body"],
             },
-        ),
+        )
+
+    monkeypatch.setattr(
+        "src.services.intent.handler.create_intent",
+        fake_create_intent,
     )
+    metadata_updates: list[dict[str, object]] = []
     monkeypatch.setattr(
         "src.services.intent.handler.store_intent_comment_metadata",
-        lambda *_args, **_kwargs: None,
+        lambda _token, **kwargs: metadata_updates.append(kwargs),
     )
     deleted: list[int | None] = []
     posted: list[str] = []
@@ -1047,6 +1056,9 @@ def test_create_handler_success_keeps_requested_command_until_terminal_render(
     result = create_handler(event, None)
 
     assert result["intent_created"] is True
+    assert create_kwargs["requested_comment_id"] == 44
+    assert create_kwargs["requested_comment_body"] == "tf apply infra/vpc"
+    assert metadata_updates == [{"intent_comment_id": 9001}]
     assert deleted == []
     assert (
         "- triggering comment: [44](https://github.com/o/r/pull/1#issuecomment-44)"
@@ -1129,8 +1141,8 @@ def test_create_handler_metadata_endpoint_failure_deletes_intent_comment_and_inv
         lambda _webhook, _settings, comment_ids: deleted_batches.append(list(comment_ids)),
     )
     monkeypatch.setattr(
-        "src.services.intent.handler.delete_intent",
-        lambda token: live_tokens.discard(token),
+        "src.services.intent.handler.delete_unused_intent",
+        lambda token: live_tokens.discard(token) is None,
     )
 
     event = {
@@ -1210,8 +1222,8 @@ def test_create_handler_ambiguous_post_sweeps_bot_token_comment_and_invalidates_
 
     monkeypatch.setattr(intent_handler, "GitHubClient", Client)
     monkeypatch.setattr(
-        "src.services.intent.handler.delete_intent",
-        lambda token: live_tokens.discard(token),
+        "src.services.intent.handler.delete_unused_intent",
+        lambda token: live_tokens.discard(token) is None,
     )
 
     event = {
@@ -1422,6 +1434,70 @@ def test_confirm_handler_action_mismatch_deletes_only_current_confirmation(
     result = confirm_handler(event, None)
 
     assert result["intent_failed"] is True
+    assert deleted_batches == [[55]]
+    assert stale_tokens == []
+
+
+def test_confirm_handler_metadata_gap_deletes_only_confirmation_and_keeps_intent_live(monkeypatch):
+    monkeypatch.setattr(
+        "src.services.intent.handler._current_pr_head_sha",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
+    record = IntentRecord(
+        token="abc123",
+        trigger_id="t",
+        pr_number=1,
+        action="apply",
+        source_run_id="run1",
+        folders=("infra/vpc",),
+        commit_hash="a" * 40,
+        folder_pins=(),
+        expires_at=9999999999,
+        requested_comment_id=10,
+        requested_comment_body="tf apply infra/vpc",
+        intent_comment_id=None,
+    )
+    monkeypatch.setattr("src.services.intent.confirm.get_intent", lambda _token: record)
+    monkeypatch.setattr(
+        "src.services.intent.confirm.mark_intent_used",
+        lambda *_args, **_kwargs: pytest.fail("not ready intent must not be consumed"),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.get_intent",
+        lambda _token: pytest.fail("not ready cleanup must not read or delete the live intent"),
+    )
+    deleted_batches: list[list[int | None]] = []
+    stale_tokens: list[str | None] = []
+    monkeypatch.setattr(
+        "src.services.intent.handler._post_comment",
+        lambda *_args, **_kwargs: 9001,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_comments_after_replacement",
+        lambda _webhook, _settings, comment_ids: deleted_batches.append(list(comment_ids)),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_stale_confirm_token_comments_after_replacement",
+        lambda _webhook, _settings, token, **kwargs: stale_tokens.append(token),
+    )
+
+    event = {
+        "action": "apply",
+        "confirm_token": "abc123",
+        "webhook_info": {
+            "pr_number": 1,
+            "trigger_id": "t",
+            "repo_name": "o/r",
+            "comment_id": 55,
+            "comment_body": "tf apply confirm abc123",
+        },
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    result = confirm_handler(event, None)
+
+    assert result["intent_failed"] is True
+    assert result["intent_failures"] == ["intent not ready; comment metadata is still publishing"]
     assert deleted_batches == [[55]]
     assert stale_tokens == []
 
@@ -1655,6 +1731,9 @@ def test_confirm_intent_carries_the_intents_frozen_account_binding(monkeypatch):
             ),
         ),
         expires_at=9999999999,
+        requested_comment_id=10,
+        requested_comment_body="tf apply infra/vpc",
+        intent_comment_id=11,
     )
     monkeypatch.setattr("src.services.intent.confirm.get_intent", lambda _: record)
     monkeypatch.setattr(
@@ -1729,11 +1808,28 @@ def test_token_single_use_race(monkeypatch):
             ],
             "expires_at": record.expires_at,
             "used": True,
+            "requested_comment_id": 10,
+            "requested_comment_body": "tf apply infra/vpc",
+            "intent_comment_id": 11,
         }
     }
     confirmed = mark_intent_used("abc123", trigger_id="t", pr_number=1, now=1)
     assert confirmed.used is True
     table.update_item.assert_called_once()
+    assert "attribute_exists(intent_comment_id)" in table.update_item.call_args.kwargs["ConditionExpression"]
+
+
+def test_delete_unused_intent_does_not_delete_already_used_record(monkeypatch):
+    table = Mock()
+    table.delete_item.side_effect = ClientError(
+        {"Error": {"Code": "ConditionalCheckFailedException"}},
+        "DeleteItem",
+    )
+    monkeypatch.setattr("src.platform.aws.intent_registry._table", lambda: table)
+
+    assert delete_unused_intent("abc123") is False
+    kwargs = table.delete_item.call_args.kwargs
+    assert kwargs["ConditionExpression"] == "attribute_exists(pk) AND used = :false"
 
 
 def test_confirm_gate_commit_mismatch():

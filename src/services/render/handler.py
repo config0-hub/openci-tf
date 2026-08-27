@@ -804,6 +804,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         return _render_early_placeholder(event)
     if event.get("placeholder"):
         return _render_placeholder(event)
+    event = _event_with_recovered_intent_metadata(event)
     no_op_reason = _resolved_no_op_reason(event)
     if no_op_reason is not None:
         return _render_no_op(event, no_op_reason)

@@ -68,13 +68,13 @@ def test_read_outer_retains_intent_create_not_confirm():
         ),
         (
             lambda: render_mutation_outer_definition("openci_tf_apply"),
-            23,
+            25,
             5,
             {"RenderEarlyPlaceholder"},
         ),
         (
             lambda: render_mutation_outer_definition("openci_tf_destroy"),
-            23,
+            25,
             5,
             {"RenderEarlyPlaceholder"},
         ),
