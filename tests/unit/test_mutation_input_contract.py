@@ -55,6 +55,7 @@ def test_mutation_start_input_initializes_optional_renderer_keys(action):
         assert key in payload
         assert payload[key] is None
     assert payload["confirm_token"] == "deadbeef"
+    assert payload["webhook_info"]["delivery_id"] == "641353f2-760d-4f70-82e9-e85611860c00"
     assert json.loads(json.dumps(payload))["requested_comment_id"] is None
 
 

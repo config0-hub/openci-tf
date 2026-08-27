@@ -23,7 +23,7 @@ from src.domain.formatters.command_audit import (
 )
 from src.platform.aws import audit_lock
 from src.platform.github import command_audit as audit_module
-from src.platform.github.command_audit import record_command_audit
+from src.platform.github.command_audit import record_command_audit, update_command_audit_status
 from tests.helpers.fake_locks_table import FakeLocksTable
 
 _WHEN = datetime(2026, 8, 18, 10, 3, tzinfo=timezone.utc)
@@ -363,6 +363,76 @@ def test_record_command_audit_retry_converges_after_partial_legacy_duplicate_cle
         ("tf plan infra/a", None),
         ("tf plan infra/b", None),
         ("tf report", "d3"),
+    ]
+
+
+def test_record_command_audit_preserves_identical_legacy_rows_from_distinct_comments():
+    client = _SimpleAuditClient()
+    client.comments[100] = _append(None, "tf report")
+    client.comments[101] = _append(None, "tf report")
+
+    kept = record_command_audit(
+        client,
+        "org/repo",
+        7,
+        command_text="tf plan infra/a",
+        status="accepted",
+        delivery_id="d3",
+        lock_table=FakeLocksTable(),
+        when=_WHEN,
+    )
+    retry_kept = record_command_audit(
+        client,
+        "org/repo",
+        7,
+        command_text="tf plan infra/a",
+        status="accepted",
+        delivery_id="d3",
+        lock_table=FakeLocksTable(),
+        when=_WHEN,
+    )
+
+    assert kept == 100
+    assert retry_kept == 100
+    assert client.deleted == [101]
+    rows = parse_audit_rows(client.comments[100])
+    assert [(row[1], row[3]) for row in rows] == [
+        ("tf report", None),
+        ("tf report", None),
+        ("tf plan infra/a", "d3"),
+    ]
+    assert client.comments[100].count("| `tf report` | accepted |<!-- l:") == 2
+    assert client.comments[100].count("| `tf plan infra/a` | accepted |<!-- d:d3 -->") == 1
+
+
+def test_update_command_audit_status_changes_one_delivery_row_idempotently():
+    client = _SimpleAuditClient()
+    client.comments[100] = _append(None, "tf plan infra/a", delivery_id="d1")
+    client.comments[100] = _append(client.comments[100], "tf plan infra/b", delivery_id="d2")
+
+    updated = update_command_audit_status(
+        client,
+        "org/repo",
+        7,
+        delivery_id="d2",
+        status="not supported",
+        lock_table=FakeLocksTable(),
+    )
+    retry = update_command_audit_status(
+        client,
+        "org/repo",
+        7,
+        delivery_id="d2",
+        status="not supported",
+        lock_table=FakeLocksTable(),
+    )
+
+    assert updated == 100
+    assert retry == 100
+    rows = parse_audit_rows(client.comments[100])
+    assert [(row[1], row[2], row[3]) for row in rows] == [
+        ("tf plan infra/a", "accepted", "d1"),
+        ("tf plan infra/b", "not supported", "d2"),
     ]
 
 

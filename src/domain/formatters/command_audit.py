@@ -25,22 +25,49 @@ _TABLE_SEP = "|------|---------|--------|"
 # a redelivered webhook cannot append the same command twice.
 _ROW_RE = re.compile(
     r"^\|\s*(?P<time>[^|]+?)\s*\|\s*`(?P<command>(?:[^`|\\]|\\\||\\(?!\|))+)`\s*\|\s*(?P<status>accepted|not supported)\s*\|"
-    r"\s*(?:<!-- d:(?P<delivery>[^\s>]+) -->)?\s*$"
+    r"\s*(?:(?:<!-- d:(?P<delivery>[^\s>]+) -->)|(?:<!-- l:(?P<legacy>[^\s>]+) -->))?\s*$"
 )
 MAX_AUDIT_ROWS = 200
 MAX_AUDIT_COMMAND_CHARS = MAX_COMMAND_CONTEXT_CHARS
 # GitHub rejects comment bodies over 65,536 characters; stay well below that.
 MAX_AUDIT_BODY_CHARS = 60_000
-AuditRow = tuple[str, str, str, str | None]
+AuditRow = tuple[str, str, str, str | None] | tuple[str, str, str, str | None, str | None]
+
+
+def _row_parts(row: AuditRow) -> tuple[str, str, str, str | None, str | None]:
+    if len(row) == 4:
+        time_value, command_text, status, delivery_id = row
+        return time_value, command_text, status, delivery_id, None
+    if len(row) == 5:
+        time_value, command_text, status, delivery_id, legacy_id = row
+        return time_value, command_text, status, delivery_id, legacy_id
+    raise ValueError(f"invalid audit row shape: {row!r}")
+
+
+def _validate_hidden_id(value: str, *, field: str) -> None:
+    if not value or any(ch.isspace() or ch == ">" for ch in value):
+        raise ValueError(f"invalid audit {field}: {value!r}")
+
+
+def derive_legacy_audit_row_id(source_comment_id: int, row_position: int) -> str:
+    """Build the hidden identity for one migrated legacy audit row."""
+    if source_comment_id < 1:
+        raise ValueError("source_comment_id must be positive")
+    if row_position < 0:
+        raise ValueError("row_position must be non-negative")
+    source = f"{source_comment_id}\0{row_position}"
+    return hashlib.sha256(source.encode()).hexdigest()[:16]
 
 
 def audit_row_content_identity(row: AuditRow) -> str:
-    """Return a stable identity for rows that predate delivery ids."""
-    time_value, command_text, status, delivery_id = row
+    """Return a stable identity for delivery rows and migrated legacy rows."""
+    time_value, command_text, status, delivery_id, legacy_id = _row_parts(row)
     if delivery_id is not None:
         return f"delivery:{delivery_id}"
+    if legacy_id is not None:
+        return f"legacy:{legacy_id}"
     source = f"{time_value}\0{command_text}\0{status}"
-    return f"legacy:{hashlib.sha256(source.encode()).hexdigest()[:16]}"
+    return f"legacy-content:{hashlib.sha256(source.encode()).hexdigest()[:16]}"
 
 
 def canonical_audit_rows(rows: list[AuditRow]) -> list[AuditRow]:
@@ -145,6 +172,7 @@ def parse_audit_rows(body: str) -> list[AuditRow]:
                 match.group("command"),
                 match.group("status"),
                 match.group("delivery"),
+                match.group("legacy"),
             )
         )
     return rows
@@ -154,6 +182,65 @@ def audit_row_exists_for_delivery(body: str | None, delivery_id: str | None) -> 
     if not body or not delivery_id:
         return False
     return any(row[3] == delivery_id for row in parse_audit_rows(body))
+
+
+def migrate_legacy_audit_rows(body: str, *, source_comment_id: int) -> list[AuditRow]:
+    """Parse rows and assign source-based hidden identities to old rows."""
+    migrated: list[AuditRow] = []
+    for index, row in enumerate(parse_audit_rows(body)):
+        time_value, command_text, status, delivery_id, legacy_id = _row_parts(row)
+        if delivery_id is None and legacy_id is None:
+            legacy_id = derive_legacy_audit_row_id(source_comment_id, index)
+        migrated.append((time_value, command_text, status, delivery_id, legacy_id))
+    return migrated
+
+
+def update_audit_row_status(
+    body: str | None,
+    *,
+    delivery_id: str,
+    status: str,
+    repo_name: str,
+    pr_number: int,
+) -> str | None:
+    """Update an existing audit row by delivery id without appending a new row."""
+    if body is None:
+        return None
+    if status not in {"accepted", "not supported"}:
+        raise ValueError(f"unsupported audit status: {status!r}")
+    _validate_hidden_id(delivery_id, field="delivery id")
+    if format_commands_run_marker(repo_name, pr_number) not in body:
+        return body
+    created_at = parse_audit_created_timestamp(body)
+    rows: list[AuditRow] = []
+    changed = False
+    for row in parse_audit_rows(body):
+        time_value, command_text, row_status, row_delivery_id, legacy_id = _row_parts(row)
+        if row_delivery_id == delivery_id and row_status != status:
+            rows.append((time_value, command_text, status, row_delivery_id, legacy_id))
+            changed = True
+        else:
+            rows.append(row)
+    if not changed:
+        return body
+    rows = rows[-MAX_AUDIT_ROWS:]
+    rendered = format_command_audit_comment(
+        created_at=created_at or "",
+        rows=rows,
+        repo_name=repo_name,
+        pr_number=pr_number,
+    )
+    while len(rendered) > MAX_AUDIT_BODY_CHARS and len(rows) > 1:
+        rows = rows[1:]
+        rendered = format_command_audit_comment(
+            created_at=created_at or "",
+            rows=rows,
+            repo_name=repo_name,
+            pr_number=pr_number,
+        )
+    if len(rendered) > MAX_AUDIT_BODY_CHARS:
+        raise ValueError("audit comment exceeds the body limit with a single row")
+    return rendered
 
 
 def parse_audit_created_timestamp(body: str) -> str | None:
@@ -189,11 +276,17 @@ def format_command_audit_comment(
         _TABLE_HEADER,
         _TABLE_SEP,
     ]
-    for time_value, command_text, status, delivery_id in rows:
+    for row in rows:
+        time_value, command_text, status, delivery_id, legacy_id = _row_parts(row)
         cell = sanitize_audit_command(redact_confirm_token(command_text))
         if not cell:
             raise ValueError("audit command cell is empty after sanitizing")
-        suffix = f"<!-- d:{delivery_id} -->" if delivery_id else ""
+        if delivery_id:
+            suffix = f"<!-- d:{delivery_id} -->"
+        elif legacy_id:
+            suffix = f"<!-- l:{legacy_id} -->"
+        else:
+            suffix = ""
         lines.append(f"| {time_value} | `{cell}` | {status} |{suffix}")
     lines.append("")
     lines.append(format_commands_run_marker(repo_name, pr_number))
@@ -214,10 +307,8 @@ def append_audit_row(
     timestamp = format_command_timestamp(when)
     if status not in {"accepted", "not supported"}:
         raise ValueError(f"unsupported audit status: {status!r}")
-    if delivery_id is not None and (
-        not delivery_id or any(ch.isspace() or ch == ">" for ch in delivery_id)
-    ):
-        raise ValueError(f"invalid audit delivery id: {delivery_id!r}")
+    if delivery_id is not None:
+        _validate_hidden_id(delivery_id, field="delivery id")
     redacted_command = normalized_command_context_line(command_text)
     if body and format_commands_run_marker(repo_name, pr_number) in body:
         created_at = parse_audit_created_timestamp(body)
@@ -227,7 +318,7 @@ def append_audit_row(
     else:
         created_at = timestamp
         rows = []
-    rows.append((timestamp, redacted_command, status, delivery_id))
+    rows.append((timestamp, redacted_command, status, delivery_id, None))
     rows = rows[-MAX_AUDIT_ROWS:]
     rendered = format_command_audit_comment(
         created_at=created_at, rows=rows, repo_name=repo_name, pr_number=pr_number

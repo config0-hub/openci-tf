@@ -36,7 +36,7 @@ from src.platform.github.client import (
     get_collaborator_permission,
     get_pull_request,
 )
-from src.platform.github.command_audit import record_command_audit
+from src.platform.github.command_audit import record_command_audit, update_command_audit_status
 from src.platform.github.command_comment_cleanup import (
     defer_command_comment_cleanup,
     delete_acknowledged_command_comment,
@@ -234,6 +234,13 @@ def _is_unreadable_pr_error(error: requests.RequestException) -> bool:
     return status in {403, 404}
 
 
+def _pr_payload_is_open_unmerged(pr: dict[str, Any]) -> bool:
+    raw_state = pr.get("state")
+    state = str(raw_state) if raw_state else None
+    merged = pr.get("merged")
+    return state == "open" and merged is False
+
+
 def _github_info_dict(info: Any) -> dict[str, Any]:
     comment_body = info.comment_body
     if isinstance(comment_body, str):
@@ -272,6 +279,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     if info.event_type == "pull_request":
         return _response(200, {"message": "Event ignored", "reason": "pull_request_event"})
     pr_state: str | None = None
+    pr_merged: bool | None = None
     pr_unreadable = False
     try:
         token = get_github_token(settings.ssm_openci_tf_github_token)
@@ -279,6 +287,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             pr = get_pull_request(info.pr_api_url, token)
             raw_state = pr.get("state")
             pr_state = str(raw_state) if raw_state else None
+            raw_merged = pr.get("merged")
+            pr_merged = raw_merged if isinstance(raw_merged, bool) else None
             if not info.commit_hash or not info.head_repo_name:
                 info.commit_hash = pr.get("head", {}).get("sha")
                 info.head_repo_name = pr.get("head", {}).get("repo", {}).get("full_name")
@@ -323,7 +333,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return _response(502, {"error": "Unable to acknowledge command"})
     if not _has_actionable_command(info):
         return _response(200, {"message": "Event ignored"})
-    if info.event_type == "issue_comment" and info.pr_number and pr_state != "open":
+    if (
+        info.event_type == "issue_comment"
+        and info.pr_number
+        and (pr_unreadable or pr_state != "open" or pr_merged is not False)
+    ):
         comment_link = (
             comment_url(settings.repo_name, info.pr_number, info.comment_id)
             if info.comment_id is not None
@@ -450,6 +464,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             {"message": "Event ignored", "reason": "invalid_command"},
         )
     if info.pr_number:
+        delete_command_after_acceptance = not defer_command_comment_cleanup(cmd.action)
         try:
             client = GitHubClient(token)
             _record_audit_and_maybe_delete_command(
@@ -460,7 +475,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 info.comment_body or "",
                 "accepted",
                 delivery_id=delivery_id,
-                delete_comment=not defer_command_comment_cleanup(cmd.action),
+                delete_comment=False,
             )
         except _ACKNOWLEDGEMENT_ERRORS as error:
             logger.warning(
@@ -469,6 +484,62 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 error,
             )
             return _response(502, {"error": "Unable to record command audit"})
+        try:
+            latest_pr = get_pull_request(info.pr_api_url, token) if info.pr_api_url else {}
+            latest_pr_open = _pr_payload_is_open_unmerged(latest_pr)
+        except requests.RequestException as error:
+            if not _is_unreadable_pr_error(error):
+                return _response(502, {"error": "Unable to pin pull request head"})
+            latest_pr_open = False
+        if not latest_pr_open:
+            comment_link = (
+                comment_url(settings.repo_name, info.pr_number, info.comment_id)
+                if info.comment_id is not None
+                else None
+            )
+            rejection_body = closed_pr_rejection_comment(
+                comment_id=info.comment_id,
+                comment_link=comment_link,
+                comment_body=info.comment_body,
+            )
+            try:
+                update_command_audit_status(
+                    client,
+                    settings.repo_name,
+                    info.pr_number,
+                    delivery_id=delivery_id,
+                    status="not supported",
+                    lock_table=locks_table(),
+                )
+                _post_or_reuse_command_rejection_and_cleanup(
+                    client=client,
+                    repo=settings.repo_name,
+                    pr_number=info.pr_number,
+                    comment_id=info.comment_id,
+                    body=rejection_body,
+                    delivery_id=delivery_id,
+                )
+            except _ACKNOWLEDGEMENT_ERRORS as error:
+                logger.warning(
+                    "failed to post closed-PR rejection comment for pr %s: %s",
+                    info.pr_number,
+                    error,
+                )
+                return _response(502, {"error": "Unable to acknowledge command"})
+            return _response(
+                200,
+                {"message": "Event ignored", "reason": "pull_request_not_open"},
+            )
+        if delete_command_after_acceptance:
+            try:
+                delete_acknowledged_command_comment(client, settings.repo_name, info.comment_id)
+            except _ACKNOWLEDGEMENT_ERRORS as error:
+                logger.warning(
+                    "failed to delete accepted command comment for pr %s: %s",
+                    info.pr_number,
+                    error,
+                )
+                return _response(502, {"error": "Unable to record command audit"})
     try:
         run_id, created = start_run_from_request(request)
     except OrchestrationError:

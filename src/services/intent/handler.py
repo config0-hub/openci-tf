@@ -23,9 +23,11 @@ from src.domain.intent.models import (
     intent_record_matches_current_request,
 )
 from src.platform.aws.intent_registry import IntentRegistryError
+from src.platform.aws.audit_lock import locks_table
 from src.platform.aws.run_registry import set_run_pipeline_metadata
 from src.platform.aws.ssm import get_github_token
 from src.platform.github.client import GitHubClient, PullRequestState, comment_url
+from src.platform.github.command_audit import update_command_audit_status
 from src.platform.github.command_comment_cleanup import (
     delete_acknowledged_command_comment,
     delete_acknowledged_command_comments,
@@ -180,7 +182,31 @@ def _current_pr_head_sha(
     return pr_state.head_sha
 
 
-def _closed_pr_confirmation_failure(
+def _mark_delivery_audit_not_supported(
+    webhook: dict[str, Any],
+    settings: dict[str, Any],
+) -> None:
+    pr_number = webhook.get("pr_number")
+    repo = webhook.get("repo_name")
+    delivery_id = webhook.get("delivery_id")
+    if (
+        not isinstance(pr_number, int)
+        or not isinstance(repo, str)
+        or not isinstance(delivery_id, str)
+    ):
+        return
+    token = get_github_token(settings["ssm_openci_tf_github_token"])
+    update_command_audit_status(
+        GitHubClient(token),
+        repo,
+        pr_number,
+        delivery_id=delivery_id,
+        status="not supported",
+        lock_table=locks_table(),
+    )
+
+
+def _closed_pr_intent_failure(
     event: dict[str, Any],
     webhook: dict[str, Any],
     settings: dict[str, Any],
@@ -199,6 +225,7 @@ def _closed_pr_confirmation_failure(
         if isinstance(webhook.get("comment_body"), str)
         else None,
     )
+    _mark_delivery_audit_not_supported(webhook, settings)
     if _post_comment(webhook, settings, body) is not None:
         _delete_comments_after_replacement(
             webhook,
@@ -248,7 +275,15 @@ def create_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         or not isinstance(repo_name, str)
     ):
         raise TypeError("intent creation requires pr_number, trigger_id, and repo_name")
-    commit_hash = _current_pr_head_sha(settings, repo_name, pr_number)
+    try:
+        commit_hash = _current_pr_head_sha(settings, repo_name, pr_number, require_open=True)
+    except _CONFIRM_PR_STATE_ERRORS:
+        return _closed_pr_intent_failure(
+            event,
+            webhook,
+            settings,
+            "pull request is not open; intent ignored",
+        )
     if not isinstance(folders, list) or not all(isinstance(folder, str) for folder in folders):
         raise ValueError("folders must be a list of strings")
     requested_comment_id = webhook.get("comment_id")
@@ -344,7 +379,7 @@ def create_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     # The user's request comment stays until the terminal apply/destroy
     # render deletes it (render/handler.py); only the intent comment replaces
     # it here.
-    return {**event, "intent_created": True, "intent_token": record["token"]}
+    return {**event, "intent_created": True}
 
 
 def confirm_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
@@ -360,7 +395,7 @@ def confirm_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     try:
         commit_hash = _current_pr_head_sha(settings, repo_name, pr_number, True)
     except _CONFIRM_PR_STATE_ERRORS:
-        return _closed_pr_confirmation_failure(
+        return _closed_pr_intent_failure(
             event,
             webhook,
             settings,

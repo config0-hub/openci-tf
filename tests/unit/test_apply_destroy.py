@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -24,6 +25,7 @@ from src.domain.config.pipeline import Pipeline, Step
 from src.domain.intent.plan_lookup import PlanLookupResult
 from src.domain.intent.gates import evaluate_confirm_gates, evaluate_intent_gates
 from src.domain.intent.models import FolderPlanPin, IntentGateFailure, IntentRecord
+from src.domain.formatters.command_audit import append_audit_row, parse_audit_rows
 from src.domain.intent.token import mint_token
 from src.services.intent.confirm import confirm_intent
 from src.services.intent.create import IntentCreationError, create_intent
@@ -33,6 +35,7 @@ from src.services.intent.registry import delete_unused_intent, mark_intent_used,
 from src.platform.aws.run_registry import RunRegistryError
 from src.platform.github.client import PullRequestState
 from src.services.render.handler import _pipeline_apply_footer
+from tests.helpers.fake_locks_table import FakeLocksTable
 
 
 @pytest.mark.parametrize(
@@ -1057,6 +1060,8 @@ def test_create_handler_success_keeps_requested_command_until_terminal_render(
     result = create_handler(event, None)
 
     assert result["intent_created"] is True
+    assert "intent_token" not in result
+    assert "abc123" not in json.dumps(result)
     assert create_kwargs["requested_comment_id"] == 44
     assert create_kwargs["requested_comment_body"] == "tf apply infra/vpc"
     assert metadata_updates == [{"intent_comment_id": 9001}]
@@ -1067,6 +1072,89 @@ def test_create_handler_success_keeps_requested_command_until_terminal_render(
     )
     assert "cleanup deferred to terminal comment" in posted[0]
     assert "removed after acknowledgement" not in posted[0]
+
+
+def test_create_handler_closed_pr_posts_ignore_without_creating_intent(monkeypatch):
+    comments = {
+        100: append_audit_row(
+            None,
+            command_text="tf apply infra/vpc",
+            status="accepted",
+            repo_name="o/r",
+            pr_number=1,
+            delivery_id="delivery-1",
+        )
+    }
+    order: list[str] = []
+    posted: list[str] = []
+    deleted: list[int] = []
+    monkeypatch.setattr(intent_handler, "get_github_token", lambda _path: "token")
+    monkeypatch.setattr(intent_handler, "locks_table", FakeLocksTable)
+    monkeypatch.setattr(
+        intent_handler,
+        "create_intent",
+        lambda **_kwargs: pytest.fail("closed PR intent must not create a token"),
+    )
+
+    class Client:
+        def __init__(self, _token):
+            pass
+
+        def get_pr_state(self, _repo, _pr):
+            return PullRequestState(head_sha="a" * 40, state="closed", merged=False)
+
+        def token_login(self):
+            return "openci-bot"
+
+        def find_comments_by_body_substring(self, _repo, _pr, needle):
+            return [(cid, "openci-bot") for cid, body in comments.items() if needle in body]
+
+        def get_comment_body(self, _repo, comment_id):
+            return comments.get(comment_id)
+
+        def update_comment(self, _repo, comment_id, body):
+            order.append("audit-update")
+            comments[comment_id] = body
+
+        def create_comment(self, _repo, _pr, body):
+            order.append("post")
+            posted.append(body)
+            comments[9001] = body
+            return 9001
+
+        def delete_comment(self, _repo, comment_id):
+            order.append("delete")
+            deleted.append(comment_id)
+
+    monkeypatch.setattr(intent_handler, "GitHubClient", Client)
+
+    event = {
+        "action": "apply",
+        "folders": ["infra/vpc"],
+        "webhook_info": {
+            "pr_number": 1,
+            "trigger_id": "t",
+            "repo_name": "o/r",
+            "comment_id": 44,
+            "comment_body": "tf apply infra/vpc",
+            "delivery_id": "delivery-1",
+        },
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    result = create_handler(event, None)
+
+    assert result["intent_failed"] is True
+    assert result["intent_failures"] == ["pull request is not open; intent ignored"]
+    assert "intent_created" not in result
+    assert order[:2] == ["audit-update", "post"]
+    assert posted[0].startswith("openci-tf ignored the command")
+    assert "confirm" not in posted[0]
+    assert deleted == [44]
+    rows = parse_audit_rows(comments[100])
+    assert [(row[1], row[2], row[3]) for row in rows] == [
+        ("tf apply infra/vpc", "not supported", "delivery-1")
+    ]
 
 
 def test_intent_post_comment_bounds_large_command_context(monkeypatch):
@@ -1252,9 +1340,21 @@ def test_confirm_handler_closed_pr_between_webhook_and_confirm_ignores_without_c
     monkeypatch,
     action,
 ):
+    comments = {
+        100: append_audit_row(
+            None,
+            command_text=f"tf {action} confirm abc123",
+            status="accepted",
+            repo_name="o/r",
+            pr_number=1,
+            delivery_id="delivery-1",
+        )
+    }
+    order: list[str] = []
     posted: list[str] = []
     deleted: list[int] = []
     monkeypatch.setattr(intent_handler, "get_github_token", lambda _path: "token")
+    monkeypatch.setattr(intent_handler, "locks_table", FakeLocksTable)
     monkeypatch.setattr(
         "src.services.intent.handler.confirm_intent",
         lambda **_kwargs: pytest.fail("closed PR confirmation must not consume token"),
@@ -1267,11 +1367,27 @@ def test_confirm_handler_closed_pr_between_webhook_and_confirm_ignores_without_c
         def get_pr_state(self, _repo, _pr):
             return PullRequestState(head_sha="a" * 40, state="closed", merged=False)
 
+        def token_login(self):
+            return "openci-bot"
+
+        def find_comments_by_body_substring(self, _repo, _pr, needle):
+            return [(cid, "openci-bot") for cid, body in comments.items() if needle in body]
+
+        def get_comment_body(self, _repo, comment_id):
+            return comments.get(comment_id)
+
+        def update_comment(self, _repo, comment_id, body):
+            order.append("audit-update")
+            comments[comment_id] = body
+
         def create_comment(self, _repo, _pr, body):
+            order.append("post")
             posted.append(body)
+            comments[9001] = body
             return 9001
 
         def delete_comment(self, _repo, comment_id):
+            order.append("delete")
             deleted.append(comment_id)
 
     monkeypatch.setattr(intent_handler, "GitHubClient", Client)
@@ -1284,6 +1400,7 @@ def test_confirm_handler_closed_pr_between_webhook_and_confirm_ignores_without_c
             "repo_name": "o/r",
             "comment_id": 55,
             "comment_body": f"tf {action} confirm abc123",
+            "delivery_id": "delivery-1",
         },
         "settings": {"ssm_openci_tf_github_token": "/token"},
     }
@@ -1295,9 +1412,12 @@ def test_confirm_handler_closed_pr_between_webhook_and_confirm_ignores_without_c
     assert result["intent_failures"] == ["pull request is not open; confirmation ignored"]
     assert "intent_confirmed" not in result
     assert len(posted) == 1
+    assert order[:2] == ["audit-update", "post"]
     assert posted[0].startswith("openci-tf ignored the command")
     assert "abc123" not in posted[0]
     assert deleted == [55]
+    rows = parse_audit_rows(comments[100])
+    assert [(row[2], row[3]) for row in rows] == [("not supported", "delivery-1")]
 
 
 def test_confirm_handler_unreadable_pr_ignores_without_consuming_token(monkeypatch):

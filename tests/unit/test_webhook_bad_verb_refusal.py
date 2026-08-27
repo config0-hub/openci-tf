@@ -47,6 +47,7 @@ def _wire_webhook(monkeypatch):
     def fake_get_pr(*_):
         return {
             "state": "open",
+            "merged": False,
             "head": {"sha": _FULL_SHA, "repo": {"full_name": "org/repo"}},
             "base": {"repo": {"full_name": "org/repo"}},
         }

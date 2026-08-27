@@ -17,8 +17,9 @@ from src.domain.formatters.command_audit import (
     canonical_audit_rows,
     format_command_audit_comment,
     format_commands_run_marker,
+    migrate_legacy_audit_rows,
     parse_audit_created_timestamp,
-    parse_audit_rows,
+    update_audit_row_status,
 )
 from src.platform.aws import audit_lock
 from src.platform.github.client import GitHubClient
@@ -54,6 +55,33 @@ def record_command_audit(
             status=status,
             delivery_id=delivery_id,
             when=when,
+            lock_table=lock_table,
+            holder=holder,
+            lock_version=lock_version,
+        )
+    finally:
+        audit_lock.release(lock_table, repo, pr_number, holder)
+
+
+def update_command_audit_status(
+    client: GitHubClient,
+    repo: str,
+    pr_number: int,
+    *,
+    delivery_id: str,
+    status: str,
+    lock_table: Any,
+) -> int | None:
+    """Update an existing audit row status under the per-PR audit lock."""
+    holder = uuid.uuid4().hex
+    lock_version = _acquire_with_backoff(lock_table, repo, pr_number, holder)
+    try:
+        return _update_status_locked(
+            client,
+            repo,
+            pr_number,
+            delivery_id=delivery_id,
+            status=status,
             lock_table=lock_table,
             holder=holder,
             lock_version=lock_version,
@@ -152,6 +180,60 @@ def _record_locked(
     raise LockHeldError(f"audit lock fence failed for {repo}#{pr_number}")
 
 
+def _update_status_locked(
+    client: GitHubClient,
+    repo: str,
+    pr_number: int,
+    *,
+    delivery_id: str,
+    status: str,
+    lock_table: Any,
+    holder: str,
+    lock_version: int,
+) -> int | None:
+    marker = format_commands_run_marker(repo, pr_number)
+    version = lock_version
+    for attempt in range(3):
+        existing_ids = _bot_authored_marker_ids(client, repo, pr_number, marker)
+        if not existing_ids:
+            return None
+        existing_id = existing_ids[0]
+        existing_body = client.get_comment_body(repo, existing_id) or ""
+        if len(existing_ids) > 1:
+            try:
+                version = audit_lock.fence(
+                    lock_table, repo, pr_number, holder, version, int(time.time())
+                )
+            except LockHeldError:
+                if attempt == 2:
+                    raise
+                version = _acquire_with_backoff(lock_table, repo, pr_number, holder)
+                continue
+            existing_body = _merge_existing_audit_comments(
+                client, repo, pr_number, existing_ids
+            )
+        body = update_audit_row_status(
+            existing_body,
+            delivery_id=delivery_id,
+            status=status,
+            repo_name=repo,
+            pr_number=pr_number,
+        )
+        if body != existing_body:
+            try:
+                version = audit_lock.fence(
+                    lock_table, repo, pr_number, holder, version, int(time.time())
+                )
+            except LockHeldError:
+                if attempt == 2:
+                    raise
+                version = _acquire_with_backoff(lock_table, repo, pr_number, holder)
+                continue
+            client.update_comment(repo, existing_id, body or "")
+        return existing_id
+    raise LockHeldError(f"audit lock fence failed for {repo}#{pr_number}")
+
+
 def _merge_existing_audit_comments(
     client: GitHubClient, repo: str, pr_number: int, marker_ids: list[int]
 ) -> str:
@@ -159,10 +241,10 @@ def _merge_existing_audit_comments(
     keeper_id = marker_ids[0]
     body = client.get_comment_body(repo, keeper_id) or ""
     created_at = parse_audit_created_timestamp(body) or ""
-    rows = parse_audit_rows(body)
+    rows = migrate_legacy_audit_rows(body, source_comment_id=keeper_id)
     for extra_id in marker_ids[1:]:
         extra_body = client.get_comment_body(repo, extra_id) or ""
-        rows.extend(parse_audit_rows(extra_body))
+        rows.extend(migrate_legacy_audit_rows(extra_body, source_comment_id=extra_id))
     rows = canonical_audit_rows(rows)[-MAX_AUDIT_ROWS:]
     body = format_command_audit_comment(
         created_at=created_at,

@@ -13,7 +13,7 @@ import requests
 
 from src.core.models import RepoSettings
 from src.domain.engine.outer_map_state import merge_map_item
-from src.domain.formatters.command_audit import append_audit_row
+from src.domain.formatters.command_audit import append_audit_row, parse_audit_rows
 from src.services.resolve import validate_and_resolve
 from src.services.resolve.handler import handler as parse_command
 from src.services.run_folder import prepare_and_submit
@@ -68,6 +68,7 @@ def _wire_webhook(
     clone_dir: str,
     *,
     pr_state: str = "open",
+    pr_states: list[str] | None = None,
     fail_first_help_delete: bool = False,
     fail_first_user_delete: bool = False,
 ):
@@ -84,9 +85,13 @@ def _wire_webhook(
         started.append({"input": json.dumps(payload)})
         return "run-id-test", True
 
+    pr_state_reads = list(pr_states or [pr_state])
+
     def fake_get_pr(*_):
+        state = pr_state_reads.pop(0) if len(pr_state_reads) > 1 else pr_state_reads[0]
         return {
-            "state": pr_state,
+            "state": state,
+            "merged": False,
             "head": {"sha": _FULL_SHA, "repo": {"full_name": "org/repo"}},
             "base": {"repo": {"full_name": "org/repo"}},
         }
@@ -458,6 +463,25 @@ def test_webhook_open_pull_request_still_starts_run(monkeypatch):
     assert deleted == [42]
 
 
+def test_webhook_revalidates_pr_state_after_audit_before_starting_run(monkeypatch):
+    started, posted, deleted, audit = _wire_webhook(
+        monkeypatch,
+        "",
+        pr_states=["open", "closed"],
+    )
+    response = webhook.handler(_event("tf plan infra/vpc"), None)
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["reason"] == "pull_request_not_open"
+    assert started == []
+    audit_body = next(body for body in audit.values() if "## openci-tf commands" in body)
+    rows = parse_audit_rows(audit_body)
+    assert [(row[1], row[3], row[2]) for row in rows] == [
+        ("tf plan infra/vpc", _GUID_A, "not supported")
+    ]
+    assert any(body.startswith("openci-tf ignored the command") for body, _ in posted)
+    assert deleted == [42]
+
+
 def test_webhook_unsupported_tf_command_audit_and_transient_help(monkeypatch):
     slept: list[float] = []
     monkeypatch.setattr(webhook.time, "sleep", lambda seconds: slept.append(seconds))
@@ -766,6 +790,7 @@ def test_webhook_closed_pr_rejection_failure_returns_502(monkeypatch):
     def failing_get_pr(*_):
         return {
             "state": "closed",
+            "merged": False,
             "head": {"sha": _FULL_SHA, "repo": {"full_name": "org/repo"}},
             "base": {"repo": {"full_name": "org/repo"}},
         }
