@@ -105,6 +105,19 @@ def _record_locked(
         existing_body = ""
         if existing_id is not None:
             existing_body = client.get_comment_body(repo, existing_id) or ""
+        if len(existing_ids) > 1:
+            try:
+                version = audit_lock.fence(
+                    lock_table, repo, pr_number, holder, version, int(time.time())
+                )
+            except LockHeldError:
+                if attempt == 2:
+                    raise
+                version = _acquire_with_backoff(lock_table, repo, pr_number, holder)
+                continue
+            existing_body = _merge_existing_audit_comments(
+                client, repo, pr_number, existing_ids
+            )
         body = append_audit_row(
             existing_body or None,
             command_text=command_text,
@@ -135,15 +148,10 @@ def _record_locked(
     raise LockHeldError(f"audit lock fence failed for {repo}#{pr_number}")
 
 
-def _merge_duplicate_audit_comments(
-    client: GitHubClient, repo: str, pr_number: int, marker: str, created_id: int
-) -> int:
-    """Collapse audit comments created concurrently into the lowest comment id."""
-    marker_ids = sorted(
-        set(_bot_authored_marker_ids(client, repo, pr_number, marker)) | {created_id}
-    )
-    if len(marker_ids) == 1:
-        return marker_ids[0]
+def _merge_existing_audit_comments(
+    client: GitHubClient, repo: str, pr_number: int, marker_ids: list[int]
+) -> str:
+    """Merge audit rows into the lowest comment id and delete duplicate comments."""
     keeper_id = marker_ids[0]
     body = client.get_comment_body(repo, keeper_id) or ""
     for extra_id in marker_ids[1:]:
@@ -161,4 +169,17 @@ def _merge_duplicate_audit_comments(
     client.update_comment(repo, keeper_id, body)
     for extra_id in marker_ids[1:]:
         client.delete_comment(repo, extra_id)
-    return keeper_id
+    return body
+
+
+def _merge_duplicate_audit_comments(
+    client: GitHubClient, repo: str, pr_number: int, marker: str, created_id: int
+) -> int:
+    """Collapse audit comments created concurrently into the lowest comment id."""
+    marker_ids = sorted(
+        set(_bot_authored_marker_ids(client, repo, pr_number, marker)) | {created_id}
+    )
+    if len(marker_ids) == 1:
+        return marker_ids[0]
+    _merge_existing_audit_comments(client, repo, pr_number, marker_ids)
+    return marker_ids[0]

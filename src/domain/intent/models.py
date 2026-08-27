@@ -3,6 +3,7 @@
 """Intent token models for two-step apply/destroy."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -83,6 +84,27 @@ class IntentRecord:
 class IntentGateFailure:
     message: str
     folder: str | None = None
+
+
+def intent_record_matches_current_request(
+    record: IntentRecord | Mapping[str, object],
+    *,
+    trigger_id: str,
+    pr_number: int,
+    action: str,
+) -> bool:
+    """Return whether an intent record belongs to the current confirmation request."""
+    if isinstance(record, IntentRecord):
+        return (
+            record.trigger_id == trigger_id
+            and record.pr_number == pr_number
+            and record.action == action
+        )
+    return (
+        record.get("trigger_id") == trigger_id
+        and record.get("pr_number") == pr_number
+        and record.get("action") == action
+    )
 
 
 @dataclass

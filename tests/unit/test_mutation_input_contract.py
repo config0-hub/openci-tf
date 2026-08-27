@@ -14,6 +14,7 @@ from src.services.orchestration.start_run import (
     MUTATION_OPTIONAL_INPUT_KEYS,
     build_step_function_input,
 )
+from src.services.render import handler as render_handler
 from src.services.webhook.run_request import github_run_request
 from tests.helpers.asl_reachability import (
     render_mutation_outer_definition,
@@ -71,6 +72,25 @@ def _states_referencing_keys(definition: dict) -> set[str]:
     return found
 
 
+def _resolve_top_level_parameters(parameters: dict, state: dict) -> dict:
+    resolved: dict = {}
+    for key, value in parameters.items():
+        if not key.endswith(".$"):
+            resolved[key] = value
+            continue
+        output_key = key.removesuffix(".$")
+        if value == "$$.Execution.Id":
+            resolved[output_key] = "execution-arn"
+            continue
+        if not isinstance(value, str) or not value.startswith("$."):
+            raise ValueError(f"unsupported test JSONPath {value!r}")
+        state_key = value[2:]
+        if state_key not in state:
+            raise KeyError(state_key)
+        resolved[output_key] = state[state_key]
+    return resolved
+
+
 @pytest.mark.parametrize("resource", ["openci_tf_apply", "openci_tf_destroy"])
 def test_every_mutation_parameters_block_reading_optional_keys_is_fed_by_start_input(resource):
     definition = render_mutation_outer_definition(resource)
@@ -106,8 +126,42 @@ def test_render_pr_failure_posts_failure_comment_before_finalizing(resource):
     assert definition["States"]["FailRenderPR"]["Next"] == "RenderPRFailureComment"
     render_failure = definition["States"]["RenderPRFailureComment"]
     assert render_failure["Parameters"]["pipeline_failure.$"] == "$.pipeline_failure"
+    assert render_failure["Parameters"]["confirm_token.$"] == "$.confirm_token"
     assert render_failure["Next"] == "FinalizeAfterRenderFailure"
     assert render_failure["Catch"][0]["Next"] == "FinalizeAfterRenderFailure"
+
+
+@pytest.mark.parametrize("resource", ["openci_tf_apply", "openci_tf_destroy"])
+def test_render_pr_failure_parameters_resolve_after_real_config_error_normalization(resource):
+    definition = render_mutation_outer_definition(resource)
+    confirmed_state = {
+        "webhook_info": {"repo_name": "org/repo", "pr_number": 1},
+        "settings": {"ssm_openci_tf_github_token": "/openci-tf/clone-token/test"},
+        "run_id": "run-1",
+        "notification_target": {"type": "github_pr", "pr_number": 1},
+        "action": "apply" if resource == "openci_tf_apply" else "destroy",
+        "confirm_token": None,
+        "consumed_confirm_token": "deadbeef",
+        "requested_comment_id": 10,
+        "requested_comment_body": "tf apply infra/a",
+        "intent_comment_id": 11,
+    }
+    normalized = render_handler.handler(
+        {"normalize_config_error": True, "state": confirmed_state}, object()
+    )
+    fallback_state = {
+        **normalized,
+        "pipeline_failure": {"failed_step": "RenderPR"},
+    }
+
+    resolved = _resolve_top_level_parameters(
+        definition["States"]["RenderPRFailureComment"]["Parameters"],
+        fallback_state,
+    )
+
+    assert resolved["confirm_token"] is None
+    assert resolved["consumed_confirm_token"] == "deadbeef"
+    assert resolved["pipeline_failure"] == {"failed_step": "RenderPR"}
 
 
 def test_read_outer_parameters_do_not_reference_mutation_keys():

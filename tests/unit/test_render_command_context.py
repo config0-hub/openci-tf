@@ -84,6 +84,9 @@ def test_terminal_apply_recovers_metadata_and_deletes_request_intent_and_confirm
         "get_intent_record",
         lambda token: {
             "token": token,
+            "trigger_id": "trigger",
+            "pr_number": 7,
+            "action": "apply",
             "requested_comment_id": 10,
             "requested_comment_body": "tf apply infra/a",
             "intent_comment_id": 11,
@@ -157,6 +160,118 @@ def test_terminal_apply_recovers_metadata_and_deletes_request_intent_and_confirm
     assert swept_tokens == ["deadbeef"]
 
 
+def test_terminal_apply_recovery_ignores_foreign_pr_token_and_deletes_current_confirm_only(monkeypatch):
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setattr(render, "get_github_token", lambda _: "token")
+    monkeypatch.setattr(
+        render,
+        "get_intent_record",
+        lambda token: {
+            "token": token,
+            "trigger_id": "trigger-one",
+            "pr_number": 1,
+            "action": "apply",
+            "requested_comment_id": 10,
+            "requested_comment_body": "tf apply infra/a",
+            "intent_comment_id": 11,
+        },
+    )
+    deleted_ids: list[int] = []
+
+    class Client:
+        pass
+
+    monkeypatch.setattr(render, "GitHubClient", lambda _: Client())
+    monkeypatch.setattr(render, "_delete_and_repost_unmanaged", lambda *_args, **_kwargs: 1)
+    monkeypatch.setattr(render, "_delete_transient_status_comment", lambda *_args: [])
+    monkeypatch.setattr(
+        render,
+        "delete_acknowledged_command_comments",
+        lambda _client, _repo, comment_ids: deleted_ids.extend(
+            comment_id for comment_id in comment_ids if isinstance(comment_id, int)
+        )
+        or [],
+    )
+    monkeypatch.setattr(render, "delete_stale_confirm_token_comments", lambda *_args, **_kwargs: [])
+
+    result = render.handler(
+        _plan_event(
+            action="apply",
+            confirm_token="deadbeef",
+            webhook_info={
+                "repo_name": "org/repo",
+                "pr_number": 2,
+                "commit_hash": _FULL_SHA,
+                "trigger_id": "trigger-two",
+                "comment_id": 55,
+                "comment_body": "tf apply confirm deadbeef",
+            },
+            pipeline_failure={"failed_step": "ConfirmApplyIntent"},
+            execution_arn="arn:aws:states:us-east-1:123456789012:execution:openci-tf:run",
+        ),
+        None,
+    )
+
+    assert result["pipeline_failure_rendered"] is True
+    assert deleted_ids == [55]
+
+
+def test_terminal_destroy_recovery_ignores_apply_token_and_deletes_current_confirm_only(monkeypatch):
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setattr(render, "get_github_token", lambda _: "token")
+    monkeypatch.setattr(
+        render,
+        "get_intent_record",
+        lambda token: {
+            "token": token,
+            "trigger_id": "trigger",
+            "pr_number": 7,
+            "action": "apply",
+            "requested_comment_id": 10,
+            "requested_comment_body": "tf apply infra/a",
+            "intent_comment_id": 11,
+        },
+    )
+    deleted_ids: list[int] = []
+
+    class Client:
+        pass
+
+    monkeypatch.setattr(render, "GitHubClient", lambda _: Client())
+    monkeypatch.setattr(render, "_delete_and_repost_unmanaged", lambda *_args, **_kwargs: 1)
+    monkeypatch.setattr(render, "_delete_transient_status_comment", lambda *_args: [])
+    monkeypatch.setattr(
+        render,
+        "delete_acknowledged_command_comments",
+        lambda _client, _repo, comment_ids: deleted_ids.extend(
+            comment_id for comment_id in comment_ids if isinstance(comment_id, int)
+        )
+        or [],
+    )
+    monkeypatch.setattr(render, "delete_stale_confirm_token_comments", lambda *_args, **_kwargs: [])
+
+    result = render.handler(
+        _plan_event(
+            action="destroy",
+            confirm_token="deadbeef",
+            webhook_info={
+                "repo_name": "org/repo",
+                "pr_number": 7,
+                "commit_hash": _FULL_SHA,
+                "trigger_id": "trigger",
+                "comment_id": 55,
+                "comment_body": "tf destroy confirm deadbeef",
+            },
+            pipeline_failure={"failed_step": "ConfirmDestroyIntent"},
+            execution_arn="arn:aws:states:us-east-1:123456789012:execution:openci-tf:run",
+        ),
+        None,
+    )
+
+    assert result["pipeline_failure_rendered"] is True
+    assert deleted_ids == [55]
+
+
 def test_render_cleanup_failure_raises(monkeypatch):
     monkeypatch.setenv("LOCKS_TABLE_NAME", "locks")
     monkeypatch.setenv("TMP_BUCKET_NAME", "tmp")
@@ -223,6 +338,9 @@ def test_pipeline_failure_deletes_mutation_command_comments_and_sweeps_token(mon
         "get_intent_record",
         lambda token: {
             "token": token,
+            "trigger_id": "trigger",
+            "pr_number": 7,
+            "action": "apply",
             "requested_comment_id": 10,
             "requested_comment_body": "tf apply infra/a",
             "intent_comment_id": 11,

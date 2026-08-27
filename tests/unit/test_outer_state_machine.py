@@ -281,6 +281,7 @@ def test_render_consumer_normalizes_config_resolution_error():
         "requested_comment_body": None,
         "intent_comment_id": None,
         "consumed_confirm_token": None,
+        "confirm_token": None,
     }
 
 

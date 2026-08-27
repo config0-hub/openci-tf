@@ -179,6 +179,7 @@ def test_append_audit_row_keeps_total_body_under_limit():
 class _SimpleAuditClient:
     def __init__(self) -> None:
         self.comments: dict[int, str] = {}
+        self.deleted: list[int] = []
         self.updates = 0
 
     def token_login(self):
@@ -209,6 +210,7 @@ class _SimpleAuditClient:
         self.comments[comment_id] = body
 
     def delete_comment(self, _repo, comment_id):
+        self.deleted.append(comment_id)
         del self.comments[comment_id]
 
 
@@ -226,6 +228,74 @@ def test_record_command_audit_is_idempotent_per_delivery_and_releases_lock():
     assert lock_item["expires_at"] == 0
     assert "holder" not in lock_item
     assert lock_item["version"] >= 2
+
+
+def test_record_command_audit_merges_existing_duplicate_comments_before_new_row():
+    client = _SimpleAuditClient()
+    client.comments[100] = _append(None, "tf plan infra/a", delivery_id="d1")
+    client.comments[101] = _append(None, "tf plan infra/b", delivery_id="d2")
+
+    kept = record_command_audit(
+        client,
+        "org/repo",
+        7,
+        command_text="tf report",
+        status="accepted",
+        delivery_id="d3",
+        lock_table=FakeLocksTable(),
+        when=_WHEN,
+    )
+
+    assert kept == 100
+    assert client.deleted == [101]
+    assert list(client.comments) == [100]
+    rows = parse_audit_rows(client.comments[100])
+    assert [row[3] for row in rows] == ["d1", "d2", "d3"]
+
+
+def test_record_command_audit_retry_converges_after_partial_duplicate_cleanup():
+    client = _SimpleAuditClient()
+    client.comments[100] = _append(None, "tf plan infra/a", delivery_id="d1")
+    client.comments[101] = _append(None, "tf plan infra/b", delivery_id="d2")
+    failed = False
+    original_delete_comment = client.delete_comment
+
+    def fail_first_delete(repo, comment_id):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise RuntimeError("delete interrupted")
+        original_delete_comment(repo, comment_id)
+
+    client.delete_comment = fail_first_delete
+
+    with pytest.raises(RuntimeError, match="delete interrupted"):
+        record_command_audit(
+            client,
+            "org/repo",
+            7,
+            command_text="tf report",
+            status="accepted",
+            delivery_id="d3",
+            lock_table=FakeLocksTable(),
+            when=_WHEN,
+        )
+
+    kept = record_command_audit(
+        client,
+        "org/repo",
+        7,
+        command_text="tf report",
+        status="accepted",
+        delivery_id="d3",
+        lock_table=FakeLocksTable(),
+        when=_WHEN,
+    )
+
+    assert kept == 100
+    assert list(client.comments) == [100]
+    rows = parse_audit_rows(client.comments[100])
+    assert [row[3] for row in rows] == ["d1", "d2", "d3"]
 
 
 def test_audit_lock_accepts_integral_decimal_versions_and_rejects_fractional():

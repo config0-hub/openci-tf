@@ -13,7 +13,11 @@ from src.core.logging import get_logger
 from src.domain.formatters.artifacts import bound_comment, command_context_block
 from src.domain.formatters.command_text import normalized_command_context_line
 from src.domain.formatters.intent import intent_failure_comment, intent_success_comment
-from src.domain.intent.models import IntentGateFailure, IntentRecord
+from src.domain.intent.models import (
+    IntentGateFailure,
+    IntentRecord,
+    intent_record_matches_current_request,
+)
 from src.platform.aws.intent_registry import IntentRegistryError
 from src.platform.aws.run_registry import set_run_pipeline_metadata
 from src.platform.aws.ssm import get_github_token
@@ -147,20 +151,6 @@ def _compensate_created_intent(
 def _current_pr_head_sha(settings: dict[str, Any], repo: str, pr_number: int) -> str:
     token = get_github_token(settings["ssm_openci_tf_github_token"])
     return GitHubClient(token).get_pr_head_sha(repo, pr_number)
-
-
-def _intent_record_matches_current_request(
-    record: IntentRecord,
-    *,
-    trigger_id: str,
-    pr_number: int,
-    action: str,
-) -> bool:
-    return (
-        record.trigger_id == trigger_id
-        and record.pr_number == pr_number
-        and record.action == action
-    )
 
 
 def _intent_is_not_ready(failures: list[IntentGateFailure]) -> bool:
@@ -333,7 +323,7 @@ def confirm_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 record = get_intent(token)
                 record_matches_current_request = (
                     record is not None
-                    and _intent_record_matches_current_request(
+                    and intent_record_matches_current_request(
                         record,
                         trigger_id=trigger_id,
                         pr_number=pr_number,

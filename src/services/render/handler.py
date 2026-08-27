@@ -28,6 +28,7 @@ from src.domain.formatters.artifacts import (
     summary,
 )
 from src.domain.formatters.console_urls import step_functions_execution_url
+from src.domain.intent.models import intent_record_matches_current_request
 from src.domain.locks import run_lock
 from src.domain.run.outcome import normalize_map_outcome as _outcome
 from src.domain.engine.outer_map_state import _items_for_step
@@ -487,6 +488,28 @@ def _confirm_token_from_event(event: dict[str, Any]) -> str | None:
     return token if isinstance(token, str) and token else None
 
 
+def _intent_record_matches_event(record: dict[str, Any], event: dict[str, Any]) -> bool:
+    webhook = event.get("webhook_info")
+    if not isinstance(webhook, dict):
+        return False
+    trigger_id = webhook.get("trigger_id")
+    pr_number = webhook.get("pr_number")
+    action = event.get("action") or webhook.get("action")
+    if (
+        not isinstance(trigger_id, str)
+        or not isinstance(pr_number, int)
+        or not isinstance(action, str)
+        or not action
+    ):
+        return False
+    return intent_record_matches_current_request(
+        record,
+        trigger_id=trigger_id,
+        pr_number=pr_number,
+        action=action,
+    )
+
+
 def _event_with_recovered_intent_metadata(event: dict[str, Any]) -> dict[str, Any]:
     token = _confirm_token_from_event(event)
     if token is None:
@@ -498,7 +521,7 @@ def _event_with_recovered_intent_metadata(event: dict[str, Any]) -> dict[str, An
     if not needs_record and not needs_body:
         return event
     record = get_intent_record(token)
-    if not record:
+    if not record or not _intent_record_matches_event(record, event):
         return event
     recovered: dict[str, Any] = {}
     if not isinstance(event.get("requested_comment_id"), int) and isinstance(
@@ -787,6 +810,7 @@ def _normalize_config_resolution_error(event: dict[str, Any]) -> dict[str, Any]:
         "requested_comment_body": state.get("requested_comment_body"),
         "intent_comment_id": state.get("intent_comment_id"),
         "consumed_confirm_token": state.get("consumed_confirm_token"),
+        "confirm_token": state.get("confirm_token"),
     }
 
 
