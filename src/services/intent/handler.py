@@ -40,7 +40,12 @@ def _post_comment(webhook_info: dict[str, Any], settings: dict[str, Any], body: 
 
 
 def _with_intent_command_context(
-    webhook_info: dict[str, Any], action: str, body: str
+    webhook_info: dict[str, Any],
+    action: str,
+    body: str,
+    *,
+    comment_removed: bool = True,
+    live_comment_suffix: str | None = None,
 ) -> str:
     repo = webhook_info.get("repo_name")
     pr_number = webhook_info.get("pr_number")
@@ -58,7 +63,8 @@ def _with_intent_command_context(
         commit_hash=webhook_info.get("commit_hash")
         if isinstance(webhook_info.get("commit_hash"), str)
         else None,
-        comment_removed=True,
+        comment_removed=comment_removed,
+        triggering_comment_live_suffix=live_comment_suffix,
     )
     return f"{context}\n\n---\n\n{body}"
 
@@ -141,6 +147,20 @@ def _compensate_created_intent(
 def _current_pr_head_sha(settings: dict[str, Any], repo: str, pr_number: int) -> str:
     token = get_github_token(settings["ssm_openci_tf_github_token"])
     return GitHubClient(token).get_pr_head_sha(repo, pr_number)
+
+
+def _intent_record_matches_current_request(
+    record: IntentRecord,
+    *,
+    trigger_id: str,
+    pr_number: int,
+    action: str,
+) -> bool:
+    return (
+        record.trigger_id == trigger_id
+        and record.pr_number == pr_number
+        and record.action == action
+    )
 
 
 def _record_confirmed_pipeline_metadata(event: dict[str, Any], confirmed: dict[str, Any]) -> None:
@@ -234,7 +254,13 @@ def create_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         ),
         plan_summaries=summaries,
     )
-    body = _with_intent_command_context(webhook, action, body)
+    body = _with_intent_command_context(
+        webhook,
+        action,
+        body,
+        comment_removed=False,
+        live_comment_suffix="cleanup deferred to terminal comment",
+    )
     try:
         intent_comment_id = _post_comment(webhook, settings, body)
     except (BotoCoreError, ClientError, requests.RequestException):
@@ -300,19 +326,29 @@ def confirm_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         if _post_comment(webhook, settings, body) is not None:
             related_ids: list[int | None] = [confirmation_comment_id]
             record = get_intent(token)
-            if record is not None:
+            record_matches_current_request = (
+                record is not None
+                and _intent_record_matches_current_request(
+                    record,
+                    trigger_id=trigger_id,
+                    pr_number=pr_number,
+                    action=action,
+                )
+            )
+            if record_matches_current_request:
                 related_ids.extend([record.intent_comment_id, record.requested_comment_id])
             _delete_comments_after_replacement(webhook, settings, related_ids)
-            _delete_stale_confirm_token_comments_after_replacement(
-                webhook,
-                settings,
-                token,
-                exclude_comment_ids={
-                    comment_id
-                    for comment_id in related_ids
-                    if isinstance(comment_id, int)
-                },
-            )
+            if record is None or record_matches_current_request:
+                _delete_stale_confirm_token_comments_after_replacement(
+                    webhook,
+                    settings,
+                    token,
+                    exclude_comment_ids={
+                        comment_id
+                        for comment_id in related_ids
+                        if isinstance(comment_id, int)
+                    },
+                )
         return {**event, "intent_failed": True, "intent_failures": [item.message for item in failures]}
     _record_confirmed_pipeline_metadata(event, confirmed)
     # The request, intent, and confirmation comments stay until the terminal

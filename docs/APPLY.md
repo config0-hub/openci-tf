@@ -67,14 +67,18 @@ Intent creation (`tf apply <folders>` / `tf destroy <folders>`) still enters the
    (see [docs/GITHUB_WEBHOOK.md](GITHUB_WEBHOOK.md)). The request comment is
    not deleted yet.
 2. Intent creation posts the intent comment with `tf <action> confirm <token>`.
+   Its command context links to the still-live request comment and says cleanup
+   is deferred to the terminal comment.
 3. `tf apply confirm <token>` is recorded as `accepted` with the token redacted.
    `confirm_handler` consumes the token but deletes nothing on success.
 4. The terminal apply/destroy comment is posted with a command context block.
    Only then does the render handler delete the request, intent, and
    confirmation comments by id and sweep bot-authored comments that still
    contain the spent token.
-5. If confirmation fails, the failure comment is posted first and the same
-   three comments are deleted afterwards.
+5. If confirmation fails for the current intent, the failure comment is posted
+   first and the same three comments are deleted afterwards. A token copied from
+   another PR or submitted for the wrong action deletes only the failed
+   confirmation comment.
 
 Early mutation failures (before or during confirmation) render a failure comment
 through `RenderPipelineFailure`; the mutation start input initializes

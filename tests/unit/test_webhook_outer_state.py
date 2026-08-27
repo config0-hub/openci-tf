@@ -62,11 +62,19 @@ def _repository(tmp_path) -> str:
     return str(tmp_path)
 
 
-def _wire_webhook(monkeypatch, clone_dir: str, *, pr_state: str = "open"):
+def _wire_webhook(
+    monkeypatch,
+    clone_dir: str,
+    *,
+    pr_state: str = "open",
+    fail_first_help_delete: bool = False,
+    fail_first_user_delete: bool = False,
+):
     started: list[dict] = []
     posted: list[tuple[str, str]] = []
     deleted: list[int] = []
     audit_bodies: dict[int, str] = {}
+    failed_deletes: set[str] = set()
 
     def fake_start(request):
         from src.services.orchestration.start_run import build_step_function_input
@@ -93,7 +101,22 @@ def _wire_webhook(monkeypatch, clone_dir: str, *, pr_state: str = "open"):
             return cid
 
         def delete_comment(self, repo, comment_id):
+            if (
+                fail_first_help_delete
+                and "help" not in failed_deletes
+                and webhook._TRANSIENT_HELP_MARKER_PREFIX in audit_bodies.get(comment_id, "")
+            ):
+                failed_deletes.add("help")
+                raise requests.RequestException("delete failed")
+            if (
+                fail_first_user_delete
+                and "user" not in failed_deletes
+                and comment_id == 42
+            ):
+                failed_deletes.add("user")
+                raise requests.RequestException("delete failed")
             deleted.append(comment_id)
+            audit_bodies.pop(comment_id, None)
 
         def token_login(self):
             return "openci-bot"
@@ -109,7 +132,18 @@ def _wire_webhook(monkeypatch, clone_dir: str, *, pr_state: str = "open"):
 
         def find_comments_by_body_substring(self, repo, pr, needle):
             return [
-                (cid, "openci-bot")
+                (comment["id"], comment["author_login"])
+                for comment in self.find_comment_details_by_body_substring(repo, pr, needle)
+            ]
+
+        def find_comment_details_by_body_substring(self, repo, pr, needle):
+            return [
+                {
+                    "id": cid,
+                    "author_login": "openci-bot",
+                    "body": body,
+                    "created_at": "2026-08-18T10:03:00+00:00",
+                }
                 for cid, body in audit_bodies.items()
                 if needle in body
             ]
@@ -441,6 +475,60 @@ def test_webhook_unsupported_tf_command_audit_and_transient_help(monkeypatch):
     assert any(cid != 42 for cid in deleted)
 
 
+def test_webhook_rejects_multiline_command_with_collapsed_audit(monkeypatch):
+    started, posted, deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
+    response = webhook.handler(_event("tf plan\ninfra/a"), None)
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["reason"] == "invalid_command"
+    assert started == []
+    audit_body = next(body for body, _ in posted if "## openci-tf commands" in body)
+    assert "| `tf plan infra/a` | not supported |" in audit_body
+    assert 42 in deleted
+
+
+def test_webhook_redelivery_cleans_previous_transient_help(monkeypatch):
+    monkeypatch.setattr(webhook.time, "sleep", lambda _seconds: None)
+    started, posted, deleted, audit = _wire_webhook(
+        monkeypatch,
+        "",
+        pr_state="open",
+        fail_first_help_delete=True,
+    )
+
+    first = webhook.handler(_event("tf banana"), None)
+    second = webhook.handler(_event("tf banana"), None)
+
+    assert first["statusCode"] == 502
+    assert second["statusCode"] == 200
+    assert started == []
+    help_posts = [body for body, _ in posted if "command not accepted" in body]
+    assert len(help_posts) == 2
+    assert all(webhook._TRANSIENT_HELP_MARKER_PREFIX in body for body in help_posts)
+    assert not any("command not accepted" in body for body in audit.values())
+    assert len([comment_id for comment_id in deleted if comment_id != 42]) == 2
+
+
+def test_webhook_redelivery_reuses_closed_pr_acknowledgement(monkeypatch):
+    started, posted, deleted, audit = _wire_webhook(
+        monkeypatch,
+        "",
+        pr_state="closed",
+        fail_first_user_delete=True,
+    )
+
+    first = webhook.handler(_event("tf plan infra/vpc"), None)
+    second = webhook.handler(_event("tf plan infra/vpc"), None)
+
+    assert first["statusCode"] == 502
+    assert second["statusCode"] == 200
+    assert started == []
+    ignore_posts = [body for body, _ in posted if body.startswith("openci-tf ignored")]
+    assert len(ignore_posts) == 1
+    assert webhook._CLOSED_PR_IGNORE_MARKER_PREFIX in ignore_posts[0]
+    assert len([body for body in audit.values() if body.startswith("openci-tf ignored")]) == 1
+    assert deleted == [42]
+
+
 def test_webhook_rejects_tf_plan_all_with_audit_not_supported(monkeypatch):
     started, posted, deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
     response = webhook.handler(_event("tf plan all"), None)
@@ -668,6 +756,9 @@ def test_webhook_closed_pr_rejection_failure_returns_502(monkeypatch):
             return None
 
         def find_comments_by_body_substring(self, *_args, **_kwargs):
+            return []
+
+        def find_comment_details_by_body_substring(self, *_args, **_kwargs):
             return []
 
         def get_comment_body(self, *_args, **_kwargs):

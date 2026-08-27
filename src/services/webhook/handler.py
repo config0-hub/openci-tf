@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
@@ -54,6 +55,9 @@ from src.services.webhook.validate import verify_signature
 logger = get_logger(__name__)
 
 _UNSUPPORTED_REJECTION_SLEEP_SECONDS = 10
+_TRANSIENT_HELP_MARKER_PREFIX = "<!-- openci-tf:transient-help delivery:"
+_CLOSED_PR_IGNORE_MARKER_PREFIX = "<!-- openci-tf:closed-pr-ignore delivery:"
+_MARKER_SUFFIX = " -->"
 # Failures that make an audit row or acknowledgement comment impossible.
 _ACKNOWLEDGEMENT_ERRORS = (
     requests.RequestException,
@@ -84,6 +88,73 @@ def _starts_with_tf_command(text: str) -> bool:
         return False
     first = stripped.split()[0]
     return first.lower() == "tf"
+
+
+def _delivery_marker(prefix: str, delivery_id: str) -> str:
+    return f"{prefix}{delivery_id}{_MARKER_SUFFIX}"
+
+
+def _with_delivery_marker(body: str, marker: str) -> str:
+    return f"{body}\n\n{marker}"
+
+
+def _comment_id(comment: dict[str, str | int]) -> int:
+    comment_id = comment.get("id")
+    if type(comment_id) is not int:
+        raise ValueError("GitHub comment search returned no integer id")
+    return comment_id
+
+
+def _bot_comments_with_marker(
+    client: GitHubClient,
+    repo: str,
+    pr_number: int,
+    marker: str,
+) -> list[int]:
+    bot_login = client.token_login()
+    return [
+        _comment_id(comment)
+        for comment in client.find_comment_details_by_body_substring(
+            repo, pr_number, marker
+        )
+        if comment.get("author_login") == bot_login
+    ]
+
+
+def _delete_bot_comments_with_marker(
+    client: GitHubClient,
+    repo: str,
+    pr_number: int,
+    marker: str,
+) -> None:
+    for comment_id in _bot_comments_with_marker(client, repo, pr_number, marker):
+        delete_acknowledged_command_comment(client, repo, comment_id)
+
+
+def _parse_github_timestamp(value: str) -> datetime:
+    if not value:
+        raise ValueError("GitHub comment search returned no created_at")
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
+def _delete_expired_transient_help_comments(
+    client: GitHubClient,
+    repo: str,
+    pr_number: int,
+    *,
+    now: datetime | None = None,
+) -> None:
+    bot_login = client.token_login()
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(
+        seconds=_UNSUPPORTED_REJECTION_SLEEP_SECONDS
+    )
+    for comment in client.find_comment_details_by_body_substring(
+        repo, pr_number, _TRANSIENT_HELP_MARKER_PREFIX
+    ):
+        if comment.get("author_login") != bot_login:
+            continue
+        if _parse_github_timestamp(str(comment.get("created_at") or "")) <= cutoff:
+            delete_acknowledged_command_comment(client, repo, _comment_id(comment))
 
 
 def _record_audit_and_maybe_delete_command(
@@ -118,6 +189,8 @@ def _handle_unsupported_tf_command(
     comment_body: str,
     delivery_id: str,
 ) -> None:
+    marker = _delivery_marker(_TRANSIENT_HELP_MARKER_PREFIX, delivery_id)
+    _delete_bot_comments_with_marker(client, repo, pr_number, marker)
     record_command_audit(
         client,
         repo,
@@ -127,21 +200,31 @@ def _handle_unsupported_tf_command(
         delivery_id=delivery_id,
         lock_table=locks_table(),
     )
-    rejection_id = client.create_comment(repo, pr_number, unsupported_command_help_comment())
+    rejection_id = client.create_comment(
+        repo,
+        pr_number,
+        _with_delivery_marker(unsupported_command_help_comment(), marker),
+    )
     time.sleep(_UNSUPPORTED_REJECTION_SLEEP_SECONDS)
     delete_acknowledged_command_comment(client, repo, rejection_id)
     delete_acknowledged_command_comment(client, repo, comment_id)
 
 
-def _post_command_rejection_and_cleanup(
+def _post_or_reuse_command_rejection_and_cleanup(
     *,
     client: GitHubClient,
     repo: str,
     pr_number: int,
     comment_id: int | None,
     body: str,
+    delivery_id: str,
 ) -> None:
-    client.create_comment(repo, pr_number, body)
+    marker = _delivery_marker(_CLOSED_PR_IGNORE_MARKER_PREFIX, delivery_id)
+    matches = _bot_comments_with_marker(client, repo, pr_number, marker)
+    for duplicate_comment_id in matches[1:]:
+        delete_acknowledged_command_comment(client, repo, duplicate_comment_id)
+    if not matches:
+        client.create_comment(repo, pr_number, _with_delivery_marker(body, marker))
     delete_acknowledged_command_comment(client, repo, comment_id)
 
 
@@ -226,6 +309,18 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return _response(400, {"error": str(error)})
     if delivery_id is None:
         return _response(400, {"error": "missing GitHub delivery id"})
+    if info.pr_number:
+        try:
+            _delete_expired_transient_help_comments(
+                GitHubClient(token), settings.repo_name, info.pr_number
+            )
+        except _ACKNOWLEDGEMENT_ERRORS as error:
+            logger.warning(
+                "failed to clean stale unsupported-command comments for pr %s: %s",
+                info.pr_number,
+                error,
+            )
+            return _response(502, {"error": "Unable to acknowledge command"})
     if not _has_actionable_command(info):
         return _response(200, {"message": "Event ignored"})
     if info.event_type == "issue_comment" and info.pr_number and pr_state != "open":
@@ -250,12 +345,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 delivery_id=delivery_id,
                 lock_table=locks_table(),
             )
-            _post_command_rejection_and_cleanup(
+            _post_or_reuse_command_rejection_and_cleanup(
                 client=client,
                 repo=settings.repo_name,
                 pr_number=info.pr_number,
                 comment_id=info.comment_id,
                 body=rejection_body,
+                delivery_id=delivery_id,
             )
         except _ACKNOWLEDGEMENT_ERRORS as error:
             logger.warning(

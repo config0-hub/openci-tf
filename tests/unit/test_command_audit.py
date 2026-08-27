@@ -66,6 +66,12 @@ def test_audit_comment_matches_desired_example_shape():
     assert [row[3] for row in parse_audit_rows(body)] == ["d-1", None]
 
 
+def test_append_audit_row_collapses_multiline_commands():
+    body = _append(None, "tf plan\ninfra/a", status="not supported")
+    assert "| `tf plan infra/a` | not supported |" in body
+    assert parse_audit_rows(body)[-1][1] == "tf plan infra/a"
+
+
 def test_append_audit_row_redacts_confirm_tokens():
     when = datetime(2026, 8, 18, 10, 3, tzinfo=timezone.utc)
     body = append_audit_row(

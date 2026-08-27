@@ -1021,9 +1021,10 @@ def test_create_handler_success_keeps_requested_command_until_terminal_render(
         lambda *_args, **_kwargs: None,
     )
     deleted: list[int | None] = []
+    posted: list[str] = []
     monkeypatch.setattr(
         "src.services.intent.handler._post_comment",
-        lambda *_args, **_kwargs: 9001,
+        lambda _webhook, _settings, body: posted.append(body) or 9001,
     )
     monkeypatch.setattr(
         "src.services.intent.handler._delete_triggering_comment_after_replacement",
@@ -1047,6 +1048,12 @@ def test_create_handler_success_keeps_requested_command_until_terminal_render(
 
     assert result["intent_created"] is True
     assert deleted == []
+    assert (
+        "- triggering comment: [44](https://github.com/o/r/pull/1#issuecomment-44)"
+        in posted[0]
+    )
+    assert "cleanup deferred to terminal comment" in posted[0]
+    assert "removed after acknowledgement" not in posted[0]
 
 
 def test_intent_post_comment_bounds_large_command_context(monkeypatch):
@@ -1287,6 +1294,136 @@ def test_confirm_handler_failure_deletes_confirmation_intent_and_requested_comme
     assert result["intent_failed"] is True
     assert deleted_batches == [[55, 11, 10]]
     assert stale_tokens == ["abc123"]
+
+
+def test_confirm_handler_foreign_pr_token_deletes_only_current_confirmation(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "src.services.intent.handler._current_pr_head_sha",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.confirm_intent",
+        lambda **_kwargs: (
+            [IntentGateFailure("confirmation token does not match this pull request")],
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.get_intent",
+        lambda _token: IntentRecord(
+            token="abc123",
+            trigger_id="t",
+            pr_number=1,
+            action="apply",
+            source_run_id="run1",
+            folders=("infra/vpc",),
+            commit_hash="a" * 40,
+            folder_pins=(),
+            expires_at=9999999999,
+            requested_comment_id=10,
+            intent_comment_id=11,
+        ),
+    )
+    deleted_batches: list[list[int | None]] = []
+    stale_tokens: list[str | None] = []
+    monkeypatch.setattr(
+        "src.services.intent.handler._post_comment",
+        lambda *_args, **_kwargs: 9001,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_comments_after_replacement",
+        lambda _webhook, _settings, comment_ids: deleted_batches.append(list(comment_ids)),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_stale_confirm_token_comments_after_replacement",
+        lambda _webhook, _settings, token, **kwargs: stale_tokens.append(token),
+    )
+
+    event = {
+        "action": "apply",
+        "confirm_token": "abc123",
+        "webhook_info": {
+            "pr_number": 2,
+            "trigger_id": "t",
+            "repo_name": "o/r",
+            "comment_id": 55,
+            "comment_body": "tf apply confirm abc123",
+        },
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    result = confirm_handler(event, None)
+
+    assert result["intent_failed"] is True
+    assert deleted_batches == [[55]]
+    assert stale_tokens == []
+
+
+def test_confirm_handler_action_mismatch_deletes_only_current_confirmation(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "src.services.intent.handler._current_pr_head_sha",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.confirm_intent",
+        lambda **_kwargs: (
+            [IntentGateFailure("token is for tf apply, not tf destroy")],
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.get_intent",
+        lambda _token: IntentRecord(
+            token="abc123",
+            trigger_id="t",
+            pr_number=1,
+            action="apply",
+            source_run_id="run1",
+            folders=("infra/vpc",),
+            commit_hash="a" * 40,
+            folder_pins=(),
+            expires_at=9999999999,
+            requested_comment_id=10,
+            intent_comment_id=11,
+        ),
+    )
+    deleted_batches: list[list[int | None]] = []
+    stale_tokens: list[str | None] = []
+    monkeypatch.setattr(
+        "src.services.intent.handler._post_comment",
+        lambda *_args, **_kwargs: 9001,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_comments_after_replacement",
+        lambda _webhook, _settings, comment_ids: deleted_batches.append(list(comment_ids)),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_stale_confirm_token_comments_after_replacement",
+        lambda _webhook, _settings, token, **kwargs: stale_tokens.append(token),
+    )
+
+    event = {
+        "action": "destroy",
+        "confirm_token": "abc123",
+        "webhook_info": {
+            "pr_number": 1,
+            "trigger_id": "t",
+            "repo_name": "o/r",
+            "comment_id": 55,
+            "comment_body": "tf destroy confirm abc123",
+        },
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    result = confirm_handler(event, None)
+
+    assert result["intent_failed"] is True
+    assert deleted_batches == [[55]]
+    assert stale_tokens == []
 
 
 def test_confirm_handler_success_leaves_comments_for_terminal_render(monkeypatch):

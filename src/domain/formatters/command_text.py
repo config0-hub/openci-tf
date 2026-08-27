@@ -35,8 +35,5 @@ def bound_command_line(command_text: str) -> str:
 
 
 def normalized_command_context_line(command_text: str) -> str:
-    """Return the single redacted, whitespace-collapsed, bounded command line."""
-    first_line = (
-        command_text.strip().splitlines()[0].strip() if command_text.strip() else ""
-    )
-    return bound_command_line(sanitize_command_line(redact_confirm_token(first_line)))
+    """Return the redacted, whitespace-collapsed, bounded command line."""
+    return bound_command_line(sanitize_command_line(redact_confirm_token(command_text)))

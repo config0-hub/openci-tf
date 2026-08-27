@@ -33,6 +33,8 @@ _PIPELINE_STEP = re.compile(r"^[1-9][0-9]*$")
 
 
 def parse_command(text: str) -> Command:
+    if "\n" in text or "\r" in text:
+        raise ParseError("tf commands must be a single line")
     tokens = text.strip().split()
     if len(tokens) < 2 or tokens[0].lower() != "tf":
         raise ParseError("expected: tf <verb> [folder-or-csv]")

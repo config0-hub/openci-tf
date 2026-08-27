@@ -103,10 +103,21 @@ class GitHubClient:
         self, repo: str, pr_number: int, needle: str
     ) -> list[tuple[int, str]]:
         """Find ``(comment_id, author_login)`` for PR comments whose body contains ``needle``."""
+        return [
+            (comment["id"], comment["author_login"])
+            for comment in self.find_comment_details_by_body_substring(
+                repo, pr_number, needle
+            )
+        ]
+
+    def find_comment_details_by_body_substring(
+        self, repo: str, pr_number: int, needle: str
+    ) -> list[dict[str, str | int]]:
+        """Find PR comment details for comments whose body contains ``needle``."""
         if not needle:
             return []
         url = f"{GITHUB_API}/repos/{repo}/issues/{pr_number}/comments"
-        matches: list[tuple[int, str]] = []
+        matches: list[dict[str, str | int]] = []
         page = 1
         while True:
             resp = self.session.get(url, params={"page": page, "per_page": 100})
@@ -117,7 +128,15 @@ class GitHubClient:
             for comment in comments:
                 if needle in comment.get("body", ""):
                     login = (comment.get("user") or {}).get("login")
-                    matches.append((comment["id"], login if isinstance(login, str) else ""))
+                    created_at = comment.get("created_at")
+                    matches.append(
+                        {
+                            "id": comment["id"],
+                            "author_login": login if isinstance(login, str) else "",
+                            "body": comment.get("body", ""),
+                            "created_at": created_at if isinstance(created_at, str) else "",
+                        }
+                    )
             page += 1
         return matches
 

@@ -187,12 +187,14 @@ def _triggering_comment_line(
     *,
     comment_link: str | None = None,
     removed: bool = False,
+    live_suffix: str | None = None,
 ) -> str | None:
     if comment_id is None:
         return None
     if removed or not comment_link:
         return f"- triggering comment id: `{comment_id}` (removed after acknowledgement)"
-    return f"- triggering comment: [{comment_id}]({comment_link})"
+    suffix = f" ({live_suffix})" if live_suffix else ""
+    return f"- triggering comment: [{comment_id}]({comment_link}){suffix}"
 
 
 def command_context_block(
@@ -207,6 +209,7 @@ def command_context_block(
     run_id: str | None = None,
     commit_hash: str | None = None,
     comment_removed: bool = False,
+    triggering_comment_live_suffix: str | None = None,
     pipeline: str | None = None,
     pipeline_step: int | None = None,
 ) -> str:
@@ -225,6 +228,7 @@ def command_context_block(
         comment_id,
         comment_link=comment_link,
         removed=comment_removed,
+        live_suffix=triggering_comment_live_suffix,
     )
     if trigger_line:
         lines.append(trigger_line)
