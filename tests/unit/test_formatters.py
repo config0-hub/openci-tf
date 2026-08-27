@@ -124,6 +124,39 @@ def test_folder_comment_uses_terraform_heading_for_plan():
         assert heading in rendered
 
 
+def test_folder_comment_redacts_confirm_token_in_artifact_output():
+    rendered = folder_comment(
+        "infra/good",
+        {"status": "succeeded", "account_id": "123456789012"},
+        {
+            "init.out": "init ok",
+            "validate.out": "Success! The configuration is valid.",
+            "tf/plan.out": 'output message = "confirm abc123"',
+            "tfsec.json": '{"results":[]}',
+            "infracost.json": '{"totalMonthlyCost":"0"}',
+        },
+        action="plan",
+    )
+    assert "confirm abc123" not in rendered
+    assert "confirm <redacted>" in rendered
+
+
+def test_folder_comment_redacts_confirm_token_in_terminal_error():
+    rendered = folder_comment(
+        "infra/good",
+        {
+            "status": "failed",
+            "succeeded": False,
+            "account_id": "123456789012",
+            "error": "terraform failed after confirm abc123",
+        },
+        {},
+        action="plan",
+    )
+    assert "confirm abc123" not in rendered
+    assert "confirm <redacted>" in rendered
+
+
 def test_folder_comment_plan_destroy_uses_destroy_output_and_pointer():
     rendered = folder_comment(
         "infra/good",

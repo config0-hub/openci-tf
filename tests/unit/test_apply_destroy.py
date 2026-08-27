@@ -1306,6 +1306,18 @@ def test_create_handler_ambiguous_post_sweeps_bot_token_comment_and_invalidates_
                 if needle in comment["body"]
             ]
 
+        def find_comment_details_by_body_substring(self, _repo, _pr, needle):
+            return [
+                {
+                    "id": comment["id"],
+                    "author_login": comment["login"],
+                    "body": comment["body"],
+                    "created_at": "2026-01-01T00:00:00Z",
+                }
+                for comment in comments
+                if needle in comment["body"]
+            ]
+
         def delete_comment(self, _repo, comment_id):
             deleted.append(comment_id)
 

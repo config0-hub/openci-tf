@@ -70,7 +70,8 @@ def _neutralize_comment_identity_lines(text: str) -> str:
 
 
 def _fenced_block(text: str, language: str = "") -> str:
-    neutralized = _neutralize_comment_identity_lines(text)
+    redacted = redact_confirm_token(text)
+    neutralized = _neutralize_comment_identity_lines(redacted)
     fence = "```"
     while fence in neutralized:
         fence += "`"
@@ -695,7 +696,7 @@ def _format_error(outcome: dict[str, Any]) -> str:
     )
     if not isinstance(bounded, str):
         raise TypeError("folder terminal error must be a string")
-    return bounded
+    return redact_confirm_token(bounded)
 
 
 def _terminal_status(outcomes: list[dict[str, Any]]) -> str:

@@ -46,7 +46,10 @@ from src.platform.github.command_comment_cleanup import (
     delete_stale_confirm_token_comments,
     defer_command_comment_cleanup,
 )
-from src.domain.github.comment_object_id import should_emit_comment_object_marker
+from src.domain.github.comment_object_id import (
+    body_is_confirm_intent_comment,
+    should_emit_comment_object_marker,
+)
 from src.services.render.artifact_access import (
     _artifact_list_prefix,
     _fetch_source_plan_text,
@@ -578,6 +581,9 @@ def _cleanup_terminal_mutation_comments_once(
                     for comment_id in explicit_ids
                     if isinstance(comment_id, int)
                 },
+                should_delete_body=lambda body: body_is_confirm_intent_comment(
+                    body, stale_token
+                ),
             )
         )
     return warnings

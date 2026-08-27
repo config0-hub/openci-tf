@@ -240,9 +240,10 @@ To require an approved PR review before an intent is created, register the
 repository with `just register-repo ... --require-approval` (per-repo DynamoDB flag).
 
 Mutation is always a two-step, single-use-token flow against a fresh plan at
-the unchanged PR head SHA. Run `tf plan` before apply or `tf plan --destroy`
-before destroy, then follow the posted `tf apply confirm <token>` or
-`tf destroy confirm <token>` command. See [APPLY.md](APPLY.md) for all gates,
+the unchanged PR head SHA. Run `tf plan <folder-or-csv>` before apply or
+`tf plan --destroy <folder-or-csv>` before destroy, then follow the posted
+`tf apply confirm <token>` or `tf destroy confirm <token>` command. See
+[APPLY.md](APPLY.md) for all gates,
 commands, token lifetime, and artifact paths.
 
 ## Run artifact layout (tmp bucket)
@@ -375,10 +376,10 @@ keep an S3-only backend; the lock table is required by repository execution.
 The install control-plane state, the `source/` record, and `engine/` artifacts
 in the same bucket are explicitly denied to executors.
 
-Open a same-repository PR and comment `tf plan` or `tf plan <folder>` for the
-first safe run. With the account and folder gates enabled, use `tf apply`
-or create a destroy plan with `tf plan --destroy`; both mutation paths require
-the confirmation command posted by openci-tf. See [APPLY.md](APPLY.md).
+Open a same-repository PR and comment `tf plan <folder-or-csv>` or `tf report`
+for the first safe run. With the account and folder gates enabled, use `tf apply`
+or create a destroy plan with `tf plan --destroy <folder-or-csv>`; both mutation
+paths require the confirmation command posted by openci-tf. See [APPLY.md](APPLY.md).
 (`just uninstall` destroying the installation itself remains operator tooling,
 not a CI verb.)
 

@@ -24,6 +24,12 @@ _COMMANDS_RUN_MARKER = re.compile(
     r"pr-(?P<pr>\d+)::"
     r"commands-run\s*$"
 )
+_INTENT_HEADING = re.compile(r"^## tf (?P<action>apply|destroy) intent created$")
+_INTENT_CONFIRM_LINE = re.compile(
+    r"^To proceed within 10 min: `tf (?P<action>apply|destroy) confirm (?P<token>\S+)`$"
+)
+_TERMINAL_MUTATION_HEADING = re.compile(r"^## (?P<action>Apply|Destroy) (succeeded|failed)\b")
+_CODE_FENCE_START = re.compile(r"^\s*(?P<fence>`{3,}).*$")
 _STATUS_COMMENT_PREFIX = "#openci-tf:::status_comment\t"
 _MARKER = re.compile(
     r"^comment_object_id:\s*"
@@ -125,6 +131,24 @@ def _last_non_empty_line(body: str) -> str | None:
     return None
 
 
+def _non_empty_lines_outside_code_fences(body: str) -> list[str]:
+    lines: list[str] = []
+    open_fence: str | None = None
+    for line in body.splitlines():
+        stripped = line.strip()
+        if open_fence is not None:
+            if stripped.startswith(open_fence):
+                open_fence = None
+            continue
+        fence_match = _CODE_FENCE_START.match(stripped)
+        if fence_match is not None:
+            open_fence = fence_match.group("fence")
+            continue
+        if stripped:
+            lines.append(stripped)
+    return lines
+
+
 def parse_commands_run_marker(line: str) -> dict[str, str] | None:
     match = _COMMANDS_RUN_MARKER.match(line.strip())
     if match is None:
@@ -143,6 +167,38 @@ def find_commands_run_marker(body: str) -> dict[str, str] | None:
 
 def body_has_commands_run_audit_marker(body: str) -> bool:
     return find_commands_run_marker(body) is not None
+
+
+def find_confirm_intent_marker(body: str) -> dict[str, str] | None:
+    heading_action: str | None = None
+    for line in _non_empty_lines_outside_code_fences(body):
+        heading = _INTENT_HEADING.match(line)
+        if heading is not None:
+            heading_action = heading.group("action")
+            continue
+        if heading_action is None:
+            continue
+        confirm = _INTENT_CONFIRM_LINE.match(line)
+        if confirm is not None and confirm.group("action") == heading_action:
+            return {"action": heading_action, "token": confirm.group("token")}
+    return None
+
+
+def body_has_confirm_intent_marker(body: str, token: str) -> bool:
+    marker = find_confirm_intent_marker(body)
+    return marker is not None and marker["token"] == token.strip()
+
+
+def body_is_confirm_intent_comment(body: str, token: str) -> bool:
+    classification = classify_comment_body(body)
+    return classification is not None and classification.kind == "intent" and body_has_confirm_intent_marker(body, token)
+
+
+def body_has_terminal_mutation_heading(body: str) -> bool:
+    return any(
+        _TERMINAL_MUTATION_HEADING.match(line) is not None
+        for line in _non_empty_lines_outside_code_fences(body)
+    )
 
 
 def find_trailing_comment_object_marker(body: str) -> dict[str, str] | None:
@@ -197,6 +253,11 @@ def classify_comment_body(body: str) -> CommentBodyClassification | None:
             comment_type=managed["comment_type"],
             folder=managed["folder"],
         )
+    intent = find_confirm_intent_marker(body)
+    if intent is not None:
+        return CommentBodyClassification("intent", comment_type=intent["action"])
+    if body_has_terminal_mutation_heading(body):
+        return CommentBodyClassification("terminal")
     return None
 
 

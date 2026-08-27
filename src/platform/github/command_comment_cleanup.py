@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import requests
 
 from src.platform.github.client import GitHubClient
@@ -49,21 +51,31 @@ def delete_stale_confirm_token_comments(
     token: str | None,
     *,
     exclude_comment_ids: set[int] | None = None,
+    should_delete_body: Callable[[str], bool] | None = None,
 ) -> list[str]:
-    """Delete bot-authored PR comments still containing a one-time confirm token.
+    """Delete structurally identified intent comments for a one-time token.
 
-    Only comments written by the token owner (the bot login) are swept. A human
-    comment that merely quotes ``confirm <token>`` is never deleted by content.
-    Non-404 deletion failures raise.
+    A bot-authored result, audit, or terminal comment is not deleted merely
+    because it contains ``confirm <token>`` in rendered output. Non-404 deletion
+    failures raise.
     """
     if not isinstance(token, str) or not token.strip():
         return []
+    if should_delete_body is None:
+        raise ValueError("stale confirm token cleanup requires a structural body predicate")
     excluded = exclude_comment_ids or set()
     needle = f"confirm {token.strip()}"
     bot_login = client.token_login()
     warnings: list[str] = []
-    for comment_id, author_login in client.find_comments_by_body_substring(repo, pr_number, needle):
-        if comment_id in excluded or author_login != bot_login:
+    for comment in client.find_comment_details_by_body_substring(repo, pr_number, needle):
+        comment_id = comment["id"]
+        author_login = comment["author_login"]
+        body = comment["body"]
+        if not isinstance(comment_id, int) or comment_id in excluded:
+            continue
+        if author_login != bot_login or not isinstance(body, str):
+            continue
+        if not should_delete_body(body):
             continue
         warnings.extend(delete_acknowledged_command_comment(client, repo, comment_id))
     return warnings

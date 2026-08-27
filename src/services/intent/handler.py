@@ -18,6 +18,7 @@ from src.domain.formatters.artifacts import (
 )
 from src.domain.formatters.command_text import normalized_command_context_line
 from src.domain.formatters.intent import intent_failure_comment, intent_success_comment
+from src.domain.github.comment_object_id import body_is_confirm_intent_comment
 from src.domain.intent.models import (
     IntentGateFailure,
     IntentRecord,
@@ -149,6 +150,9 @@ def _delete_stale_confirm_token_comments_after_replacement(
         pr_number,
         confirm_token,
         exclude_comment_ids=exclude_comment_ids,
+        should_delete_body=lambda body: body_is_confirm_intent_comment(
+            body, str(confirm_token or "")
+        ),
     )
     for warning in warnings:
         logger.warning(warning)
