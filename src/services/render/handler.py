@@ -5,9 +5,11 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any, cast
 
 import boto3  # type: ignore[import-not-found]
+import requests
 
 from src.core.logging import get_logger
 from src.core.models import DEFAULT_APPLY_GRACE_SECONDS, DEFAULT_DESTROY_GRACE_SECONDS
@@ -69,6 +71,8 @@ from src.services.render.registry_update import (
 )
 
 _FAILED_OUTCOME_STATUSES = frozenset({"failed", "infrastructure_error"})
+_TERMINAL_CLEANUP_ATTEMPTS = 3
+_TERMINAL_CLEANUP_RETRY_SECONDS = 0.25
 
 logger = get_logger(__name__)
 
@@ -514,7 +518,7 @@ def _event_with_recovered_intent_metadata(event: dict[str, Any]) -> dict[str, An
     return {**event, **recovered}
 
 
-def _cleanup_terminal_mutation_comments(
+def _cleanup_terminal_mutation_comments_once(
     client: GitHubClient,
     repo: str,
     pr: int,
@@ -554,6 +558,22 @@ def _cleanup_terminal_mutation_comments(
             )
         )
     return warnings
+
+
+def _cleanup_terminal_mutation_comments(
+    client: GitHubClient,
+    repo: str,
+    pr: int,
+    event: dict[str, Any],
+) -> list[str]:
+    for attempt in range(_TERMINAL_CLEANUP_ATTEMPTS):
+        try:
+            return _cleanup_terminal_mutation_comments_once(client, repo, pr, event)
+        except requests.RequestException:
+            if attempt == _TERMINAL_CLEANUP_ATTEMPTS - 1:
+                raise
+            time.sleep(_TERMINAL_CLEANUP_RETRY_SECONDS)
+    raise RuntimeError("terminal mutation cleanup retry loop exhausted")
 
 
 def _render_pipeline_failure(event: dict[str, Any]) -> dict[str, Any]:

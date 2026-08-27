@@ -12,6 +12,7 @@ from src.domain.formatters.console_urls import (
     step_functions_execution_url,
 )
 from src.domain.formatters.artifacts import (
+    bound_comment,
     command_context_block,
     mutation_command_context_block,
     mutation_status_comment_in_progress,
@@ -164,5 +165,5 @@ def publish_codebuild_link(
     token = get_github_token(ssm_github_token_path)
     client = GitHubClient(token)
     tag = generate_search_tag(repo_name, pr_number, f"folder-{folder}")
-    client.delete_and_repost(repo_name, pr_number, body, tag)
+    client.delete_and_repost(repo_name, pr_number, bound_comment(body), tag)
     return {"updated": True, "codebuild_url": codebuild_url}

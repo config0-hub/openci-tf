@@ -25,8 +25,10 @@ from src.domain.intent.models import FolderPlanPin, IntentGateFailure, IntentRec
 from src.domain.intent.token import mint_token
 from src.services.intent.confirm import confirm_intent
 from src.services.intent.create import IntentCreationError, create_intent
+from src.services.intent import handler as intent_handler
 from src.services.intent.handler import confirm_handler, create_handler
 from src.services.intent.registry import mark_intent_used, put_intent, get_intent
+from src.platform.aws.intent_registry import IntentRegistryError
 from src.platform.aws.run_registry import RunRegistryError
 from src.services.render.handler import _pipeline_apply_footer
 
@@ -1044,6 +1046,103 @@ def test_create_handler_success_keeps_requested_command_until_terminal_render(
 
     assert result["intent_created"] is True
     assert deleted == []
+
+
+def test_intent_post_comment_bounds_large_command_context(monkeypatch):
+    captured: list[str] = []
+
+    class Client:
+        def __init__(self, _token):
+            pass
+
+        def create_comment(self, _repo, _pr, body):
+            captured.append(body)
+            return 9001
+
+    monkeypatch.setattr(intent_handler, "get_github_token", lambda _path: "token")
+    monkeypatch.setattr(intent_handler, "GitHubClient", Client)
+    huge_command = "tf " + (" " * 65_520) + "apply a"
+    body = intent_handler._with_intent_command_context(
+        {"repo_name": "o/r", "pr_number": 1, "comment_id": 44, "comment_body": huge_command},
+        "apply",
+        "## confirm",
+    )
+
+    comment_id = intent_handler._post_comment(
+        {"repo_name": "o/r", "pr_number": 1},
+        {"ssm_openci_tf_github_token": "/token"},
+        body,
+    )
+
+    assert comment_id == 9001
+    assert len(captured[0]) <= 65_536
+    assert "tf apply a" in captured[0]
+
+
+def test_create_handler_metadata_failure_deletes_intent_comment_and_invalidates_token(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "src.services.intent.handler._current_pr_head_sha",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.create_intent",
+        lambda **_kwargs: (
+            None,
+            {
+                "token": "abc123",
+                "trigger_id": "t",
+                "pr_number": 1,
+                "action": "apply",
+                "source_run_id": "plan-run",
+                "folders": ["infra/vpc"],
+                "commit_hash": "a" * 40,
+                "expires_at": 9999999999,
+            },
+        ),
+    )
+
+    def fail_metadata(*_args, **_kwargs):
+        raise IntentRegistryError("dynamodb failed")
+
+    deleted_batches: list[list[int | None]] = []
+    deleted_tokens: list[str] = []
+    monkeypatch.setattr(
+        "src.services.intent.handler.store_intent_comment_metadata",
+        fail_metadata,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._post_comment",
+        lambda *_args, **_kwargs: 9001,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_comments_after_replacement",
+        lambda _webhook, _settings, comment_ids: deleted_batches.append(list(comment_ids)),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.delete_intent",
+        lambda token: deleted_tokens.append(token),
+    )
+
+    event = {
+        "action": "apply",
+        "folders": ["infra/vpc"],
+        "webhook_info": {
+            "pr_number": 1,
+            "trigger_id": "t",
+            "repo_name": "o/r",
+            "comment_id": 44,
+            "comment_body": "tf apply infra/vpc",
+        },
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    with pytest.raises(IntentRegistryError, match="dynamodb failed"):
+        create_handler(event, None)
+
+    assert deleted_batches == [[9001]]
+    assert deleted_tokens == ["abc123"]
 
 
 def test_confirm_handler_failure_deletes_confirmation_intent_and_requested_comments(

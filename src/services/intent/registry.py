@@ -6,6 +6,7 @@ from __future__ import annotations
 from src.domain.intent.models import FolderPlanPin, IntentRecord
 from src.platform.aws.intent_registry import (
     IntentRegistryError,
+    delete_intent_record,
     get_intent_record,
     mark_intent_record_used,
     put_intent_record,
@@ -132,3 +133,7 @@ def store_intent_comment_metadata(
         requested_comment_body=requested_comment_body,
         intent_comment_id=intent_comment_id,
     )
+
+
+def delete_intent(token: str) -> None:
+    delete_intent_record(token)

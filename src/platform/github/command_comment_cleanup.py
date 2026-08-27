@@ -6,10 +6,7 @@ from __future__ import annotations
 
 import requests
 
-from src.core.logging import get_logger
 from src.platform.github.client import GitHubClient
-
-logger = get_logger(__name__)
 
 
 def delete_acknowledged_command_comment(
@@ -25,13 +22,7 @@ def delete_acknowledged_command_comment(
     except requests.HTTPError as error:
         if error.response is not None and error.response.status_code == 404:
             return []
-        warning = f"failed to delete acknowledged command comment {comment_id}: {error}"
-        logger.warning(warning)
-        return [warning]
-    except requests.RequestException as error:
-        warning = f"failed to delete acknowledged command comment {comment_id}: {error}"
-        logger.warning(warning)
-        return [warning]
+        raise
     return []
 
 
@@ -40,7 +31,7 @@ def delete_acknowledged_command_comments(
     repo: str,
     comment_ids: list[int | None],
 ) -> list[str]:
-    """Delete multiple acknowledged command comments; returns accumulated warnings."""
+    """Delete multiple acknowledged command comments; raises on non-404 failures."""
     warnings: list[str] = []
     seen: set[int] = set()
     for comment_id in comment_ids:
@@ -63,6 +54,7 @@ def delete_stale_confirm_token_comments(
 
     Only comments written by the token owner (the bot login) are swept. A human
     comment that merely quotes ``confirm <token>`` is never deleted by content.
+    Non-404 deletion failures raise.
     """
     if not isinstance(token, str) or not token.strip():
         return []

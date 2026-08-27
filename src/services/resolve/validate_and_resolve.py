@@ -39,6 +39,7 @@ from src.domain.engine.outer_map_state import (
     build_compact_resolve_result,
     validate_folder_config_outer_size,
 )
+from src.domain.formatters.command_text import normalized_command_context_line
 from src.domain.locks import run_lock
 from src.domain.run.limits import MAX_FOLDERS_PER_REQUEST
 from src.platform.aws.run_registry import set_run_deadline
@@ -213,11 +214,19 @@ def _mutation_command_context(event: dict[str, Any]) -> dict[str, Any]:
     for key in ("comment_id", "comment_body"):
         value = webhook.get(key)
         if value is not None:
-            context[key] = value
+            context[key] = (
+                normalized_command_context_line(value)
+                if key == "comment_body" and isinstance(value, str)
+                else value
+            )
     for key in ("requested_comment_id", "requested_comment_body", "intent_comment_id"):
         value = event.get(key)
         if value is not None:
-            context[key] = value
+            context[key] = (
+                normalized_command_context_line(value)
+                if key == "requested_comment_body" and isinstance(value, str)
+                else value
+            )
     return context
 
 

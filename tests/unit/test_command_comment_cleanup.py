@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from unittest.mock import Mock
 
+import pytest
 import requests
 
 from src.platform.github.command_comment_cleanup import (
@@ -47,6 +48,13 @@ def test_delete_acknowledged_command_comment_treats_missing_as_non_fatal():
     client = _Client(delete_error=requests.HTTPError(response=response))
     warnings = delete_acknowledged_command_comment(client, "o/r", 99)
     assert warnings == []
+
+
+def test_delete_acknowledged_command_comment_raises_non_404():
+    response = Mock(status_code=403)
+    client = _Client(delete_error=requests.HTTPError(response=response))
+    with pytest.raises(requests.HTTPError):
+        delete_acknowledged_command_comment(client, "o/r", 99)
 
 
 def test_delete_stale_confirm_token_comments_skips_excluded_ids():

@@ -129,6 +129,14 @@ def test_parse_command_timestamp_inverts_format():
     assert parse_command_timestamp("2026-08-18 10:03 UTC") == _WHEN
 
 
+def test_append_audit_row_fails_loud_on_malformed_existing_row():
+    body = _append(None, "tf report", delivery_id="guid-1")
+    malformed = body.replace("| `tf report` | accepted |", "| `tf report` | ACCEPTED |")
+    with pytest.raises(ValueError, match="unparseable audit row"):
+        _append(malformed, "tf plan infra/a", delivery_id="guid-2")
+    assert "ACCEPTED" in malformed
+
+
 def test_append_audit_row_skips_duplicate_delivery_id():
     body = _append(None, "tf plan infra/a", delivery_id="guid-1")
     again = _append(body, "tf plan infra/a", delivery_id="guid-1")
@@ -206,7 +214,48 @@ def test_record_command_audit_is_idempotent_per_delivery_and_releases_lock():
         )
     assert [row[1] for row in parse_audit_rows(client.comments[100])] == ["tf plan infra/a"]
     assert client.updates == 0
-    assert table.items == {}
+    lock_item = table.items[("audit-lock", "org/repo#pr-7")]
+    assert lock_item["expires_at"] == 0
+    assert "holder" not in lock_item
+    assert lock_item["version"] >= 2
+
+
+def test_record_command_audit_rereads_after_fence_failure(monkeypatch):
+    client = _SimpleAuditClient()
+    client.comments[100] = _append(None, "tf plan old", delivery_id="old")
+    table = FakeLocksTable()
+
+    class FenceFailOnceTable(FakeLocksTable):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed_fence = False
+
+        def update_item(self, **kwargs):
+            values = kwargs.get("ExpressionAttributeValues") or {}
+            if ":version" in values and not self.failed_fence:
+                self.failed_fence = True
+                client.comments[100] = _append(client.comments[100], "tf plan infra/b", delivery_id="b")
+                item = self.items[("audit-lock", "org/repo#pr-7")]
+                item["version"] += 1
+                item["expires_at"] = 0
+                item.pop("holder", None)
+                raise ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem")
+            return super().update_item(**kwargs)
+
+    table = FenceFailOnceTable()
+    record_command_audit(
+        client,
+        "org/repo",
+        7,
+        command_text="tf plan infra/a",
+        status="accepted",
+        delivery_id="a",
+        lock_table=table,
+        when=_WHEN,
+    )
+
+    rows = parse_audit_rows(client.comments[100])
+    assert [row[3] for row in rows] == ["old", "b", "a"]
 
 
 def test_record_command_audit_retries_then_fails_on_lock_contention(monkeypatch):
@@ -226,8 +275,8 @@ def test_record_command_audit_retries_then_fails_on_lock_contention(monkeypatch)
 
 def test_record_command_audit_propagates_non_condition_dynamo_errors():
     class BrokenTable:
-        def put_item(self, **_kwargs):
-            raise ClientError({"Error": {"Code": "ProvisionedThroughputExceededException"}}, "PutItem")
+        def update_item(self, **_kwargs):
+            raise ClientError({"Error": {"Code": "ProvisionedThroughputExceededException"}}, "UpdateItem")
 
     with pytest.raises(ClientError):
         record_command_audit(

@@ -10,7 +10,7 @@ import pytest
 import requests
 
 from src.services.render import handler as render
-from src.services.render.comments import _with_command_context
+from src.services.render.comments import _delete_generated_comment, _with_command_context
 
 _FULL_SHA = "a" * 40
 _CLONE_TOKEN = "/openci-tf/github-token"
@@ -52,6 +52,26 @@ def test_with_command_context_prefixes_body_for_github_pr():
     assert body.startswith("### openci-tf command")
     assert "---" in body
     assert "## status" in body
+
+
+def test_generated_marker_cleanup_deletes_only_bot_comments():
+    marker_deleted: list[int] = []
+
+    class Client:
+        def token_login(self):
+            return "openci-bot"
+
+        def find_comments_by_body_substring(self, _repo, _pr, needle):
+            if "comment_object_id:" in needle:
+                return [(100, "openci-bot"), (101, "alice")]
+            return []
+
+        def delete_comment(self, _repo, comment_id):
+            marker_deleted.append(comment_id)
+
+    _delete_generated_comment(Client(), "org/repo", 7, "plan", "infra/a")
+
+    assert marker_deleted == [100]
 
 
 def test_terminal_apply_deletes_request_intent_and_confirm_comments(monkeypatch):
@@ -126,7 +146,7 @@ def test_terminal_apply_deletes_request_intent_and_confirm_comments(monkeypatch)
     assert swept_tokens == ["deadbeef"]
 
 
-def test_render_cleanup_warning_surfaces_on_result(monkeypatch):
+def test_render_cleanup_failure_raises(monkeypatch):
     monkeypatch.setenv("LOCKS_TABLE_NAME", "locks")
     monkeypatch.setenv("TMP_BUCKET_NAME", "tmp")
     monkeypatch.setattr(render, "get_github_token", lambda _: "token")
@@ -138,8 +158,11 @@ def test_render_cleanup_warning_surfaces_on_result(monkeypatch):
     monkeypatch.setattr(render, "_delete_generated_comment", lambda *_, **__: None)
 
     class Client:
-        def find_comments_by_tag(self, *_args):
-            return [1]
+        def token_login(self):
+            return "openci-bot"
+
+        def find_comments_by_body_substring(self, *_args):
+            return [(1, "openci-bot")]
 
         def delete_comment(self, _repo, comment_id):
             if comment_id == 1:
@@ -147,11 +170,38 @@ def test_render_cleanup_warning_surfaces_on_result(monkeypatch):
 
     monkeypatch.setattr(render, "GitHubClient", lambda _: Client())
 
-    result = render.handler(_plan_event(), None)
+    with pytest.raises(requests.RequestException, match="github delete failed"):
+        render.handler(_plan_event(), None)
 
-    assert result["rendered"] is True
-    assert result["comment_cleanup_warnings"]
-    assert "github delete failed" in result["comment_cleanup_warnings"][0]
+
+def test_terminal_mutation_cleanup_retries_then_raises(monkeypatch):
+    monkeypatch.setattr(render.time, "sleep", lambda _seconds: None)
+    attempts = 0
+
+    class Client:
+        pass
+
+    def fail_cleanup_once(_client, _repo, _ids):
+        nonlocal attempts
+        attempts += 1
+        raise requests.RequestException("delete failed")
+
+    monkeypatch.setattr(render, "delete_acknowledged_command_comments", fail_cleanup_once)
+
+    with pytest.raises(requests.RequestException, match="delete failed"):
+        render._cleanup_terminal_mutation_comments(
+            Client(),
+            "org/repo",
+            7,
+            _plan_event(
+                action="apply",
+                requested_comment_id=10,
+                intent_comment_id=11,
+                webhook_info={"comment_id": 55, "action": "apply"},
+            ),
+        )
+
+    assert attempts == 3
 
 
 def test_pipeline_failure_deletes_mutation_command_comments_and_sweeps_token(monkeypatch):

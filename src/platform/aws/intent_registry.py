@@ -56,6 +56,10 @@ def get_intent_record(token: str) -> dict[str, Any] | None:
     return item
 
 
+def delete_intent_record(token: str) -> None:
+    _table().delete_item(Key={"pk": intent_pk(token), "sk": intent_sk()})
+
+
 def update_intent_comment_metadata(
     token: str,
     *,

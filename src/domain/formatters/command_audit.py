@@ -4,12 +4,17 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 from datetime import datetime, timezone
 
 from src.domain.command.grammar import accepted_verbs
-from src.domain.formatters.artifacts import _redact_confirm_token
+from src.domain.formatters.command_text import (
+    MAX_COMMAND_CONTEXT_CHARS,
+    bound_command_line,
+    normalized_command_context_line,
+    redact_confirm_token,
+    sanitize_command_line,
+)
 
 _TABLE_HEADER = "| Time | Command | Status |"
 _TABLE_SEP = "|------|---------|--------|"
@@ -22,27 +27,20 @@ _ROW_RE = re.compile(
     r"\s*(?:<!-- d:(?P<delivery>[^\s>]+) -->)?\s*$"
 )
 MAX_AUDIT_ROWS = 200
-MAX_AUDIT_COMMAND_CHARS = 200
+MAX_AUDIT_COMMAND_CHARS = MAX_COMMAND_CONTEXT_CHARS
 # GitHub rejects comment bodies over 65,536 characters; stay well below that.
 MAX_AUDIT_BODY_CHARS = 60_000
-_TRUNCATION_HASH_CHARS = 12
-
 AuditRow = tuple[str, str, str, str | None]
 
 
 def bound_audit_command(command_text: str) -> str:
     """Cap a command cell at MAX_AUDIT_COMMAND_CHARS, suffixing a sha256 prefix when cut."""
-    if len(command_text) <= MAX_AUDIT_COMMAND_CHARS:
-        return command_text
-    digest = hashlib.sha256(command_text.encode("utf-8")).hexdigest()[:_TRUNCATION_HASH_CHARS]
-    return f"{command_text[:MAX_AUDIT_COMMAND_CHARS]} [truncated sha256:{digest}]"
+    return bound_command_line(command_text)
 
 
 def sanitize_audit_command(command_text: str) -> str:
     """Collapse whitespace, drop backticks, and escape pipes for a table cell."""
-    collapsed = " ".join(command_text.split()).replace("`", "")
-    unescaped = collapsed.replace("\\|", "|")
-    return unescaped.replace("|", "\\|")
+    return sanitize_command_line(command_text)
 
 
 def _usage_fragments() -> list[str]:
@@ -102,9 +100,17 @@ def format_commands_run_marker(repo_name: str, pr_number: int) -> str:
 
 def parse_audit_rows(body: str) -> list[AuditRow]:
     rows: list[AuditRow] = []
+    marker_bearing = "comment_object_id:" in body and "::commands-run" in body
     for line in body.splitlines():
-        match = _ROW_RE.match(line.strip())
+        stripped = line.strip()
+        match = _ROW_RE.match(stripped)
         if match is None:
+            if (
+                marker_bearing
+                and stripped.startswith("|")
+                and stripped not in {_TABLE_HEADER, _TABLE_SEP}
+            ):
+                raise ValueError(f"unparseable audit row: {stripped}")
             continue
         rows.append(
             (
@@ -150,7 +156,7 @@ def format_command_audit_comment(
         _TABLE_SEP,
     ]
     for time_value, command_text, status, delivery_id in rows:
-        cell = sanitize_audit_command(_redact_confirm_token(command_text))
+        cell = sanitize_audit_command(redact_confirm_token(command_text))
         if not cell:
             raise ValueError("audit command cell is empty after sanitizing")
         suffix = f"<!-- d:{delivery_id} -->" if delivery_id else ""
@@ -174,10 +180,11 @@ def append_audit_row(
     timestamp = format_command_timestamp(when)
     if status not in {"accepted", "not supported"}:
         raise ValueError(f"unsupported audit status: {status!r}")
-    if delivery_id is not None and (not delivery_id or any(ch.isspace() or ch == ">" for ch in delivery_id)):
+    if delivery_id is not None and (
+        not delivery_id or any(ch.isspace() or ch == ">" for ch in delivery_id)
+    ):
         raise ValueError(f"invalid audit delivery id: {delivery_id!r}")
-    first_line = command_text.strip().splitlines()[0].strip() if command_text.strip() else ""
-    redacted_command = bound_audit_command(sanitize_audit_command(_redact_confirm_token(first_line)))
+    redacted_command = normalized_command_context_line(command_text)
     if body and format_commands_run_marker(repo_name, pr_number) in body:
         if audit_row_exists_for_delivery(body, delivery_id):
             return body

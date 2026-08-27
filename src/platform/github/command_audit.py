@@ -40,7 +40,7 @@ def record_command_audit(
     redelivery of the same webhook is idempotent.
     """
     holder = uuid.uuid4().hex
-    _acquire_with_backoff(lock_table, repo, pr_number, holder)
+    lock_version = _acquire_with_backoff(lock_table, repo, pr_number, holder)
     try:
         return _record_locked(
             client,
@@ -50,16 +50,18 @@ def record_command_audit(
             status=status,
             delivery_id=delivery_id,
             when=when,
+            lock_table=lock_table,
+            holder=holder,
+            lock_version=lock_version,
         )
     finally:
         audit_lock.release(lock_table, repo, pr_number, holder)
 
 
-def _acquire_with_backoff(lock_table: Any, repo: str, pr_number: int, holder: str) -> None:
+def _acquire_with_backoff(lock_table: Any, repo: str, pr_number: int, holder: str) -> int:
     for index, sleep_seconds in enumerate((*_LOCK_RETRY_SLEEPS, None)):
         try:
-            audit_lock.acquire(lock_table, repo, pr_number, holder, int(time.time()))
-            return
+            return audit_lock.acquire(lock_table, repo, pr_number, holder, int(time.time()))
         except LockHeldError:
             if sleep_seconds is None:
                 raise
@@ -91,35 +93,55 @@ def _record_locked(
     status: str,
     delivery_id: str | None,
     when: datetime | None,
+    lock_table: Any,
+    holder: str,
+    lock_version: int,
 ) -> int:
     marker = format_commands_run_marker(repo, pr_number)
-    existing_ids = _bot_authored_marker_ids(client, repo, pr_number, marker)
-    existing_id = existing_ids[0] if existing_ids else None
-    existing_body = ""
-    if existing_id is not None:
-        existing_body = client.get_comment_body(repo, existing_id) or ""
-    body = append_audit_row(
-        existing_body or None,
-        command_text=command_text,
-        status=status,
-        when=when,
-        repo_name=repo,
-        pr_number=pr_number,
-        delivery_id=delivery_id,
-    )
-    if existing_id is not None:
-        if body != existing_body:
-            client.update_comment(repo, existing_id, body)
-        return existing_id
-    created_id = client.create_comment(repo, pr_number, body)
-    return _merge_duplicate_audit_comments(client, repo, pr_number, marker, created_id)
+    version = lock_version
+    for attempt in range(3):
+        existing_ids = _bot_authored_marker_ids(client, repo, pr_number, marker)
+        existing_id = existing_ids[0] if existing_ids else None
+        existing_body = ""
+        if existing_id is not None:
+            existing_body = client.get_comment_body(repo, existing_id) or ""
+        body = append_audit_row(
+            existing_body or None,
+            command_text=command_text,
+            status=status,
+            when=when,
+            repo_name=repo,
+            pr_number=pr_number,
+            delivery_id=delivery_id,
+        )
+        if existing_id is not None:
+            if body != existing_body:
+                try:
+                    version = audit_lock.fence(
+                        lock_table, repo, pr_number, holder, version, int(time.time())
+                    )
+                except LockHeldError:
+                    if attempt == 2:
+                        raise
+                    version = _acquire_with_backoff(lock_table, repo, pr_number, holder)
+                    continue
+                client.update_comment(repo, existing_id, body)
+            return existing_id
+        version = audit_lock.fence(
+            lock_table, repo, pr_number, holder, version, int(time.time())
+        )
+        created_id = client.create_comment(repo, pr_number, body)
+        return _merge_duplicate_audit_comments(client, repo, pr_number, marker, created_id)
+    raise LockHeldError(f"audit lock fence failed for {repo}#{pr_number}")
 
 
 def _merge_duplicate_audit_comments(
     client: GitHubClient, repo: str, pr_number: int, marker: str, created_id: int
 ) -> int:
     """Collapse audit comments created concurrently into the lowest comment id."""
-    marker_ids = sorted(set(_bot_authored_marker_ids(client, repo, pr_number, marker)) | {created_id})
+    marker_ids = sorted(
+        set(_bot_authored_marker_ids(client, repo, pr_number, marker)) | {created_id}
+    )
     if len(marker_ids) == 1:
         return marker_ids[0]
     keeper_id = marker_ids[0]

@@ -55,7 +55,13 @@ logger = get_logger(__name__)
 
 _UNSUPPORTED_REJECTION_SLEEP_SECONDS = 10
 # Failures that make an audit row or acknowledgement comment impossible.
-_ACKNOWLEDGEMENT_ERRORS = (requests.RequestException, LockHeldError, BotoCoreError, ClientError)
+_ACKNOWLEDGEMENT_ERRORS = (
+    requests.RequestException,
+    LockHeldError,
+    BotoCoreError,
+    ClientError,
+    ValueError,
+)
 _SAFE_ACTIONS = frozenset({"plan", "report", "plan_destroy", "drift"})
 
 

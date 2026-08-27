@@ -106,6 +106,46 @@ def test_codebuild_progress_keeps_placeholder_command_context(monkeypatch) -> No
     assert "## Apply in progress" in captured[0]
 
 
+def test_codebuild_progress_bounds_large_command_context(monkeypatch) -> None:
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    captured: list[str] = []
+
+    class Client:
+        def __init__(self, _token):
+            pass
+
+        def delete_and_repost(self, _repo, _pr, body, _tag):
+            captured.append(body)
+            return 99
+
+    monkeypatch.setattr(
+        publish_mutation_progress,
+        "get_run",
+        lambda _run_id: {"notification_target": {"type": "github_pr", "pr_number": 7}},
+    )
+    monkeypatch.setattr(publish_mutation_progress, "get_github_token", lambda _path: "token")
+    monkeypatch.setattr(publish_mutation_progress, "GitHubClient", Client)
+    huge_command = "tf " + (" " * 65_520) + "apply a"
+
+    result = publish_mutation_progress.publish_codebuild_link(
+        run_id="run-1",
+        repo_name="org/repo",
+        folder="a",
+        action="apply",
+        commit_hash="a" * 40,
+        grace_seconds=15,
+        outer_execution_arn="arn:aws:states:us-east-1:123456789012:execution:openci-tf:run",
+        codebuild_project="openci-tf-worker",
+        codebuild_build_id="openci-tf-worker:11111111-2222-3333-4444-555555555555",
+        ssm_github_token_path="/openci-tf/clone-token/test",
+        command_context={"comment_id": 55, "comment_body": huge_command},
+    )
+
+    assert result["updated"] is True
+    assert len(captured[0]) <= 65_536
+    assert "- command: `tf apply a`" in captured[0]
+
+
 def test_mutation_terminal_labels_codebuild_hub_account() -> None:
     body = mutation_terminal_comment(
         action="apply",

@@ -20,6 +20,10 @@ from src.domain.formatters.comment_bounds import (  # noqa: F401  (re-exported)
     _MAX_COMMENT_CHARS,
     bound_comment,
 )
+from src.domain.formatters.command_text import (
+    normalized_command_context_line,
+    redact_confirm_token,
+)
 from src.domain.formatters.infracost_table import render_infracost_table
 from src.domain.formatters.tfsec_findings import (  # noqa: F401  (re-exported)
     _analyze_tfsec_severity,
@@ -143,11 +147,8 @@ def extract_infracost_monthly(text: str) -> str:
     return formatted
 
 
-_CONFIRM_TOKEN_RE = re.compile(r"\b(confirm)\s+(\S+)", re.IGNORECASE)
-
-
 def _redact_confirm_token(text: str) -> str:
-    return _CONFIRM_TOKEN_RE.sub(r"\1 <redacted>", text)
+    return redact_confirm_token(text)
 
 
 def _describe_command_line(
@@ -161,8 +162,7 @@ def _describe_command_line(
     pipeline_step: int | None = None,
 ) -> str:
     if comment_body and comment_body.strip():
-        first_line = comment_body.strip().splitlines()[0].strip()
-        return _redact_confirm_token(first_line)
+        return normalized_command_context_line(comment_body)
     verb = action
     if action == "plan_destroy":
         verb = "plan --destroy"
@@ -179,7 +179,7 @@ def _describe_command_line(
         parts.append("affected")
     elif folders:
         parts.extend(folders)
-    return " ".join(parts)
+    return normalized_command_context_line(" ".join(parts))
 
 
 def _triggering_comment_line(
@@ -255,9 +255,7 @@ def mutation_command_context_block(
         comment_body=requested_comment_body,
     )
     confirmation_line = (
-        _redact_confirm_token(
-            confirmation_comment_body.strip().splitlines()[0].strip()
-        )
+        normalized_command_context_line(confirmation_comment_body)
         if confirmation_comment_body and confirmation_comment_body.strip()
         else f"tf {action} confirm <redacted>"
     )
@@ -307,7 +305,7 @@ def invalid_command_rejection_comment(
     )
     detail = ""
     if comment_body and comment_body.strip():
-        redacted = _redact_confirm_token(comment_body.strip().splitlines()[0].strip())
+        redacted = normalized_command_context_line(comment_body)
         detail = f"\n\nRejected command ({trigger}): `{redacted}`"
     return f"openci-tf rejected the command: {parse_error}.{detail}"
 
@@ -326,7 +324,7 @@ def closed_pr_rejection_comment(
     )
     detail = ""
     if comment_body and comment_body.strip():
-        redacted = _redact_confirm_token(comment_body.strip().splitlines()[0].strip())
+        redacted = normalized_command_context_line(comment_body)
         detail = f"\n\nIgnored command ({trigger}): `{redacted}`"
     return (
         "openci-tf ignored the command because this pull request is closed or merged. "

@@ -6,10 +6,14 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from botocore.exceptions import ClientError
+
 from src.core.logging import get_logger
-from src.domain.formatters.artifacts import _redact_confirm_token, command_context_block
+from src.domain.formatters.artifacts import bound_comment, command_context_block
+from src.domain.formatters.command_text import normalized_command_context_line
 from src.domain.formatters.intent import intent_failure_comment, intent_success_comment
 from src.domain.intent.models import IntentGateFailure, IntentRecord
+from src.platform.aws.intent_registry import IntentRegistryError
 from src.platform.aws.run_registry import set_run_pipeline_metadata
 from src.platform.aws.ssm import get_github_token
 from src.platform.github.client import GitHubClient, comment_url
@@ -20,7 +24,7 @@ from src.platform.github.command_comment_cleanup import (
 )
 from src.services.intent.confirm import confirm_intent
 from src.services.intent.create import IntentCreationError, create_intent
-from src.services.intent.registry import get_intent, store_intent_comment_metadata
+from src.services.intent.registry import delete_intent, get_intent, store_intent_comment_metadata
 
 logger = get_logger(__name__)
 
@@ -31,7 +35,7 @@ def _post_comment(webhook_info: dict[str, Any], settings: dict[str, Any], body: 
     if not isinstance(pr_number, int) or not isinstance(repo, str):
         return None
     token = get_github_token(settings["ssm_openci_tf_github_token"])
-    return GitHubClient(token).create_comment(repo, pr_number, body)
+    return GitHubClient(token).create_comment(repo, pr_number, bound_comment(body))
 
 
 def _with_intent_command_context(
@@ -155,7 +159,7 @@ def create_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     requested_comment_id = webhook.get("comment_id")
     requested_comment_body = webhook.get("comment_body")
     if isinstance(requested_comment_body, str):
-        requested_comment_body = _redact_confirm_token(requested_comment_body)
+        requested_comment_body = normalized_command_context_line(requested_comment_body)
     try:
         failure, record = create_intent(
             action=action,
@@ -212,12 +216,19 @@ def create_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     body = _with_intent_command_context(webhook, action, body)
     intent_comment_id = _post_comment(webhook, settings, body)
     if isinstance(intent_comment_id, int):
-        store_intent_comment_metadata(
-            record["token"],
-            requested_comment_id=requested_comment_id if isinstance(requested_comment_id, int) else None,
-            requested_comment_body=requested_comment_body if isinstance(requested_comment_body, str) else None,
-            intent_comment_id=intent_comment_id,
-        )
+        try:
+            store_intent_comment_metadata(
+                record["token"],
+                requested_comment_id=requested_comment_id if isinstance(requested_comment_id, int) else None,
+                requested_comment_body=requested_comment_body if isinstance(requested_comment_body, str) else None,
+                intent_comment_id=intent_comment_id,
+            )
+        except (IntentRegistryError, ClientError):
+            try:
+                _delete_comments_after_replacement(webhook, settings, [intent_comment_id])
+            finally:
+                delete_intent(record["token"])
+            raise
     # The user's request comment stays until the terminal apply/destroy
     # render deletes it (render/handler.py); only the intent comment replaces
     # it here.

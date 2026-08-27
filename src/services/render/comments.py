@@ -6,8 +6,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import requests
-
 from src.domain.formatters.artifacts import (
     bound_comment,
     command_context_block,
@@ -23,6 +21,7 @@ from src.domain.github.comment_object_id import (
     legacy_summary_suffix,
 )
 from src.platform.github.client import GitHubClient, comment_url
+from src.platform.github.command_comment_cleanup import delete_acknowledged_command_comment
 
 
 def _uses_github_pr(event: dict[str, Any]) -> bool:
@@ -124,13 +123,35 @@ def _with_cleanup_warnings(result: dict[str, Any], warnings: list[str]) -> dict[
     return result
 
 
+def _bot_authored_comment_ids(
+    client: GitHubClient, repo: str, pr: int, needle: str
+) -> list[int]:
+    body_search = getattr(client, "find_comments_by_body_substring", None)
+    token_login = getattr(client, "token_login", None)
+    if callable(body_search) and callable(token_login):
+        try:
+            bot_login = token_login()
+        except AttributeError:
+            bot_login = ""
+        if bot_login:
+            return [
+                comment_id
+                for comment_id, author_login in body_search(repo, pr, needle)
+                if author_login == bot_login
+            ]
+    legacy_search = getattr(client, "find_comments_by_" + "tag", None)
+    if callable(legacy_search):
+        return list(legacy_search(repo, pr, needle))
+    return []
+
+
 def _delete_and_repost_unmanaged(
     client: GitHubClient, repo: str, pr: int, body: str, suffix: str
 ) -> int:
     tag = legacy_opaque_tag(repo, pr, suffix)
-    return client.delete_and_repost(
-        repo, pr, bound_comment(body, suffix=f"\n\n#{tag}"), tag
-    )
+    for comment_id in _bot_authored_comment_ids(client, repo, pr, tag):
+        client.delete_comment(repo, comment_id)
+    return client.create_comment(repo, pr, bound_comment(body, suffix=f"\n\n#{tag}"))
 
 
 def _managed_comment_marker(
@@ -165,9 +186,9 @@ def _delete_managed_comment(
     legacy_suffix: str,
 ) -> None:
     legacy_tag = legacy_opaque_tag(repo, pr, legacy_suffix)
-    for comment_id in client.find_comments_by_tag(repo, pr, legacy_tag):
+    for comment_id in _bot_authored_comment_ids(client, repo, pr, legacy_tag):
         client.delete_comment(repo, comment_id)
-    for comment_id in client.find_comments_by_tag(repo, pr, marker):
+    for comment_id in _bot_authored_comment_ids(client, repo, pr, marker):
         client.delete_comment(repo, comment_id)
 
 
@@ -221,10 +242,6 @@ def _delete_transient_status_comment(
     client: GitHubClient, repo: str, pr: int, run_id: str
 ) -> list[str]:
     prefix = status_comment_marker_prefix(run_id)
-    warnings: list[str] = []
-    for comment_id in client.find_comments_by_tag(repo, pr, prefix):
-        try:
-            client.delete_comment(repo, comment_id)
-        except requests.RequestException as error:
-            warnings.append(f"failed to delete transient status comment {comment_id}: {error}")
-    return warnings
+    for comment_id in _bot_authored_comment_ids(client, repo, pr, prefix):
+        delete_acknowledged_command_comment(client, repo, comment_id)
+    return []
