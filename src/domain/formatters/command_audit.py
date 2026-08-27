@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from datetime import datetime, timezone
 
@@ -31,6 +32,28 @@ MAX_AUDIT_COMMAND_CHARS = MAX_COMMAND_CONTEXT_CHARS
 # GitHub rejects comment bodies over 65,536 characters; stay well below that.
 MAX_AUDIT_BODY_CHARS = 60_000
 AuditRow = tuple[str, str, str, str | None]
+
+
+def audit_row_content_identity(row: AuditRow) -> str:
+    """Return a stable identity for rows that predate delivery ids."""
+    time_value, command_text, status, delivery_id = row
+    if delivery_id is not None:
+        return f"delivery:{delivery_id}"
+    source = f"{time_value}\0{command_text}\0{status}"
+    return f"legacy:{hashlib.sha256(source.encode()).hexdigest()[:16]}"
+
+
+def canonical_audit_rows(rows: list[AuditRow]) -> list[AuditRow]:
+    """Keep the first row for each delivery id or legacy content identity."""
+    seen: set[str] = set()
+    canonical: list[AuditRow] = []
+    for row in rows:
+        identity = audit_row_content_identity(row)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        canonical.append(row)
+    return canonical
 
 
 def bound_audit_command(command_text: str) -> str:

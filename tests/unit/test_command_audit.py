@@ -317,6 +317,55 @@ def test_record_command_audit_retry_converges_after_partial_duplicate_cleanup():
     assert [row[3] for row in rows] == ["d1", "d2", "d3"]
 
 
+def test_record_command_audit_retry_converges_after_partial_legacy_duplicate_cleanup():
+    client = _SimpleAuditClient()
+    client.comments[100] = _append(None, "tf plan infra/a")
+    client.comments[101] = _append(None, "tf plan infra/b")
+    failed = False
+    original_delete_comment = client.delete_comment
+
+    def fail_first_delete(repo, comment_id):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise RuntimeError("delete interrupted")
+        original_delete_comment(repo, comment_id)
+
+    client.delete_comment = fail_first_delete
+
+    with pytest.raises(RuntimeError, match="delete interrupted"):
+        record_command_audit(
+            client,
+            "org/repo",
+            7,
+            command_text="tf report",
+            status="accepted",
+            delivery_id="d3",
+            lock_table=FakeLocksTable(),
+            when=_WHEN,
+        )
+
+    kept = record_command_audit(
+        client,
+        "org/repo",
+        7,
+        command_text="tf report",
+        status="accepted",
+        delivery_id="d3",
+        lock_table=FakeLocksTable(),
+        when=_WHEN,
+    )
+
+    assert kept == 100
+    assert list(client.comments) == [100]
+    rows = parse_audit_rows(client.comments[100])
+    assert [(row[1], row[3]) for row in rows] == [
+        ("tf plan infra/a", None),
+        ("tf plan infra/b", None),
+        ("tf report", "d3"),
+    ]
+
+
 def test_audit_lock_accepts_integral_decimal_versions_and_rejects_fractional():
     class DecimalVersionLocksTable(FakeLocksTable):
         def update_item(self, **kwargs):

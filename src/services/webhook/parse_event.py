@@ -157,12 +157,14 @@ def _parse_issue_comment(
     if action not in ACTIONABLE_COMMENT_ACTIONS:
         return None
 
-    comment_body = payload.get("comment", {}).get("body", "").strip()
-    if not comment_body:
+    raw_comment_body = payload.get("comment", {}).get("body", "")
+    comment_body = raw_comment_body if isinstance(raw_comment_body, str) else ""
+    if not comment_body.strip():
         return None
 
-    # Check if first word looks like an openci-tf command
-    first_word = comment_body.split()[0].lower()
+    # Check if first word looks like an openci-tf command. Keep the original
+    # body for parse_command so the single-line grammar sees line boundaries.
+    first_word = comment_body.strip().split()[0].lower()
     if first_word not in COMMAND_PREFIXES:
         return None
 
@@ -228,12 +230,14 @@ def _parse_issue(
         return None
 
     issue = payload.get("issue", {})
-    body = issue.get("body", "").strip()
-    if not body:
+    raw_body = issue.get("body", "")
+    body = raw_body if isinstance(raw_body, str) else ""
+    if not body.strip():
         return None
 
-    # Check if issue body starts with an openci-tf command
-    first_word = body.split()[0].lower()
+    # Check if issue body starts with an openci-tf command. Keep the original
+    # body for parse_command so the single-line grammar sees line boundaries.
+    first_word = body.strip().split()[0].lower()
     if first_word not in COMMAND_PREFIXES:
         return None
 

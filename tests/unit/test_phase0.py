@@ -63,6 +63,12 @@ def test_grammar_rejects_unicode_line_boundaries(boundary):
         parse_command(f"tf plan{boundary}infra/a")
 
 
+@pytest.mark.parametrize("boundary", ["\n", "\u2028"])
+def test_grammar_rejects_trailing_line_boundaries(boundary):
+    with pytest.raises(ParseError, match="tf commands must be a single line"):
+        parse_command(f"tf plan infra/a{boundary}")
+
+
 @pytest.mark.parametrize("verb", ["apply", "destroy"])
 def test_mutating_commands_parse_and_resolve(verb):
     assert parse_command(f"tf {verb} x").action == verb

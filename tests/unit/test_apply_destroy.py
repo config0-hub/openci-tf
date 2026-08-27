@@ -31,6 +31,7 @@ from src.services.intent import handler as intent_handler
 from src.services.intent.handler import confirm_handler, create_handler
 from src.services.intent.registry import delete_unused_intent, mark_intent_used, put_intent, get_intent
 from src.platform.aws.run_registry import RunRegistryError
+from src.platform.github.client import PullRequestState
 from src.services.render.handler import _pipeline_apply_footer
 
 
@@ -1244,6 +1245,108 @@ def test_create_handler_ambiguous_post_sweeps_bot_token_comment_and_invalidates_
 
     assert deleted == [9001]
     assert "abc123" not in live_tokens
+
+
+@pytest.mark.parametrize("action", ["apply", "destroy"])
+def test_confirm_handler_closed_pr_between_webhook_and_confirm_ignores_without_consuming(
+    monkeypatch,
+    action,
+):
+    posted: list[str] = []
+    deleted: list[int] = []
+    monkeypatch.setattr(intent_handler, "get_github_token", lambda _path: "token")
+    monkeypatch.setattr(
+        "src.services.intent.handler.confirm_intent",
+        lambda **_kwargs: pytest.fail("closed PR confirmation must not consume token"),
+    )
+
+    class Client:
+        def __init__(self, _token):
+            pass
+
+        def get_pr_state(self, _repo, _pr):
+            return PullRequestState(head_sha="a" * 40, state="closed", merged=False)
+
+        def create_comment(self, _repo, _pr, body):
+            posted.append(body)
+            return 9001
+
+        def delete_comment(self, _repo, comment_id):
+            deleted.append(comment_id)
+
+    monkeypatch.setattr(intent_handler, "GitHubClient", Client)
+    event = {
+        "action": action,
+        "confirm_token": "abc123",
+        "webhook_info": {
+            "pr_number": 1,
+            "trigger_id": "t",
+            "repo_name": "o/r",
+            "comment_id": 55,
+            "comment_body": f"tf {action} confirm abc123",
+        },
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    result = confirm_handler(event, None)
+
+    assert result["intent_failed"] is True
+    assert result["confirm_token"] is None
+    assert result["intent_failures"] == ["pull request is not open; confirmation ignored"]
+    assert "intent_confirmed" not in result
+    assert len(posted) == 1
+    assert posted[0].startswith("openci-tf ignored the command")
+    assert "abc123" not in posted[0]
+    assert deleted == [55]
+
+
+def test_confirm_handler_unreadable_pr_ignores_without_consuming_token(monkeypatch):
+    posted: list[str] = []
+    deleted: list[int] = []
+    monkeypatch.setattr(intent_handler, "get_github_token", lambda _path: "token")
+    monkeypatch.setattr(
+        "src.services.intent.handler.confirm_intent",
+        lambda **_kwargs: pytest.fail("unreadable PR confirmation must not consume token"),
+    )
+
+    class Client:
+        def __init__(self, _token):
+            pass
+
+        def get_pr_state(self, _repo, _pr):
+            raise requests.ConnectionError("github down")
+
+        def create_comment(self, _repo, _pr, body):
+            posted.append(body)
+            return 9001
+
+        def delete_comment(self, _repo, comment_id):
+            deleted.append(comment_id)
+
+    monkeypatch.setattr(intent_handler, "GitHubClient", Client)
+    event = {
+        "action": "apply",
+        "confirm_token": "abc123",
+        "webhook_info": {
+            "pr_number": 1,
+            "trigger_id": "t",
+            "repo_name": "o/r",
+            "comment_id": 55,
+            "comment_body": "tf apply confirm abc123",
+        },
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    result = confirm_handler(event, None)
+
+    assert result["intent_failed"] is True
+    assert result["confirm_token"] is None
+    assert result["intent_failures"] == ["pull request is not open; confirmation ignored"]
+    assert "intent_confirmed" not in result
+    assert len(posted) == 1
+    assert posted[0].startswith("openci-tf ignored the command")
+    assert "abc123" not in posted[0]
+    assert deleted == [55]
 
 
 def test_confirm_handler_failure_deletes_confirmation_intent_and_requested_comments(

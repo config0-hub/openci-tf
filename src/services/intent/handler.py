@@ -10,7 +10,11 @@ import requests
 from botocore.exceptions import BotoCoreError, ClientError
 
 from src.core.logging import get_logger
-from src.domain.formatters.artifacts import bound_comment, command_context_block
+from src.domain.formatters.artifacts import (
+    bound_comment,
+    closed_pr_rejection_comment,
+    command_context_block,
+)
 from src.domain.formatters.command_text import normalized_command_context_line
 from src.domain.formatters.intent import intent_failure_comment, intent_success_comment
 from src.domain.intent.models import (
@@ -21,7 +25,7 @@ from src.domain.intent.models import (
 from src.platform.aws.intent_registry import IntentRegistryError
 from src.platform.aws.run_registry import set_run_pipeline_metadata
 from src.platform.aws.ssm import get_github_token
-from src.platform.github.client import GitHubClient, comment_url
+from src.platform.github.client import GitHubClient, PullRequestState, comment_url
 from src.platform.github.command_comment_cleanup import (
     delete_acknowledged_command_comment,
     delete_acknowledged_command_comments,
@@ -32,6 +36,17 @@ from src.services.intent.create import IntentCreationError, create_intent
 from src.services.intent.registry import delete_unused_intent, get_intent, store_intent_comment_metadata
 
 logger = get_logger(__name__)
+
+
+class PullRequestNotOpenError(ValueError):
+    """Raised when a mutation confirmation sees a closed, merged, or unreadable PR."""
+
+
+_CONFIRM_PR_STATE_ERRORS = (
+    PullRequestNotOpenError,
+    requests.RequestException,
+    ValueError,
+)
 
 
 def _post_comment(webhook_info: dict[str, Any], settings: dict[str, Any], body: str) -> int | None:
@@ -148,9 +163,54 @@ def _compensate_created_intent(
         delete_unused_intent(token)
 
 
-def _current_pr_head_sha(settings: dict[str, Any], repo: str, pr_number: int) -> str:
+def _current_pr_state(settings: dict[str, Any], repo: str, pr_number: int) -> PullRequestState:
     token = get_github_token(settings["ssm_openci_tf_github_token"])
-    return GitHubClient(token).get_pr_head_sha(repo, pr_number)
+    return GitHubClient(token).get_pr_state(repo, pr_number)
+
+
+def _current_pr_head_sha(
+    settings: dict[str, Any],
+    repo: str,
+    pr_number: int,
+    require_open: bool = False,
+) -> str:
+    pr_state = _current_pr_state(settings, repo, pr_number)
+    if require_open and (pr_state.state != "open" or pr_state.merged is not False):
+        raise PullRequestNotOpenError("pull request is closed, merged, or unreadable")
+    return pr_state.head_sha
+
+
+def _closed_pr_confirmation_failure(
+    event: dict[str, Any],
+    webhook: dict[str, Any],
+    settings: dict[str, Any],
+    reason: str,
+) -> dict[str, Any]:
+    pr_number = webhook.get("pr_number")
+    repo = webhook.get("repo_name")
+    comment_id = webhook.get("comment_id")
+    comment_link = None
+    if isinstance(repo, str) and isinstance(pr_number, int) and isinstance(comment_id, int):
+        comment_link = comment_url(repo, pr_number, comment_id)
+    body = closed_pr_rejection_comment(
+        comment_id=comment_id if isinstance(comment_id, int) else None,
+        comment_link=comment_link,
+        comment_body=webhook.get("comment_body")
+        if isinstance(webhook.get("comment_body"), str)
+        else None,
+    )
+    if _post_comment(webhook, settings, body) is not None:
+        _delete_comments_after_replacement(
+            webhook,
+            settings,
+            [comment_id if isinstance(comment_id, int) else None],
+        )
+    return {
+        **event,
+        "confirm_token": None,
+        "intent_failed": True,
+        "intent_failures": [reason],
+    }
 
 
 def _intent_is_not_ready(failures: list[IntentGateFailure]) -> bool:
@@ -297,7 +357,15 @@ def confirm_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     repo_name = webhook.get("repo_name")
     if not isinstance(pr_number, int) or not isinstance(trigger_id, str) or not isinstance(repo_name, str):
         raise TypeError("confirm requires pr_number, trigger_id, and repo_name")
-    commit_hash = _current_pr_head_sha(settings, repo_name, pr_number)
+    try:
+        commit_hash = _current_pr_head_sha(settings, repo_name, pr_number, True)
+    except _CONFIRM_PR_STATE_ERRORS:
+        return _closed_pr_confirmation_failure(
+            event,
+            webhook,
+            settings,
+            "pull request is not open; confirmation ignored",
+        )
     failures, confirmed = confirm_intent(
         token=token,
         action=action,

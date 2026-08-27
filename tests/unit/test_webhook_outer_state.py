@@ -476,10 +476,18 @@ def test_webhook_unsupported_tf_command_audit_and_transient_help(monkeypatch):
     assert any(cid != 42 for cid in deleted)
 
 
-@pytest.mark.parametrize("boundary", ["\n", "\u2028"])
-def test_webhook_rejects_line_boundary_command_with_collapsed_audit(monkeypatch, boundary):
+@pytest.mark.parametrize(
+    "command",
+    [
+        "tf plan\ninfra/a",
+        "tf plan\u2028infra/a",
+        "tf plan infra/a\n",
+        "tf plan infra/a\u2028",
+    ],
+)
+def test_webhook_rejects_line_boundary_command_with_collapsed_audit(monkeypatch, command):
     started, posted, deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
-    response = webhook.handler(_event(f"tf plan{boundary}infra/a"), None)
+    response = webhook.handler(_event(command), None)
     assert response["statusCode"] == 200
     assert json.loads(response["body"])["reason"] == "invalid_command"
     assert started == []

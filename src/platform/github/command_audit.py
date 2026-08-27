@@ -11,10 +11,14 @@ from typing import Any
 
 from src.core.errors import LockHeldError
 from src.domain.formatters.command_audit import (
+    MAX_AUDIT_BODY_CHARS,
+    MAX_AUDIT_ROWS,
     append_audit_row,
+    canonical_audit_rows,
+    format_command_audit_comment,
     format_commands_run_marker,
+    parse_audit_created_timestamp,
     parse_audit_rows,
-    parse_command_timestamp,
 )
 from src.platform.aws import audit_lock
 from src.platform.github.client import GitHubClient
@@ -154,18 +158,28 @@ def _merge_existing_audit_comments(
     """Merge audit rows into the lowest comment id and delete duplicate comments."""
     keeper_id = marker_ids[0]
     body = client.get_comment_body(repo, keeper_id) or ""
+    created_at = parse_audit_created_timestamp(body) or ""
+    rows = parse_audit_rows(body)
     for extra_id in marker_ids[1:]:
         extra_body = client.get_comment_body(repo, extra_id) or ""
-        for time_value, command_text, status, row_delivery_id in parse_audit_rows(extra_body):
-            body = append_audit_row(
-                body or None,
-                command_text=command_text,
-                status=status,
-                when=parse_command_timestamp(time_value),
-                repo_name=repo,
-                pr_number=pr_number,
-                delivery_id=row_delivery_id,
-            )
+        rows.extend(parse_audit_rows(extra_body))
+    rows = canonical_audit_rows(rows)[-MAX_AUDIT_ROWS:]
+    body = format_command_audit_comment(
+        created_at=created_at,
+        rows=rows,
+        repo_name=repo,
+        pr_number=pr_number,
+    )
+    while len(body) > MAX_AUDIT_BODY_CHARS and len(rows) > 1:
+        rows = rows[1:]
+        body = format_command_audit_comment(
+            created_at=created_at,
+            rows=rows,
+            repo_name=repo,
+            pr_number=pr_number,
+        )
+    if len(body) > MAX_AUDIT_BODY_CHARS:
+        raise ValueError("audit comment exceeds the body limit with a single row")
     client.update_comment(repo, keeper_id, body)
     for extra_id in marker_ids[1:]:
         client.delete_comment(repo, extra_id)

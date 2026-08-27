@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 
 import requests
 
@@ -13,6 +14,15 @@ GITHUB_API = "https://api.github.com"
 
 class GitHubChangedFilesLimitExceeded(ValueError):
     """Raised when changed-file pagination exceeds a caller-provided cap."""
+
+
+@dataclass(frozen=True)
+class PullRequestState:
+    """Live pull request state needed at a mutation gate."""
+
+    head_sha: str
+    state: str | None
+    merged: bool | None
 
 
 class GitHubClient:
@@ -202,12 +212,26 @@ class GitHubClient:
             page += 1
         return files
 
-    def get_pr_head_sha(self, repo: str, pr_number: int) -> str:
-        """Get the HEAD commit SHA for a PR."""
+    def get_pr_state(self, repo: str, pr_number: int) -> PullRequestState:
+        """Get the live HEAD SHA, state, and merged flag for a PR."""
         url = f"{GITHUB_API}/repos/{repo}/pulls/{pr_number}"
         resp = self.session.get(url)
         resp.raise_for_status()
-        return resp.json()["head"]["sha"]
+        payload = resp.json()
+        head_sha = (payload.get("head") or {}).get("sha")
+        if not isinstance(head_sha, str) or not head_sha:
+            raise ValueError("GitHub PR response returned no head sha")
+        state = payload.get("state")
+        merged = payload.get("merged")
+        return PullRequestState(
+            head_sha=head_sha,
+            state=state if isinstance(state, str) else None,
+            merged=merged if isinstance(merged, bool) else None,
+        )
+
+    def get_pr_head_sha(self, repo: str, pr_number: int) -> str:
+        """Get the HEAD commit SHA for a PR."""
+        return self.get_pr_state(repo, pr_number).head_sha
 
     def pr_has_approved_review(self, repo: str, pr_number: int) -> bool:
         """Return True when at least one reviewer has APPROVED as their latest review."""
