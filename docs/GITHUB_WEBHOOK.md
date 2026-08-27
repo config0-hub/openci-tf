@@ -39,20 +39,23 @@ Confirm tokens are written as `confirm <redacted>`.
 
 Writes to the comment are serialized per PR with a 60 second DynamoDB lock in
 the locks table (`audit_lock` in `src/platform/aws`); contention retries for
-about five seconds. If the `accepted` row cannot be written, the webhook returns
-`502` and starts no run. `not supported` rows are best effort.
+about five seconds. If any `accepted` or `not supported` row cannot be written,
+the webhook returns `502` and starts no run.
 
 ## Rejected commands and closed or unreadable pull requests
 
-A `tf` comment with invalid syntax gets a `not supported` row and a transient
-help comment listing the accepted forms. After 10 seconds the help comment and
-the user's comment are deleted; the response is `200 {"reason": "invalid_command"}`.
+A `tf` comment with invalid syntax or invalid run-request fields gets a `not
+supported` row and a transient help comment listing the accepted forms. After 10
+seconds the help comment and the user's comment are deleted; the response is
+`200 {"reason": "invalid_command"}`. If the audit row or help comment cannot be
+written, the webhook returns `502`, deletes nothing, and starts no run.
 
 A `tf` comment on a closed or merged pull request, on a pull request whose state
 is missing, or on one GitHub answers with `403` or `404` gets a `not supported`
 row, a short "ignored" comment, and the user's comment is deleted. The response
-is `200 {"reason": "pull_request_not_open"}`. Other GitHub or SSM errors while
-reading the pull request return `502`.
+is `200 {"reason": "pull_request_not_open"}`. If the audit row or ignored
+comment cannot be written, the webhook returns `502`, deletes nothing, and starts
+no run. Other GitHub or SSM errors while reading the pull request return `502`.
 
 ## Command comment cleanup
 

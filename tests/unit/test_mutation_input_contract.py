@@ -84,6 +84,7 @@ def test_every_mutation_parameters_block_reading_optional_keys_is_fed_by_start_i
         parameters = definition["States"][name]["Parameters"]
         for key in MUTATION_OPTIONAL_INPUT_KEYS:
             assert parameters[f"{key}.$"] == f"$.{key}"
+    assert definition["States"]["RenderPipelineFailure"]["Parameters"]["confirm_token.$"] == "$.confirm_token"
 
 
 def test_read_outer_parameters_do_not_reference_mutation_keys():

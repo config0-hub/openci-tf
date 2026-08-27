@@ -25,6 +25,7 @@ from src.domain.formatters.artifacts import (
     closed_pr_rejection_comment,
 )
 from src.domain.formatters.command_audit import unsupported_command_help_comment
+from src.domain.run.request import RunRequestValidationError
 from src.platform.aws.audit_lock import locks_table
 from src.platform.aws.dynamo import get_repo_settings
 from src.platform.aws.ssm import get_github_token
@@ -53,8 +54,8 @@ from src.services.webhook.validate import verify_signature
 logger = get_logger(__name__)
 
 _UNSUPPORTED_REJECTION_SLEEP_SECONDS = 10
-# Failures that make a best-effort audit row or acknowledgement comment impossible.
-_AUDIT_BEST_EFFORT_ERRORS = (requests.RequestException, LockHeldError, BotoCoreError, ClientError)
+# Failures that make an audit row or acknowledgement comment impossible.
+_ACKNOWLEDGEMENT_ERRORS = (requests.RequestException, LockHeldError, BotoCoreError, ClientError)
 _SAFE_ACTIONS = frozenset({"plan", "report", "plan_destroy", "drift"})
 
 
@@ -249,11 +250,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 comment_id=info.comment_id,
                 body=rejection_body,
             )
-        except _AUDIT_BEST_EFFORT_ERRORS:
+        except _ACKNOWLEDGEMENT_ERRORS as error:
             logger.warning(
-                "failed to post closed-PR rejection comment for pr %s",
+                "failed to post closed-PR rejection comment for pr %s: %s",
                 info.pr_number,
+                error,
             )
+            return _response(502, {"error": "Unable to acknowledge command"})
         return _response(
             200,
             {"message": "Event ignored", "reason": "pull_request_not_open"},
@@ -272,11 +275,73 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     comment_body=info.comment_body or "",
                     delivery_id=delivery_id,
                 )
-            except _AUDIT_BEST_EFFORT_ERRORS:
+            except _ACKNOWLEDGEMENT_ERRORS as error:
                 logger.warning(
-                    "failed to handle unsupported tf command for pr %s",
+                    "failed to handle unsupported tf command for pr %s: %s",
                     info.pr_number,
+                    error,
                 )
+                return _response(502, {"error": "Unable to acknowledge command"})
+        return _response(
+            200,
+            {"message": "Event ignored", "reason": "invalid_command"},
+        )
+    action = cmd.effective_action
+    folders = list(cmd.folders)
+    all_flag = bool(cmd.all_flag)
+    affected_flag = bool(cmd.affected_flag)
+    if action not in _SAFE_ACTIONS and action not in {"apply", "destroy"}:
+        return _response(200, {"message": "Unsafe action ignored"})
+    try:
+        if action in {"apply", "destroy"}:
+            request = github_run_request(
+                _github_info_dict(info),
+                action=action,
+                folders=list(cmd.folders),
+                all_flag=False,
+                affected_flag=False,
+                delivery_id=delivery_id,
+                confirm_token=cmd.confirm_token,
+                intent_create=cmd.confirm_token is None,
+                intent_confirm=cmd.confirm_token is not None,
+                pipeline=cmd.pipeline,
+                pipeline_step=cmd.pipeline_step,
+            )
+        else:
+            request = github_run_request(
+                _github_info_dict(info),
+                action=action,
+                folders=folders,
+                all_flag=all_flag,
+                affected_flag=affected_flag,
+                delivery_id=delivery_id,
+                pipeline=cmd.pipeline,
+                pipeline_step=cmd.pipeline_step,
+            )
+    except RunRequestValidationError as error:
+        if info.pr_number and _starts_with_tf_command(info.comment_body or ""):
+            try:
+                client = GitHubClient(token)
+                _handle_unsupported_tf_command(
+                    client=client,
+                    repo=settings.repo_name,
+                    pr_number=info.pr_number,
+                    comment_id=info.comment_id,
+                    comment_body=info.comment_body or "",
+                    delivery_id=delivery_id,
+                )
+            except _ACKNOWLEDGEMENT_ERRORS as acknowledgement_error:
+                logger.warning(
+                    "failed to handle invalid request for pr %s: %s",
+                    info.pr_number,
+                    acknowledgement_error,
+                )
+                return _response(502, {"error": "Unable to acknowledge command"})
+        logger.warning(
+            "invalid GitHub run request for pr %s: %s",
+            info.pr_number,
+            error,
+        )
         return _response(
             200,
             {"message": "Event ignored", "reason": "invalid_command"},
@@ -294,49 +359,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 delivery_id=delivery_id,
                 delete_comment=not defer_command_comment_cleanup(cmd.action),
             )
-        except _AUDIT_BEST_EFFORT_ERRORS as error:
-            # Fail closed: no durable accepted row means no run.
+        except _ACKNOWLEDGEMENT_ERRORS as error:
             logger.warning(
                 "failed to record accepted command audit for pr %s: %s",
                 info.pr_number,
                 error,
             )
             return _response(502, {"error": "Unable to record command audit"})
-    action = cmd.effective_action
-    folders = list(cmd.folders)
-    all_flag = bool(cmd.all_flag)
-    affected_flag = bool(cmd.affected_flag)
-    if action in {"apply", "destroy"}:
-        request = github_run_request(
-            _github_info_dict(info),
-            action=action,
-            folders=list(cmd.folders),
-            all_flag=False,
-            affected_flag=False,
-            delivery_id=delivery_id,
-            confirm_token=cmd.confirm_token,
-            intent_create=cmd.confirm_token is None,
-            intent_confirm=cmd.confirm_token is not None,
-            pipeline=cmd.pipeline,
-            pipeline_step=cmd.pipeline_step,
-        )
-        try:
-            run_id, created = start_run_from_request(request)
-        except OrchestrationError:
-            return _response(502, {"error": "Unable to start run"})
-        return _response(200, {"message": "Accepted", "run_id": run_id, "created": created})
-    if action not in _SAFE_ACTIONS:
-        return _response(200, {"message": "Unsafe action ignored"})
-    request = github_run_request(
-        _github_info_dict(info),
-        action=action,
-        folders=folders,
-        all_flag=all_flag,
-        affected_flag=affected_flag,
-        delivery_id=delivery_id,
-        pipeline=cmd.pipeline,
-        pipeline_step=cmd.pipeline_step,
-    )
     try:
         run_id, created = start_run_from_request(request)
     except OrchestrationError:

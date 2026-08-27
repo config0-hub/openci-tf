@@ -94,6 +94,9 @@ def _wire_webhook(monkeypatch, clone_dir: str, *, pr_state: str = "open"):
         def delete_comment(self, repo, comment_id):
             deleted.append(comment_id)
 
+        def token_login(self):
+            return "openci-bot"
+
         def find_comment_by_tag(self, repo, pr, tag):
             for cid, body in audit_bodies.items():
                 if tag in body:
@@ -102,6 +105,13 @@ def _wire_webhook(monkeypatch, clone_dir: str, *, pr_state: str = "open"):
 
         def find_comments_by_tag(self, repo, pr, tag):
             return [cid for cid, body in audit_bodies.items() if tag in body]
+
+        def find_comments_by_body_substring(self, repo, pr, needle):
+            return [
+                (cid, "openci-bot")
+                for cid, body in audit_bodies.items()
+                if needle in body
+            ]
 
         def get_comment_body(self, repo, comment_id):
             return audit_bodies.get(comment_id)
@@ -454,6 +464,22 @@ def test_webhook_rejects_bare_tf_plan(monkeypatch):
     assert len(deleted) == 2
 
 
+def test_webhook_validates_run_request_before_audit_acceptance(monkeypatch):
+    slept: list[float] = []
+    monkeypatch.setattr(webhook.time, "sleep", lambda seconds: slept.append(seconds))
+    started, posted, deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
+    response = webhook.handler(_event("tf plan /etc"), None)
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["reason"] == "invalid_command"
+    assert started == []
+    audit_body = next(body for body, _ in posted if "## openci-tf commands" in body)
+    assert "| `tf plan /etc` | not supported |" in audit_body
+    assert "| `tf plan /etc` | accepted |" not in audit_body
+    assert slept == [10]
+    assert 42 in deleted
+    assert len(deleted) == 2
+
+
 @pytest.mark.parametrize("command", ["tf drift infra/vpc", "tf drift"])
 def test_webhook_rejects_tf_drift(monkeypatch, command):
     started, posted, deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
@@ -512,19 +538,21 @@ def test_webhook_accepted_audit_lock_contention_returns_502(monkeypatch):
     assert started == []
 
 
-def test_webhook_unsupported_audit_failure_stays_best_effort(monkeypatch):
+def test_webhook_unsupported_audit_failure_returns_502(monkeypatch):
     slept: list[float] = []
     monkeypatch.setattr(webhook.time, "sleep", lambda seconds: slept.append(seconds))
-    started, _posted, _deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
+    started, _posted, deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
 
     def failing_audit(*_args, **_kwargs):
         raise requests.RequestException("github down")
 
     monkeypatch.setattr(webhook, "record_command_audit", failing_audit)
     response = webhook.handler(_event("tf banana"), None)
-    assert response["statusCode"] == 200
-    assert json.loads(response["body"])["reason"] == "invalid_command"
+    assert response["statusCode"] == 502
+    assert json.loads(response["body"])["error"] == "Unable to acknowledge command"
     assert started == []
+    assert deleted == []
+    assert slept == []
 
 
 def _http_error(status: int) -> requests.HTTPError:
@@ -589,8 +617,9 @@ def test_webhook_redacts_confirm_comment_body_in_run_metadata(monkeypatch):
     assert any("## openci-tf commands" in body for body, _ in posted)
 
 
-def test_webhook_closed_pr_rejection_still_ignored_when_comment_post_fails(monkeypatch):
+def test_webhook_closed_pr_rejection_failure_returns_502(monkeypatch):
     started: list[bool] = []
+    deleted: list[int] = []
 
     def fake_start(_request):
         started.append(True)
@@ -610,8 +639,17 @@ def test_webhook_closed_pr_rejection_still_ignored_when_comment_post_fails(monke
         def create_comment(self, *_args, **_kwargs):
             raise requests.RequestException("network down")
 
+        def delete_comment(self, _repo, comment_id):
+            deleted.append(comment_id)
+
+        def token_login(self):
+            return "openci-bot"
+
         def find_comment_by_tag(self, *_args, **_kwargs):
             return None
+
+        def find_comments_by_body_substring(self, *_args, **_kwargs):
+            return []
 
         def get_comment_body(self, *_args, **_kwargs):
             return None
@@ -628,9 +666,10 @@ def test_webhook_closed_pr_rejection_still_ignored_when_comment_post_fails(monke
     monkeypatch.setattr(webhook, "locks_table", FakeLocksTable)
 
     response = webhook.handler(_event("tf plan infra/vpc"), None)
-    assert response["statusCode"] == 200
-    assert json.loads(response["body"])["reason"] == "pull_request_not_open"
+    assert response["statusCode"] == 502
+    assert json.loads(response["body"])["error"] == "Unable to acknowledge command"
     assert started == []
+    assert deleted == []
 
 
 def test_webhook_missing_pr_state_treated_as_closed(monkeypatch):

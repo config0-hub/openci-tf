@@ -33,6 +33,7 @@ from src.domain.engine.summary import (
     build_outer_map_outcome,
     validate_outer_map_outcome,
 )
+from src.platform.aws.intent_registry import get_intent_record
 from src.platform.aws.s3 import get_bounded_json, list_text_prefix
 from src.platform.aws.ssm import get_github_token
 from src.platform.github.client import GitHubClient, comment_url
@@ -477,7 +478,86 @@ def _uses_github_pr(event: dict[str, Any]) -> bool:
     return isinstance(webhook.get("pr_number"), int)
 
 
+def _confirm_token_from_event(event: dict[str, Any]) -> str | None:
+    token = event.get("consumed_confirm_token") or event.get("confirm_token")
+    return token if isinstance(token, str) and token else None
+
+
+def _event_with_recovered_intent_metadata(event: dict[str, Any]) -> dict[str, Any]:
+    token = _confirm_token_from_event(event)
+    if token is None:
+        return event
+    needs_record = not isinstance(event.get("requested_comment_id"), int) or not isinstance(
+        event.get("intent_comment_id"), int
+    )
+    needs_body = not isinstance(event.get("requested_comment_body"), str)
+    if not needs_record and not needs_body:
+        return event
+    record = get_intent_record(token)
+    if not record:
+        return event
+    recovered: dict[str, Any] = {}
+    if not isinstance(event.get("requested_comment_id"), int) and isinstance(
+        record.get("requested_comment_id"), int
+    ):
+        recovered["requested_comment_id"] = record["requested_comment_id"]
+    if not isinstance(event.get("intent_comment_id"), int) and isinstance(
+        record.get("intent_comment_id"), int
+    ):
+        recovered["intent_comment_id"] = record["intent_comment_id"]
+    if not isinstance(event.get("requested_comment_body"), str) and isinstance(
+        record.get("requested_comment_body"), str
+    ):
+        recovered["requested_comment_body"] = record["requested_comment_body"]
+    if not recovered:
+        return event
+    return {**event, **recovered}
+
+
+def _cleanup_terminal_mutation_comments(
+    client: GitHubClient,
+    repo: str,
+    pr: int,
+    event: dict[str, Any],
+) -> list[str]:
+    webhook = event.get("webhook_info")
+    if not isinstance(webhook, dict):
+        raise TypeError("mutation cleanup requires webhook_info")
+    if str(event.get("action") or webhook.get("action") or "") not in {
+        "apply",
+        "destroy",
+    }:
+        return []
+    explicit_ids = [
+        webhook.get("comment_id") if isinstance(webhook.get("comment_id"), int) else None,
+        event.get("requested_comment_id")
+        if isinstance(event.get("requested_comment_id"), int)
+        else None,
+        event.get("intent_comment_id")
+        if isinstance(event.get("intent_comment_id"), int)
+        else None,
+    ]
+    warnings = delete_acknowledged_command_comments(client, repo, explicit_ids)
+    stale_token = _confirm_token_from_event(event)
+    if stale_token is not None:
+        warnings.extend(
+            delete_stale_confirm_token_comments(
+                client,
+                repo,
+                pr,
+                stale_token,
+                exclude_comment_ids={
+                    comment_id
+                    for comment_id in explicit_ids
+                    if isinstance(comment_id, int)
+                },
+            )
+        )
+    return warnings
+
+
 def _render_pipeline_failure(event: dict[str, Any]) -> dict[str, Any]:
+    event = _event_with_recovered_intent_metadata(event)
     run_id = _resolve_run_id(event)
     failure = redact_and_bound_terminal_evidence(event.get("pipeline_failure"))
     if not isinstance(failure, dict):
@@ -493,6 +573,12 @@ def _render_pipeline_failure(event: dict[str, Any]) -> dict[str, Any]:
     else:
         raise ValueError("pipeline_failure.action must be a non-empty string when present")
     console_url = _console_url(event.get("execution_arn"))
+    webhook_for_action = event.get("webhook_info")
+    event_action = str(
+        event.get("action")
+        or (webhook_for_action.get("action") if isinstance(webhook_for_action, dict) else "")
+        or ""
+    )
     if _uses_github_pr(event):
         webhook = event["webhook_info"]
         repo, pr = webhook["repo_name"], webhook["pr_number"]
@@ -501,9 +587,21 @@ def _render_pipeline_failure(event: dict[str, Any]) -> dict[str, Any]:
         link = console_url or "the Step Functions console"
         body = f" openci-tf pipeline failed at {failure_label} — see execution {link}"
         _delete_and_repost_unmanaged(
-            client, repo, pr, _with_command_context(event, body, run_id=run_id), "pipeline-failure"
+            client,
+            repo,
+            pr,
+            _with_command_context(
+                event,
+                body,
+                run_id=run_id,
+                comments_removed=event_action in {"apply", "destroy"},
+            ),
+            "pipeline-failure",
         )
         cleanup_warnings = _delete_transient_status_comment(client, repo, pr, run_id) or []
+        cleanup_warnings.extend(
+            _cleanup_terminal_mutation_comments(client, repo, pr, event)
+        )
         return _with_cleanup_warnings(
             {"pipeline_failure_rendered": True, "failed_step": failed_step},
             cleanup_warnings,
@@ -831,33 +929,9 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         )
     cleanup_warnings = _delete_transient_status_comment(client, repo, pr, _resolve_run_id(event)) or []
     if action in {"apply", "destroy"}:
-        explicit_ids = [
-            webhook.get("comment_id") if isinstance(webhook.get("comment_id"), int) else None,
-            event.get("requested_comment_id")
-            if isinstance(event.get("requested_comment_id"), int)
-            else None,
-            event.get("intent_comment_id")
-            if isinstance(event.get("intent_comment_id"), int)
-            else None,
-        ]
         cleanup_warnings.extend(
-            delete_acknowledged_command_comments(client, repo, explicit_ids)
+            _cleanup_terminal_mutation_comments(client, repo, pr, event)
         )
-        stale_token = event.get("consumed_confirm_token") or event.get("confirm_token")
-        if isinstance(stale_token, str) and stale_token:
-            cleanup_warnings.extend(
-                delete_stale_confirm_token_comments(
-                    client,
-                    repo,
-                    pr,
-                    stale_token,
-                    exclude_comment_ids={
-                        comment_id
-                        for comment_id in explicit_ids
-                        if isinstance(comment_id, int)
-                    },
-                )
-            )
     else:
         cleanup_warnings.extend(
             delete_acknowledged_command_comment(

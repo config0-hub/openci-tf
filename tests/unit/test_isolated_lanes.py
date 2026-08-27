@@ -212,6 +212,12 @@ def test_read_inner_rendered_poll_does_not_require_codebuild_build_id():
     assert probe["ResultPath"] == "$.probe"
 
 
+def test_mutation_outer_threads_command_context_to_inner_lane():
+    assert '"command_context.$"' not in READ_OUTER
+    assert '"command_context.$"' in APPLY_OUTER
+    assert '"$$.Map.Item.Value.command_context"' in APPLY_OUTER
+
+
 def test_read_lane_render_parameters_do_not_reference_intent_only_keys():
     # Read-only executions are started from webhook/API run requests, which never
     # carry intent comment metadata. A JSONPath Parameters entry for a missing key

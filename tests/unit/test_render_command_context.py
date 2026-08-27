@@ -154,6 +154,110 @@ def test_render_cleanup_warning_surfaces_on_result(monkeypatch):
     assert "github delete failed" in result["comment_cleanup_warnings"][0]
 
 
+def test_pipeline_failure_deletes_mutation_command_comments_and_sweeps_token(monkeypatch):
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setattr(render, "get_github_token", lambda _: "token")
+    monkeypatch.setattr(
+        render,
+        "get_intent_record",
+        lambda token: {
+            "token": token,
+            "requested_comment_id": 10,
+            "requested_comment_body": "tf apply infra/a",
+            "intent_comment_id": 11,
+        },
+    )
+    posted: list[str] = []
+    deleted_batches: list[list[int | None]] = []
+    swept: list[tuple[str, set[int]]] = []
+
+    class Client:
+        pass
+
+    monkeypatch.setattr(render, "GitHubClient", lambda _: Client())
+    monkeypatch.setattr(
+        render,
+        "_delete_and_repost_unmanaged",
+        lambda _client, _repo, _pr, body, _suffix: posted.append(body) or 1,
+    )
+    monkeypatch.setattr(render, "_delete_transient_status_comment", lambda *_args: [])
+    monkeypatch.setattr(
+        render,
+        "delete_acknowledged_command_comments",
+        lambda _client, _repo, comment_ids: deleted_batches.append(list(comment_ids)) or [],
+    )
+    monkeypatch.setattr(
+        render,
+        "delete_stale_confirm_token_comments",
+        lambda _client, _repo, _pr, token, **kwargs: swept.append(
+            (token, set(kwargs["exclude_comment_ids"]))
+        )
+        or [],
+    )
+
+    result = render.handler(
+        _plan_event(
+            action="apply",
+            confirm_token="deadbeef",
+            webhook_info={
+                "repo_name": "org/repo",
+                "pr_number": 7,
+                "commit_hash": _FULL_SHA,
+                "trigger_id": "trigger",
+                "comment_id": 55,
+                "comment_body": "tf apply confirm <redacted>",
+            },
+            pipeline_failure={"failed_step": "ConfirmApplyIntent"},
+            execution_arn="arn:aws:states:us-east-1:123456789012:execution:openci-tf:run",
+        ),
+        None,
+    )
+
+    assert result["pipeline_failure_rendered"] is True
+    assert deleted_batches == [[55, 10, 11]]
+    assert swept == [("deadbeef", {55, 10, 11})]
+    assert posted[0].startswith("### openci-tf command")
+    assert "requested command: `tf apply infra/a`" in posted[0]
+
+
+def test_read_only_pipeline_failure_does_not_delete_command_comments(monkeypatch):
+    monkeypatch.setattr(render, "get_github_token", lambda _: "token")
+    deleted_batches: list[list[int | None]] = []
+    single_deletes: list[int | None] = []
+    swept: list[str] = []
+
+    class Client:
+        pass
+
+    monkeypatch.setattr(render, "GitHubClient", lambda _: Client())
+    monkeypatch.setattr(render, "_delete_and_repost_unmanaged", lambda *_args: 1)
+    monkeypatch.setattr(render, "_delete_transient_status_comment", lambda *_args: [])
+    monkeypatch.setattr(
+        render,
+        "delete_acknowledged_command_comments",
+        lambda _client, _repo, comment_ids: deleted_batches.append(list(comment_ids)) or [],
+    )
+    monkeypatch.setattr(
+        render,
+        "delete_acknowledged_command_comment",
+        lambda _client, _repo, comment_id: single_deletes.append(comment_id) or [],
+    )
+    monkeypatch.setattr(
+        render,
+        "delete_stale_confirm_token_comments",
+        lambda _client, _repo, _pr, token, **_kwargs: swept.append(token) or [],
+    )
+
+    result = render.handler(
+        _plan_event(pipeline_failure={"failed_step": "ValidateAndResolve"}), None
+    )
+
+    assert result["pipeline_failure_rendered"] is True
+    assert deleted_batches == []
+    assert single_deletes == []
+    assert swept == []
+
+
 def test_render_cleanup_404_is_not_an_error(monkeypatch):
     monkeypatch.setenv("LOCKS_TABLE_NAME", "locks")
     monkeypatch.setenv("TMP_BUCKET_NAME", "tmp")

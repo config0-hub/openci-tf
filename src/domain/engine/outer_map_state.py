@@ -57,6 +57,7 @@ OPTIONAL_COMPACT_MAP_ITEM_FIELDS = frozenset(
         "source_plan_run_id",
         "grace_seconds",
         "step_index",
+        "command_context",
     }
 )
 

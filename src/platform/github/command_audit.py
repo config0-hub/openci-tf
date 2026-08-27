@@ -67,6 +67,21 @@ def _acquire_with_backoff(lock_table: Any, repo: str, pr_number: int, holder: st
     raise LockHeldError(f"audit lock held for {repo}#{pr_number}")
 
 
+def _bot_authored_marker_ids(
+    client: GitHubClient, repo: str, pr_number: int, marker: str
+) -> list[int]:
+    bot_login = client.token_login()
+    return sorted(
+        {
+            comment_id
+            for comment_id, author_login in client.find_comments_by_body_substring(
+                repo, pr_number, marker
+            )
+            if author_login == bot_login
+        }
+    )
+
+
 def _record_locked(
     client: GitHubClient,
     repo: str,
@@ -78,7 +93,8 @@ def _record_locked(
     when: datetime | None,
 ) -> int:
     marker = format_commands_run_marker(repo, pr_number)
-    existing_id = client.find_comment_by_tag(repo, pr_number, marker)
+    existing_ids = _bot_authored_marker_ids(client, repo, pr_number, marker)
+    existing_id = existing_ids[0] if existing_ids else None
     existing_body = ""
     if existing_id is not None:
         existing_body = client.get_comment_body(repo, existing_id) or ""
@@ -103,7 +119,7 @@ def _merge_duplicate_audit_comments(
     client: GitHubClient, repo: str, pr_number: int, marker: str, created_id: int
 ) -> int:
     """Collapse audit comments created concurrently into the lowest comment id."""
-    marker_ids = sorted(set(client.find_comments_by_tag(repo, pr_number, marker)) | {created_id})
+    marker_ids = sorted(set(_bot_authored_marker_ids(client, repo, pr_number, marker)) | {created_id})
     if len(marker_ids) == 1:
         return marker_ids[0]
     keeper_id = marker_ids[0]

@@ -77,6 +77,7 @@ locals {
         "requested_comment_body.$" = "$.requested_comment_body"
         "intent_comment_id.$"      = "$.intent_comment_id"
         "consumed_confirm_token.$" = "$.consumed_confirm_token"
+        "confirm_token.$"          = "$.confirm_token"
         "execution_arn.$"          = "$$.Execution.Id"
       }
       ResultPath = null
@@ -275,6 +276,7 @@ resource "aws_sfn_state_machine" "openci_tf_apply" {
           "folder_pin.$"                 = "$$.Map.Item.Value.folder_pin"
           "source_plan_run_id.$"         = "$$.Map.Item.Value.source_plan_run_id"
           "grace_seconds.$"              = "$$.Map.Item.Value.grace_seconds"
+          "command_context.$"            = "$$.Map.Item.Value.command_context"
           "upstream_urls.$"              = "$.map_shared.upstream_urls"
           "repo_name.$"                  = "$.map_shared.repo_name"
           "git_url.$"                    = "$.map_shared.git_url"
@@ -443,6 +445,7 @@ resource "aws_sfn_state_machine" "openci_tf_destroy" {
           "folder_pin.$"                 = "$$.Map.Item.Value.folder_pin"
           "source_plan_run_id.$"         = "$$.Map.Item.Value.source_plan_run_id"
           "grace_seconds.$"              = "$$.Map.Item.Value.grace_seconds"
+          "command_context.$"            = "$$.Map.Item.Value.command_context"
           "upstream_urls.$"              = "$.map_shared.upstream_urls"
           "repo_name.$"                  = "$.map_shared.repo_name"
           "git_url.$"                    = "$.map_shared.git_url"

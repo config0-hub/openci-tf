@@ -113,6 +113,7 @@ def _notify_after_acceptance(
         )
     except (ValueError, TypeError, KeyError) as error:
         return _notification_failure(event=event, result=result, error=error)
+    command_context = event.get("command_context")
     try:
         publication = publish_codebuild_link(
             run_id=str(event["run_id"]),
@@ -125,6 +126,7 @@ def _notify_after_acceptance(
             codebuild_project=project_name,
             codebuild_build_id=codebuild_build_id,
             ssm_github_token_path=str(event["ssm_openci_tf_github_token"]),
+            command_context=command_context if isinstance(command_context, dict) else None,
         )
     except _NOTIFICATION_ERRORS as error:
         return _notification_failure(event=event, result=result, error=error)

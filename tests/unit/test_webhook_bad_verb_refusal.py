@@ -62,10 +62,16 @@ def _wire_webhook(monkeypatch):
         def delete_comment(self, _repo, comment_id):
             deleted.append(comment_id)
 
+        def token_login(self):
+            return "openci-bot"
+
         def find_comment_by_tag(self, *_args, **_kwargs):
             return None
 
         def find_comments_by_tag(self, *_args, **_kwargs):
+            return []
+
+        def find_comments_by_body_substring(self, *_args, **_kwargs):
             return []
 
         def get_comment_body(self, *_args, **_kwargs):

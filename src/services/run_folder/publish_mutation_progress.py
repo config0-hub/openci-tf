@@ -11,10 +11,14 @@ from src.domain.formatters.console_urls import (
     codebuild_build_url,
     step_functions_execution_url,
 )
-from src.domain.formatters.artifacts import mutation_status_comment_in_progress
+from src.domain.formatters.artifacts import (
+    command_context_block,
+    mutation_command_context_block,
+    mutation_status_comment_in_progress,
+)
 from src.platform.aws.run_registry import get_run
 from src.platform.aws.ssm import get_github_token
-from src.platform.github.client import GitHubClient, generate_search_tag
+from src.platform.github.client import GitHubClient, comment_url, generate_search_tag
 
 
 def _notification_pr(notification_target: object) -> tuple[str, int] | None:
@@ -26,6 +30,64 @@ def _notification_pr(notification_target: object) -> tuple[str, int] | None:
     if not isinstance(pr_number, int) or pr_number < 1:
         return None
     return "github_pr", pr_number
+
+
+def _int_field(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _str_field(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _progress_body_with_command_context(
+    *,
+    body: str,
+    command_context: dict[str, Any] | None,
+    repo_name: str,
+    pr_number: int,
+    action: str,
+    folder: str,
+    run_id: str,
+    commit_hash: str,
+) -> str:
+    if not isinstance(command_context, dict):
+        return body
+    requested_body = _str_field(command_context.get("requested_comment_body"))
+    requested_id = _int_field(command_context.get("requested_comment_id"))
+    confirmation_body = _str_field(command_context.get("comment_body"))
+    confirmation_id = _int_field(command_context.get("comment_id"))
+    if requested_body is not None:
+        context = mutation_command_context_block(
+            action=action,
+            requested_comment_body=requested_body,
+            requested_comment_id=requested_id,
+            requested_comment_link=comment_url(repo_name, pr_number, requested_id)
+            if requested_id is not None
+            else None,
+            confirmation_comment_body=confirmation_body,
+            confirmation_comment_id=confirmation_id,
+            confirmation_comment_link=comment_url(repo_name, pr_number, confirmation_id)
+            if confirmation_id is not None
+            else None,
+            run_id=run_id,
+            commit_hash=commit_hash,
+        )
+    else:
+        context = command_context_block(
+            action=action,
+            folders=[folder],
+            all_flag=False,
+            affected_flag=False,
+            comment_body=confirmation_body,
+            comment_id=confirmation_id,
+            comment_link=comment_url(repo_name, pr_number, confirmation_id)
+            if confirmation_id is not None
+            else None,
+            run_id=run_id,
+            commit_hash=commit_hash,
+        )
+    return f"{context}\n\n---\n\n{body}"
 
 
 def publish_codebuild_link(
@@ -40,6 +102,7 @@ def publish_codebuild_link(
     codebuild_project: str,
     codebuild_build_id: str,
     ssm_github_token_path: str,
+    command_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Idempotently update the folder in-progress comment with a CodeBuild link."""
     run = get_run(run_id)
@@ -78,7 +141,7 @@ def publish_codebuild_link(
             console_url = step_functions_execution_url(stored, region=region)
     if not console_url:
         return {"updated": False, "reason": "missing outer execution ARN"}
-    body = mutation_status_comment_in_progress(
+    status_body = mutation_status_comment_in_progress(
         action=action,
         folder=folder,
         commit_hash=commit_hash,
@@ -87,6 +150,16 @@ def publish_codebuild_link(
         codebuild_url=codebuild_url,
         codebuild_account_id=os.environ.get("ENGINE_CODEBUILD_ACCOUNT_ID") or None,
         run_id=run_id,
+    )
+    body = _progress_body_with_command_context(
+        body=status_body,
+        command_context=command_context,
+        repo_name=repo_name,
+        pr_number=pr_number,
+        action=action,
+        folder=folder,
+        run_id=run_id,
+        commit_hash=commit_hash,
     )
     token = get_github_token(ssm_github_token_path)
     client = GitHubClient(token)

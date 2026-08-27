@@ -205,6 +205,22 @@ def _bounded_upstream_urls(value: object) -> dict[str, str]:
     return bounded
 
 
+def _mutation_command_context(event: dict[str, Any]) -> dict[str, Any]:
+    webhook = event.get("webhook_info")
+    if not isinstance(webhook, dict):
+        raise TypeError("webhook_info is required for command context")
+    context: dict[str, Any] = {}
+    for key in ("comment_id", "comment_body"):
+        value = webhook.get(key)
+        if value is not None:
+            context[key] = value
+    for key in ("requested_comment_id", "requested_comment_body", "intent_comment_id"):
+        value = event.get(key)
+        if value is not None:
+            context[key] = value
+    return context
+
+
 def _folder_step_indexes(steps: list[Any]) -> dict[str, int]:
     indexes: dict[str, int] = {}
     for step_index, step in enumerate(steps):
@@ -389,6 +405,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             item["source_plan_run_id"] = source_plan_run_id
             grace_seconds = config.resolved_grace_seconds(action)
             item["grace_seconds"] = grace_seconds
+            item["command_context"] = _mutation_command_context(event)
         folder_windows.append((budget, grace_seconds))
         validate_folder_config_outer_size(raw)
         candidates.append(item)

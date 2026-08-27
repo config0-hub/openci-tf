@@ -165,11 +165,21 @@ class _SimpleAuditClient:
         self.comments: dict[int, str] = {}
         self.updates = 0
 
+    def token_login(self):
+        return "openci-bot"
+
     def find_comment_by_tag(self, _repo, _pr, tag):
         return next((cid for cid, body in self.comments.items() if tag in body), None)
 
     def find_comments_by_tag(self, _repo, _pr, tag):
         return [cid for cid, body in self.comments.items() if tag in body]
+
+    def find_comments_by_body_substring(self, _repo, _pr, needle):
+        return [
+            (cid, "openci-bot")
+            for cid, body in self.comments.items()
+            if needle in body
+        ]
 
     def get_comment_body(self, _repo, comment_id):
         return self.comments.get(comment_id)
@@ -234,11 +244,21 @@ class _DuplicateAuditClient:
         self.deleted: list[int] = []
         self._next_id = 200
 
+    def token_login(self):
+        return "openci-bot"
+
     def find_comment_by_tag(self, _repo, _pr, _tag):
         return None
 
     def find_comments_by_tag(self, _repo, _pr, tag):
         return [cid for cid, body in self.comments.items() if tag in body]
+
+    def find_comments_by_body_substring(self, _repo, _pr, needle):
+        return [
+            (cid, "openci-bot")
+            for cid, body in self.comments.items()
+            if needle in body
+        ]
 
     def get_comment_body(self, _repo, comment_id):
         return self.comments.get(comment_id)
@@ -270,3 +290,67 @@ def test_record_command_audit_merges_concurrent_duplicate_comments():
     assert list(client.comments) == [100]
     rows = parse_audit_rows(client.comments[100])
     assert [row[1] for row in rows] == ["tf plan infra/other", "tf report"]
+
+
+class _HumanMarkerAuditClient:
+    def __init__(self) -> None:
+        marker = format_commands_run_marker("org/repo", 7)
+        self.comments: dict[int, str] = {
+            100: _append(None, "tf plan infra/old"),
+            101: f"human note quoting {marker}",
+        }
+        self.authors = {100: "openci-bot", 101: "alice"}
+        self.deleted: list[int] = []
+        self.updated: list[int] = []
+
+    def token_login(self):
+        return "openci-bot"
+
+    def find_comment_by_tag(self, _repo, _pr, tag):
+        return next((cid for cid, body in self.comments.items() if tag in body), None)
+
+    def find_comments_by_tag(self, _repo, _pr, tag):
+        return [cid for cid, body in self.comments.items() if tag in body]
+
+    def find_comments_by_body_substring(self, _repo, _pr, needle):
+        return [
+            (cid, self.authors[cid])
+            for cid, body in self.comments.items()
+            if needle in body
+        ]
+
+    def get_comment_body(self, _repo, comment_id):
+        return self.comments.get(comment_id)
+
+    def create_comment(self, _repo, _pr, body):
+        self.comments[102] = body
+        self.authors[102] = "openci-bot"
+        return 102
+
+    def update_comment(self, _repo, comment_id, body):
+        self.updated.append(comment_id)
+        self.comments[comment_id] = body
+
+    def delete_comment(self, _repo, comment_id):
+        self.deleted.append(comment_id)
+        del self.comments[comment_id]
+
+
+def test_record_command_audit_ignores_human_marker_comments():
+    client = _HumanMarkerAuditClient()
+    kept = record_command_audit(
+        client,
+        "org/repo",
+        7,
+        command_text="tf report",
+        status="accepted",
+        delivery_id="guid-1",
+        lock_table=FakeLocksTable(),
+        when=_WHEN,
+    )
+    assert kept == 100
+    assert client.deleted == []
+    assert client.updated == [100]
+    assert 101 in client.comments
+    assert "tf report" in client.comments[100]
+    assert "tf report" not in client.comments[101]
