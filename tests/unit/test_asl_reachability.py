@@ -184,6 +184,26 @@ def test_rendered_mutation_graph_is_sequential_fail_fast_and_lane_locked(
         "normalize_config_error": True,
         "state.$": "$",
     }
+    assert top_level_states["NormalizeConfigError"]["Retry"] == [
+        {
+            "ErrorEquals": [
+                "Lambda.ServiceException",
+                "Lambda.AWSLambdaException",
+                "Lambda.SdkClientException",
+                "Lambda.TooManyRequestsException",
+            ],
+            "IntervalSeconds": 1,
+            "MaxAttempts": 3,
+            "BackoffRate": 2,
+        }
+    ]
+    assert top_level_states["NormalizeConfigError"]["Catch"] == [
+        {
+            "ErrorEquals": ["States.ALL"],
+            "ResultPath": None,
+            "Next": "FailValidateAndResolve",
+        }
+    ]
     run_folders = top_level_states["RunFoldersSequential"]
     assert run_folders["MaxConcurrency"] == 1
     assert top_level_states["FailRunFolders"]["Result"] == {

@@ -258,7 +258,9 @@ resource "aws_sfn_state_machine" "openci_tf_apply" {
           normalize_config_error = true
           "state.$"              = "$"
         }
-        Next = "RenderPR"
+        Retry = [{ ErrorEquals = ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], IntervalSeconds = 1, MaxAttempts = 3, BackoffRate = 2.0 }]
+        Catch = [{ ErrorEquals = ["States.ALL"], ResultPath = null, Next = "FailValidateAndResolve" }]
+        Next  = "RenderPR"
       }
       RenderPlaceholder = {
         Type     = "Task"
@@ -367,7 +369,7 @@ resource "aws_sfn_state_machine" "openci_tf_apply" {
   logging_configuration {
     log_destination        = "${aws_cloudwatch_log_group.step_function_apply.arn}:*"
     level                  = "ERROR"
-    include_execution_data = true
+    include_execution_data = false
   }
   tags = merge(var.tags, { Name = "${var.project_name}-apply" })
 }
@@ -427,7 +429,9 @@ resource "aws_sfn_state_machine" "openci_tf_destroy" {
           normalize_config_error = true
           "state.$"              = "$"
         }
-        Next = "RenderPR"
+        Retry = [{ ErrorEquals = ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], IntervalSeconds = 1, MaxAttempts = 3, BackoffRate = 2.0 }]
+        Catch = [{ ErrorEquals = ["States.ALL"], ResultPath = null, Next = "FailValidateAndResolve" }]
+        Next  = "RenderPR"
       }
       RenderPlaceholder = {
         Type     = "Task"
@@ -536,7 +540,7 @@ resource "aws_sfn_state_machine" "openci_tf_destroy" {
   logging_configuration {
     log_destination        = "${aws_cloudwatch_log_group.step_function_destroy.arn}:*"
     level                  = "ERROR"
-    include_execution_data = true
+    include_execution_data = false
   }
   tags = merge(var.tags, { Name = "${var.project_name}-destroy" })
 }

@@ -98,9 +98,13 @@ def format_commands_run_marker(repo_name: str, pr_number: int) -> str:
     return f"comment_object_id: {repo_name}:::pr-{pr_number}::commands-run"
 
 
+def _is_marker_bearing_audit_comment(body: str) -> bool:
+    return "comment_object_id:" in body and "::commands-run" in body
+
+
 def parse_audit_rows(body: str) -> list[AuditRow]:
     rows: list[AuditRow] = []
-    marker_bearing = "comment_object_id:" in body and "::commands-run" in body
+    marker_bearing = _is_marker_bearing_audit_comment(body)
     for line in body.splitlines():
         stripped = line.strip()
         match = _ROW_RE.match(stripped)
@@ -130,11 +134,18 @@ def audit_row_exists_for_delivery(body: str | None, delivery_id: str | None) -> 
 
 
 def parse_audit_created_timestamp(body: str) -> str | None:
+    created_values: list[str] = []
     for line in body.splitlines():
         stripped = line.strip()
         if stripped.startswith("Created:"):
-            return stripped[len("Created:"):].strip()
-    return None
+            created_values.append(stripped[len("Created:"):].strip())
+    if not _is_marker_bearing_audit_comment(body):
+        return created_values[0] if created_values else None
+    if len(created_values) != 1:
+        raise ValueError(
+            "marker-bearing audit comment must contain exactly one Created line"
+        )
+    return created_values[0]
 
 
 def format_command_audit_comment(
@@ -186,9 +197,9 @@ def append_audit_row(
         raise ValueError(f"invalid audit delivery id: {delivery_id!r}")
     redacted_command = normalized_command_context_line(command_text)
     if body and format_commands_run_marker(repo_name, pr_number) in body:
+        created_at = parse_audit_created_timestamp(body)
         if audit_row_exists_for_delivery(body, delivery_id):
             return body
-        created_at = parse_audit_created_timestamp(body) or timestamp
         rows = parse_audit_rows(body)
     else:
         created_at = timestamp

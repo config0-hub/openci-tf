@@ -1304,6 +1304,7 @@ def test_confirm_handler_failure_deletes_confirmation_intent_and_requested_comme
     result = confirm_handler(event, None)
 
     assert result["intent_failed"] is True
+    assert result["confirm_token"] is None
     assert deleted_batches == [[55, 11, 10]]
     assert stale_tokens == ["abc123"]
 
@@ -1497,6 +1498,7 @@ def test_confirm_handler_metadata_gap_deletes_only_confirmation_and_keeps_intent
     result = confirm_handler(event, None)
 
     assert result["intent_failed"] is True
+    assert result["confirm_token"] is None
     assert result["intent_failures"] == ["intent not ready; comment metadata is still publishing"]
     assert deleted_batches == [[55]]
     assert stale_tokens == []

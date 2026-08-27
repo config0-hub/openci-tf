@@ -23,6 +23,7 @@ from tests.helpers.asl_reachability import (
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MUTATION_TF = _REPO_ROOT / "infra/deploy/modules/openci_tf/step_function_mutation_outer.tf"
+_READ_TF = _REPO_ROOT / "infra/deploy/modules/openci_tf/step_function.tf"
 
 SETTINGS = RepoSettings(
     trigger_id="trigger",
@@ -60,6 +61,28 @@ def test_mutation_start_input_initializes_optional_renderer_keys(action):
 def test_read_lane_start_input_does_not_carry_mutation_keys():
     payload = build_step_function_input(_request("apply", confirm=False), SETTINGS, "run-1")
     assert not any(key in payload for key in MUTATION_OPTIONAL_INPUT_KEYS)
+
+
+def _state_machine_resource_block(source: str, resource: str) -> str:
+    marker = f'resource "aws_sfn_state_machine" "{resource}"'
+    return source.split(marker, 1)[1].split('\nresource "', 1)[0]
+
+
+def _logging_configuration_block(source: str, resource: str) -> str:
+    resource_block = _state_machine_resource_block(source, resource)
+    return resource_block.split("logging_configuration {", 1)[1].split("\n  }", 1)[0]
+
+
+def test_mutation_state_machine_logging_omits_execution_data_but_read_lane_keeps_it():
+    mutation_source = _MUTATION_TF.read_text(encoding="utf-8")
+    for resource in ("openci_tf_apply", "openci_tf_destroy"):
+        block = _logging_configuration_block(mutation_source, resource)
+        assert 'level                  = "ERROR"' in block
+        assert "include_execution_data = false" in block
+    read_block = _logging_configuration_block(
+        _READ_TF.read_text(encoding="utf-8"), "openci_tf"
+    )
+    assert "include_execution_data = true" in read_block
 
 
 def _states_referencing_keys(definition: dict) -> set[str]:

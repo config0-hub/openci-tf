@@ -13,6 +13,7 @@ import requests
 
 from src.core.models import RepoSettings
 from src.domain.engine.outer_map_state import merge_map_item
+from src.domain.formatters.command_audit import append_audit_row
 from src.services.resolve import validate_and_resolve
 from src.services.resolve.handler import handler as parse_command
 from src.services.run_folder import prepare_and_submit
@@ -710,6 +711,27 @@ def test_webhook_report_still_starts_run(monkeypatch):
     audit_body = next(body for body, _ in posted if "## openci-tf commands" in body)
     assert "| `tf report` | accepted |" in audit_body
     assert deleted == [42]
+
+
+def test_webhook_malformed_marker_audit_body_returns_acknowledgement_failure(monkeypatch):
+    started, _posted, _deleted, audit = _wire_webhook(monkeypatch, "", pr_state="open")
+    audit[9001] = append_audit_row(
+        None,
+        command_text="tf plan infra/vpc",
+        status="accepted",
+        repo_name="org/repo",
+        pr_number=7,
+        delivery_id="guid-1",
+    )
+    audit[9001] = "\n".join(
+        line for line in audit[9001].splitlines() if not line.startswith("Created:")
+    )
+
+    response = webhook.handler(_event("tf report", delivery=_GUID_B), None)
+
+    assert response["statusCode"] == 502
+    assert json.loads(response["body"])["error"] == "Unable to record command audit"
+    assert started == []
 
 
 def test_webhook_redacts_confirm_comment_body_in_run_metadata(monkeypatch):

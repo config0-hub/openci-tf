@@ -145,6 +145,25 @@ def test_append_audit_row_fails_loud_on_malformed_existing_row():
     assert "ACCEPTED" in malformed
 
 
+def test_append_audit_row_fails_loud_on_marker_body_without_created_line():
+    body = _append(None, "tf report", delivery_id="guid-1")
+    malformed = "\n".join(
+        line for line in body.splitlines() if not line.startswith("Created:")
+    )
+    with pytest.raises(ValueError, match="exactly one Created line"):
+        _append(malformed, "tf plan infra/a", delivery_id="guid-2")
+
+
+def test_append_audit_row_fails_loud_on_marker_body_with_duplicate_created_line():
+    body = _append(None, "tf report", delivery_id="guid-1")
+    malformed = body.replace(
+        "Created: 2026-08-18 10:03 UTC",
+        "Created: 2026-08-18 10:03 UTC\nCreated: 2026-08-18 10:04 UTC",
+    )
+    with pytest.raises(ValueError, match="exactly one Created line"):
+        _append(malformed, "tf plan infra/a", delivery_id="guid-2")
+
+
 def test_append_audit_row_skips_duplicate_delivery_id():
     body = _append(None, "tf plan infra/a", delivery_id="guid-1")
     again = _append(body, "tf plan infra/a", delivery_id="guid-1")

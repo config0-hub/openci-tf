@@ -346,7 +346,12 @@ def confirm_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                     )
             else:
                 _delete_comments_after_replacement(webhook, settings, related_ids)
-        return {**event, "intent_failed": True, "intent_failures": [item.message for item in failures]}
+        return {
+            **event,
+            "confirm_token": None,
+            "intent_failed": True,
+            "intent_failures": [item.message for item in failures],
+        }
     _record_confirmed_pipeline_metadata(event, confirmed)
     # The request, intent, and confirmation comments stay until the terminal
     # apply/destroy comment exists; the render handler deletes them then.
