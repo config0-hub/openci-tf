@@ -6,7 +6,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from botocore.exceptions import ClientError
+import requests
+from botocore.exceptions import BotoCoreError, ClientError
 
 from src.core.logging import get_logger
 from src.domain.formatters.artifacts import bound_comment, command_context_block
@@ -117,6 +118,26 @@ def _delete_stale_confirm_token_comments_after_replacement(
         logger.warning(warning)
 
 
+def _compensate_created_intent(
+    webhook_info: dict[str, Any],
+    settings: dict[str, Any],
+    token: str,
+    *,
+    intent_comment_id: int | None,
+) -> None:
+    try:
+        if intent_comment_id is not None:
+            _delete_comments_after_replacement(webhook_info, settings, [intent_comment_id])
+        else:
+            _delete_stale_confirm_token_comments_after_replacement(
+                webhook_info,
+                settings,
+                token,
+            )
+    finally:
+        delete_intent(token)
+
+
 def _current_pr_head_sha(settings: dict[str, Any], repo: str, pr_number: int) -> str:
     token = get_github_token(settings["ssm_openci_tf_github_token"])
     return GitHubClient(token).get_pr_head_sha(repo, pr_number)
@@ -214,7 +235,16 @@ def create_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         plan_summaries=summaries,
     )
     body = _with_intent_command_context(webhook, action, body)
-    intent_comment_id = _post_comment(webhook, settings, body)
+    try:
+        intent_comment_id = _post_comment(webhook, settings, body)
+    except (BotoCoreError, ClientError, requests.RequestException):
+        _compensate_created_intent(
+            webhook,
+            settings,
+            record["token"],
+            intent_comment_id=None,
+        )
+        raise
     if isinstance(intent_comment_id, int):
         try:
             store_intent_comment_metadata(
@@ -223,11 +253,13 @@ def create_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 requested_comment_body=requested_comment_body if isinstance(requested_comment_body, str) else None,
                 intent_comment_id=intent_comment_id,
             )
-        except (IntentRegistryError, ClientError):
-            try:
-                _delete_comments_after_replacement(webhook, settings, [intent_comment_id])
-            finally:
-                delete_intent(record["token"])
+        except (IntentRegistryError, BotoCoreError, ClientError):
+            _compensate_created_intent(
+                webhook,
+                settings,
+                record["token"],
+                intent_comment_id=intent_comment_id,
+            )
             raise
     # The user's request comment stays until the terminal apply/destroy
     # render deletes it (render/handler.py); only the intent comment replaces

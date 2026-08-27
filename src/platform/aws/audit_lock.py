@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+from decimal import Decimal
 from typing import Any, cast
 
 import boto3
@@ -13,6 +14,10 @@ from botocore.exceptions import ClientError
 from src.core.errors import LockHeldError
 
 AUDIT_LOCK_TTL_SECONDS = 60
+
+
+class AuditLockVersionError(RuntimeError):
+    """Raised when DynamoDB returns an invalid audit lock version value."""
 
 
 def locks_table() -> Any:
@@ -29,11 +34,17 @@ def _key(repo: str, pr_number: int) -> dict[str, str]:
 
 def _version(attributes: dict[str, Any] | None, repo: str, pr_number: int) -> int:
     raw = (attributes or {}).get("version")
-    if not isinstance(raw, int):
-        raise RuntimeError(
+    if isinstance(raw, bool):
+        raise AuditLockVersionError(
             f"audit lock for {repo}#{pr_number} returned no integer version"
         )
-    return raw
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, Decimal) and raw == raw.to_integral_value():
+        return int(raw)
+    raise AuditLockVersionError(
+        f"audit lock for {repo}#{pr_number} returned no integer version"
+    )
 
 
 def acquire(

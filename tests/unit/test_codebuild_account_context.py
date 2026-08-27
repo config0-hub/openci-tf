@@ -7,7 +7,9 @@ from __future__ import annotations
 from src.domain.formatters.artifacts import (
     mutation_status_comment_in_progress,
     mutation_terminal_comment,
+    status_comment_marker,
 )
+from src.platform.github import client as github_client
 from src.services.render.comments import _with_command_context
 from src.services.run_folder import publish_mutation_progress
 
@@ -65,7 +67,16 @@ def test_codebuild_progress_keeps_placeholder_command_context(monkeypatch) -> No
         def __init__(self, _token):
             pass
 
-        def delete_and_repost(self, _repo, _pr, body, _tag):
+        def token_login(self):
+            return "openci-bot"
+
+        def find_comments_by_body_substring(self, _repo, _pr, _needle):
+            return []
+
+        def delete_comment(self, _repo, _comment_id):
+            raise AssertionError("no existing bot comment should be deleted")
+
+        def create_comment(self, _repo, _pr, body):
             captured.append(body)
             return 99
 
@@ -106,6 +117,78 @@ def test_codebuild_progress_keeps_placeholder_command_context(monkeypatch) -> No
     assert "## Apply in progress" in captured[0]
 
 
+def test_codebuild_progress_replaces_only_bot_authored_status_marker(monkeypatch) -> None:
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    run_id = "run-1"
+    marker = status_comment_marker(run_id, now=1)
+    comments = [
+        {"id": 101, "body": f"human copy {marker}", "user": {"login": "alice"}},
+        {"id": 102, "body": f"bot old {marker}", "user": {"login": "openci-bot"}},
+    ]
+    deleted: list[int] = []
+    posted: list[str] = []
+
+    class Response:
+        def __init__(self, payload, status_code=200):
+            self._payload = payload
+            self.status_code = status_code
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise AssertionError(f"unexpected HTTP status {self.status_code}")
+
+    class Session:
+        def __init__(self):
+            self.headers = {}
+
+        def get(self, url, params=None):
+            if url == f"{github_client.GITHUB_API}/user":
+                return Response({"login": "openci-bot"})
+            if url.endswith("/repos/org/repo/issues/7/comments"):
+                page = (params or {}).get("page", 1)
+                return Response(comments if page == 1 else [])
+            raise AssertionError(f"unexpected GET {url}")
+
+        def delete(self, url):
+            comment_id = int(url.rsplit("/", 1)[-1])
+            deleted.append(comment_id)
+            return Response({})
+
+        def post(self, url, json):
+            assert url.endswith("/repos/org/repo/issues/7/comments")
+            posted.append(json["body"])
+            return Response({"id": 202}, status_code=201)
+
+    monkeypatch.setattr(github_client.requests, "Session", Session)
+    monkeypatch.setattr(
+        publish_mutation_progress,
+        "get_run",
+        lambda _run_id: {"notification_target": {"type": "github_pr", "pr_number": 7}},
+    )
+    monkeypatch.setattr(publish_mutation_progress, "get_github_token", lambda _path: "token")
+
+    result = publish_mutation_progress.publish_codebuild_link(
+        run_id=run_id,
+        repo_name="org/repo",
+        folder="infra/ec2",
+        action="apply",
+        commit_hash="a" * 40,
+        grace_seconds=15,
+        outer_execution_arn="arn:aws:states:us-east-1:123456789012:execution:openci-tf:run",
+        codebuild_project="openci-tf-worker",
+        codebuild_build_id="openci-tf-worker:11111111-2222-3333-4444-555555555555",
+        ssm_github_token_path="/openci-tf/clone-token/test",
+    )
+
+    assert result["updated"] is True
+    assert deleted == [102]
+    assert posted and "## Apply in progress" in posted[0]
+    assert 101 not in deleted
+
+
 def test_codebuild_progress_bounds_large_command_context(monkeypatch) -> None:
     monkeypatch.setenv("AWS_REGION", "us-east-1")
     captured: list[str] = []
@@ -114,7 +197,16 @@ def test_codebuild_progress_bounds_large_command_context(monkeypatch) -> None:
         def __init__(self, _token):
             pass
 
-        def delete_and_repost(self, _repo, _pr, body, _tag):
+        def token_login(self):
+            return "openci-bot"
+
+        def find_comments_by_body_substring(self, _repo, _pr, _needle):
+            return []
+
+        def delete_comment(self, _repo, _comment_id):
+            raise AssertionError("no existing bot comment should be deleted")
+
+        def create_comment(self, _repo, _pr, body):
             captured.append(body)
             return 99
 

@@ -3,6 +3,7 @@
 """Tests for PR command audit comment formatting."""
 
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import pytest
 from botocore.exceptions import ClientError
@@ -20,6 +21,7 @@ from src.domain.formatters.command_audit import (
     parse_command_timestamp,
     unsupported_command_help_comment,
 )
+from src.platform.aws import audit_lock
 from src.platform.github import command_audit as audit_module
 from src.platform.github.command_audit import record_command_audit
 from tests.helpers.fake_locks_table import FakeLocksTable
@@ -218,6 +220,25 @@ def test_record_command_audit_is_idempotent_per_delivery_and_releases_lock():
     assert lock_item["expires_at"] == 0
     assert "holder" not in lock_item
     assert lock_item["version"] >= 2
+
+
+def test_audit_lock_accepts_integral_decimal_versions_and_rejects_fractional():
+    class DecimalVersionLocksTable(FakeLocksTable):
+        def update_item(self, **kwargs):
+            response = super().update_item(**kwargs)
+            attributes = response.get("Attributes")
+            if isinstance(attributes, dict) and "version" in attributes:
+                attributes["version"] = Decimal(str(attributes["version"]))
+            return response
+
+    table = DecimalVersionLocksTable()
+    version = audit_lock.acquire(table, "org/repo", 7, "holder", now=10)
+    assert version == 1
+    fenced = audit_lock.fence(table, "org/repo", 7, "holder", version, now=11)
+    assert fenced == 2
+
+    with pytest.raises(audit_lock.AuditLockVersionError, match="no integer version"):
+        audit_lock._version({"version": Decimal("1.5")}, "org/repo", 7)
 
 
 def test_record_command_audit_rereads_after_fence_failure(monkeypatch):

@@ -26,7 +26,7 @@ from src.domain.formatters.artifacts import (
 )
 from src.domain.formatters.command_audit import unsupported_command_help_comment
 from src.domain.run.request import RunRequestValidationError
-from src.platform.aws.audit_lock import locks_table
+from src.platform.aws.audit_lock import AuditLockVersionError, locks_table
 from src.platform.aws.dynamo import get_repo_settings
 from src.platform.aws.ssm import get_github_token
 from src.platform.github.client import (
@@ -61,6 +61,7 @@ _ACKNOWLEDGEMENT_ERRORS = (
     BotoCoreError,
     ClientError,
     ValueError,
+    AuditLockVersionError,
 )
 _SAFE_ACTIONS = frozenset({"plan", "report", "plan_destroy", "drift"})
 

@@ -16,10 +16,11 @@ from src.domain.formatters.artifacts import (
     command_context_block,
     mutation_command_context_block,
     mutation_status_comment_in_progress,
+    status_comment_marker_prefix,
 )
 from src.platform.aws.run_registry import get_run
 from src.platform.aws.ssm import get_github_token
-from src.platform.github.client import GitHubClient, comment_url, generate_search_tag
+from src.platform.github.client import GitHubClient, comment_url
 
 
 def _notification_pr(notification_target: object) -> tuple[str, int] | None:
@@ -89,6 +90,25 @@ def _progress_body_with_command_context(
             commit_hash=commit_hash,
         )
     return f"{context}\n\n---\n\n{body}"
+
+
+def _replace_bot_progress_comment(
+    client: GitHubClient,
+    repo_name: str,
+    pr_number: int,
+    body: str,
+    marker: str,
+) -> int:
+    """Delete only bot-authored progress comments that carry the run marker."""
+    bot_login = client.token_login()
+    for comment_id, author_login in client.find_comments_by_body_substring(
+        repo_name,
+        pr_number,
+        marker,
+    ):
+        if author_login == bot_login:
+            client.delete_comment(repo_name, comment_id)
+    return client.create_comment(repo_name, pr_number, body)
 
 
 def publish_codebuild_link(
@@ -164,6 +184,6 @@ def publish_codebuild_link(
     )
     token = get_github_token(ssm_github_token_path)
     client = GitHubClient(token)
-    tag = generate_search_tag(repo_name, pr_number, f"folder-{folder}")
-    client.delete_and_repost(repo_name, pr_number, bound_comment(body), tag)
+    marker = status_comment_marker_prefix(run_id)
+    _replace_bot_progress_comment(client, repo_name, pr_number, bound_comment(body), marker)
     return {"updated": True, "codebuild_url": codebuild_url}

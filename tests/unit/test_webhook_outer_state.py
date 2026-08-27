@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -525,6 +526,24 @@ def test_webhook_accepted_audit_failure_returns_502_and_starts_nothing(monkeypat
     assert json.loads(response["body"])["error"] == "Unable to record command audit"
     assert started == []
     assert deleted == []
+
+
+def test_webhook_accepted_audit_invalid_version_returns_502(monkeypatch):
+    started, _posted, _deleted, _audit = _wire_webhook(monkeypatch, "", pr_state="open")
+
+    class FractionalVersionTable(FakeLocksTable):
+        def update_item(self, **kwargs):
+            response = super().update_item(**kwargs)
+            attributes = response.get("Attributes")
+            if isinstance(attributes, dict) and "version" in attributes:
+                attributes["version"] = Decimal("1.5")
+            return response
+
+    monkeypatch.setattr(webhook, "locks_table", FractionalVersionTable)
+    response = webhook.handler(_event("tf plan infra/vpc"), None)
+    assert response["statusCode"] == 502
+    assert json.loads(response["body"])["error"] == "Unable to record command audit"
+    assert started == []
 
 
 def test_webhook_accepted_audit_lock_contention_returns_502(monkeypatch):

@@ -8,6 +8,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
+import requests
+from botocore.exceptions import EndpointConnectionError
 
 from src.core.models import FolderConfig, MutationVerbConfig, RepoSettings
 from src.core.errors import ConfigValidationError
@@ -28,7 +30,6 @@ from src.services.intent.create import IntentCreationError, create_intent
 from src.services.intent import handler as intent_handler
 from src.services.intent.handler import confirm_handler, create_handler
 from src.services.intent.registry import mark_intent_used, put_intent, get_intent
-from src.platform.aws.intent_registry import IntentRegistryError
 from src.platform.aws.run_registry import RunRegistryError
 from src.services.render.handler import _pipeline_apply_footer
 
@@ -1079,13 +1080,14 @@ def test_intent_post_comment_bounds_large_command_context(monkeypatch):
     assert "tf apply a" in captured[0]
 
 
-def test_create_handler_metadata_failure_deletes_intent_comment_and_invalidates_token(
+def test_create_handler_metadata_endpoint_failure_deletes_intent_comment_and_invalidates_token(
     monkeypatch,
 ):
     monkeypatch.setattr(
         "src.services.intent.handler._current_pr_head_sha",
         lambda *_args, **_kwargs: "a" * 40,
     )
+    live_tokens = {"abc123"}
     monkeypatch.setattr(
         "src.services.intent.handler.create_intent",
         lambda **_kwargs: (
@@ -1104,10 +1106,9 @@ def test_create_handler_metadata_failure_deletes_intent_comment_and_invalidates_
     )
 
     def fail_metadata(*_args, **_kwargs):
-        raise IntentRegistryError("dynamodb failed")
+        raise EndpointConnectionError(endpoint_url="https://dynamodb.example.test")
 
     deleted_batches: list[list[int | None]] = []
-    deleted_tokens: list[str] = []
     monkeypatch.setattr(
         "src.services.intent.handler.store_intent_comment_metadata",
         fail_metadata,
@@ -1122,7 +1123,7 @@ def test_create_handler_metadata_failure_deletes_intent_comment_and_invalidates_
     )
     monkeypatch.setattr(
         "src.services.intent.handler.delete_intent",
-        lambda token: deleted_tokens.append(token),
+        lambda token: live_tokens.discard(token),
     )
 
     event = {
@@ -1138,11 +1139,92 @@ def test_create_handler_metadata_failure_deletes_intent_comment_and_invalidates_
         "settings": {"ssm_openci_tf_github_token": "/token"},
     }
 
-    with pytest.raises(IntentRegistryError, match="dynamodb failed"):
+    with pytest.raises(EndpointConnectionError):
         create_handler(event, None)
 
     assert deleted_batches == [[9001]]
-    assert deleted_tokens == ["abc123"]
+    assert "abc123" not in live_tokens
+
+
+def test_create_handler_ambiguous_post_sweeps_bot_token_comment_and_invalidates_token(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "src.services.intent.handler._current_pr_head_sha",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
+    live_tokens = {"abc123"}
+    comments = [
+        {"id": 101, "body": "human says tf apply confirm abc123", "login": "alice"},
+    ]
+    deleted: list[int] = []
+    monkeypatch.setattr(
+        "src.services.intent.handler.create_intent",
+        lambda **_kwargs: (
+            None,
+            {
+                "token": "abc123",
+                "trigger_id": "t",
+                "pr_number": 1,
+                "action": "apply",
+                "source_run_id": "plan-run",
+                "folders": ["infra/vpc"],
+                "commit_hash": "a" * 40,
+                "expires_at": 9999999999,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.store_intent_comment_metadata",
+        lambda *_args, **_kwargs: pytest.fail("metadata must not run after ambiguous post"),
+    )
+    monkeypatch.setattr(intent_handler, "get_github_token", lambda _path: "token")
+
+    class Client:
+        def __init__(self, _token):
+            pass
+
+        def create_comment(self, _repo, _pr, body):
+            comments.append({"id": 9001, "body": body, "login": "openci-bot"})
+            raise requests.ConnectionError("post result unknown")
+
+        def token_login(self):
+            return "openci-bot"
+
+        def find_comments_by_body_substring(self, _repo, _pr, needle):
+            return [
+                (comment["id"], comment["login"])
+                for comment in comments
+                if needle in comment["body"]
+            ]
+
+        def delete_comment(self, _repo, comment_id):
+            deleted.append(comment_id)
+
+    monkeypatch.setattr(intent_handler, "GitHubClient", Client)
+    monkeypatch.setattr(
+        "src.services.intent.handler.delete_intent",
+        lambda token: live_tokens.discard(token),
+    )
+
+    event = {
+        "action": "apply",
+        "folders": ["infra/vpc"],
+        "webhook_info": {
+            "pr_number": 1,
+            "trigger_id": "t",
+            "repo_name": "o/r",
+            "comment_id": 44,
+            "comment_body": "tf apply infra/vpc",
+        },
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    with pytest.raises(requests.ConnectionError, match="post result unknown"):
+        create_handler(event, None)
+
+    assert deleted == [9001]
+    assert "abc123" not in live_tokens
 
 
 def test_confirm_handler_failure_deletes_confirmation_intent_and_requested_comments(
