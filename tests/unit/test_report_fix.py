@@ -320,12 +320,16 @@ def test_render_repeated_delete_and_repost_replaces_comment_with_new_id():
             if page > 1:
                 comments = []
             else:
-                comments = [{"id": cid, "body": body} for cid, body in self.store.items()]
+                comments = [
+                    {"id": cid, "body": body, "user": {"login": "openci-bot"}}
+                    for cid, body in self.store.items()
+                ]
             return SimpleNamespace(raise_for_status=lambda: None, json=lambda: comments)
 
     session = Session()
     client = GitHubClient("token")
     client.session = session
+    client._token_login = "openci-bot"
     repo, pr = "<REPO_ORG>/<REPO_NAME>", 1
     marker = format_comment_object_marker(repo, pr, "plan", "infra/a")
     huge = "w" * 70_000

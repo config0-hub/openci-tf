@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from dataclasses import dataclass
 
 MANAGED_COMMENT_TYPES = frozenset(
     {"plan", "drift", "report", "report-all", "apply", "destroy"}
@@ -13,6 +14,16 @@ MANAGED_COMMENT_TYPES = frozenset(
 IMMUTABLE_TERMINAL_ACTIONS = frozenset({"apply", "destroy"})
 _MARKER_PREFIX = "comment_object_id:"
 _LEGACY_TAG_PREFIX = "openci-tf:::tag::"
+_TRANSIENT_HELP_MARKER = re.compile(
+    r"^<!-- openci-tf:transient-help delivery:(?P<delivery_id>[^\s>]+) -->$"
+)
+_COMMANDS_RUN_MARKER = re.compile(
+    r"^comment_object_id:\s*"
+    r"(?P<repo>[^:]+):::"
+    r"pr-(?P<pr>\d+)::"
+    r"commands-run\s*$"
+)
+_STATUS_COMMENT_PREFIX = "#openci-tf:::status_comment\t"
 _MARKER = re.compile(
     r"^comment_object_id:\s*"
     r"(?P<repo>[^:]+):::"
@@ -20,6 +31,16 @@ _MARKER = re.compile(
     r"(?P<type>plan|drift|report|report-all|apply|destroy):"
     r"(?P<folder>.+?)\s*$"
 )
+
+
+@dataclass(frozen=True)
+class CommentBodyClassification:
+    """Exact structural classification for bot-authored PR comments."""
+
+    kind: str
+    comment_type: str | None = None
+    folder: str | None = None
+    delivery_id: str | None = None
 
 
 def comment_type_for_action(action: str, *, report_all: bool = False) -> str:
@@ -84,6 +105,88 @@ def find_comment_object_marker(body: str) -> dict[str, str] | None:
         parsed = parse_comment_object_marker(line)
         if parsed is not None:
             return parsed
+    return None
+
+
+def _last_non_empty_line(body: str) -> str | None:
+    for line in reversed(body.splitlines()):
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return None
+
+
+def parse_commands_run_marker(line: str) -> dict[str, str] | None:
+    match = _COMMANDS_RUN_MARKER.match(line.strip())
+    if match is None:
+        return None
+    return {"repo_name": match.group("repo"), "pr_number": match.group("pr")}
+
+
+def find_commands_run_marker(body: str) -> dict[str, str] | None:
+    for line in body.splitlines():
+        parsed = parse_commands_run_marker(line)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def body_has_commands_run_audit_marker(body: str) -> bool:
+    return find_commands_run_marker(body) is not None
+
+
+def find_trailing_comment_object_marker(body: str) -> dict[str, str] | None:
+    trailing = _last_non_empty_line(body)
+    if trailing is None:
+        return None
+    return parse_comment_object_marker(trailing)
+
+
+def body_has_trailing_managed_marker(body: str, marker: str) -> bool:
+    if body_has_commands_run_audit_marker(body):
+        return False
+    expected = parse_comment_object_marker(marker)
+    if expected is None:
+        raise ValueError(f"invalid managed comment marker: {marker!r}")
+    return find_trailing_comment_object_marker(body) == expected
+
+
+def body_has_trailing_hidden_marker(body: str, marker: str) -> bool:
+    return not body_has_commands_run_audit_marker(body) and _last_non_empty_line(body) == marker
+
+
+def body_has_legacy_opaque_tag(body: str, tag: str) -> bool:
+    return body_has_trailing_hidden_marker(body, f"#{tag}")
+
+
+def body_has_status_comment_marker_prefix(body: str, marker_prefix: str) -> bool:
+    trailing = _last_non_empty_line(body)
+    return (
+        not body_has_commands_run_audit_marker(body)
+        and trailing is not None
+        and trailing.startswith(marker_prefix)
+        and marker_prefix.startswith(_STATUS_COMMENT_PREFIX)
+    )
+
+
+def classify_comment_body(body: str) -> CommentBodyClassification | None:
+    if body_has_commands_run_audit_marker(body):
+        return CommentBodyClassification("audit")
+    trailing = _last_non_empty_line(body)
+    if trailing is None:
+        return None
+    transient_match = _TRANSIENT_HELP_MARKER.match(trailing)
+    if transient_match is not None:
+        return CommentBodyClassification(
+            "transient-help", delivery_id=transient_match.group("delivery_id")
+        )
+    managed = parse_comment_object_marker(trailing)
+    if managed is not None:
+        return CommentBodyClassification(
+            "managed",
+            comment_type=managed["comment_type"],
+            folder=managed["folder"],
+        )
     return None
 
 

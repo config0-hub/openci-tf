@@ -187,7 +187,10 @@ def test_render_repeated_folder_and_summary_delete_and_repost_gets_new_ids(monke
             page = (params or {}).get("page", 1)
             if page > 1:
                 return SimpleNamespace(raise_for_status=lambda: None, json=lambda: [])
-            comments = [{"id": cid, "body": body} for cid, body in self.store.items()]
+            comments = [
+                {"id": cid, "body": body, "user": {"login": "openci-bot"}}
+                for cid, body in self.store.items()
+            ]
             return SimpleNamespace(raise_for_status=lambda: None, json=lambda: comments)
 
     from src.domain.github.comment_object_id import format_comment_object_marker
@@ -195,6 +198,7 @@ def test_render_repeated_folder_and_summary_delete_and_repost_gets_new_ids(monke
     session = Session()
     client = GitHubClient("token")
     client.session = session
+    client._token_login = "openci-bot"
     repo, pr = "<REPO_ORG>/<REPO_NAME>", 4
     folder_marker = format_comment_object_marker(repo, pr, "plan", "infra/a")
     summary_marker = format_comment_object_marker(repo, pr, "plan", "all")

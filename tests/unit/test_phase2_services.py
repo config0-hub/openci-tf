@@ -601,9 +601,15 @@ def test_render_no_op_posts_clear_skip_and_deletes_transient_status(monkeypatch)
     bodies: list[str] = []
 
     class Client:
-        def find_comments_by_tag(self, _repo, _pr, tag):
+        def token_login(self):
+            return "openci-bot"
+
+        def find_comments_by_body_substring(self, _repo, _pr, tag):
             deleted_tags.append(tag)
-            return [123] if tag == marker else []
+            return [(123, "openci-bot")] if tag == marker else []
+
+        def get_comment_body(self, *_args):
+            return f"status\n\n{marker}1700003600"
 
         def delete_comment(self, *_args):
             return None
@@ -853,12 +859,20 @@ def test_render_final_cleanup_deletes_only_matching_run_status_after_delete_and_
     deleted: list[int] = []
 
     class Client:
-        def find_comments_by_tag(self, repo, pr, tag):
+        def token_login(self):
+            return "openci-bot"
+
+        def find_comments_by_body_substring(self, repo, pr, tag):
             if tag == marker:
-                return [9001]
+                return [(9001, "openci-bot")]
             if tag.startswith("#openci-tf:::status_comment\tother-run"):
-                return [9002]
+                return [(9002, "openci-bot")]
             return []
+
+        def get_comment_body(self, repo, comment_id):
+            if comment_id == 9001:
+                return f"status\n\n{marker}1700003600"
+            return "status\n\n#openci-tf:::status_comment\tother-run\t1700003600"
 
         def delete_comment(self, repo, comment_id):
             deleted.append(comment_id)
@@ -891,9 +905,15 @@ def test_render_config_error_cleanup_uses_derived_run_id(monkeypatch):
     monkeypatch.setattr(render.run_lock, "release", lambda *_: pytest.fail("config error has no launched lock"))
 
     class Client:
-        def find_comments_by_tag(self, repo, pr, tag):
+        def token_login(self):
+            return "openci-bot"
+
+        def find_comments_by_body_substring(self, repo, pr, tag):
             deleted_tags.append(tag)
-            return [555] if tag == status_comment_marker_prefix(run_id) else []
+            return [(555, "openci-bot")] if tag == status_comment_marker_prefix(run_id) else []
+
+        def get_comment_body(self, *_args):
+            return f"status\n\n{status_comment_marker_prefix(run_id)}1700003600"
 
         def delete_comment(self, *_args):
             return None
@@ -921,8 +941,17 @@ def test_render_cleanup_failure_fails_loud(monkeypatch):
     monkeypatch.setattr(render, "_delete_and_repost", lambda *_args, **_kwargs: 1)
 
     class Client:
-        def find_comments_by_tag(self, *_args):
-            return [1]
+        def token_login(self):
+            return "openci-bot"
+
+        def find_comments_by_body_substring(self, *_args):
+            return [(1, "openci-bot")]
+
+        def get_comment_body(self, *_args):
+            from src.domain.engine.invocation_id import derive_run_id
+            from src.domain.formatters.artifacts import status_comment_marker_prefix
+
+            return f"status\n\n{status_comment_marker_prefix(derive_run_id(webhook))}1700003600"
 
         def delete_comment(self, *_args):
             raise RuntimeError("github delete failed")
@@ -983,6 +1012,19 @@ def test_render_repeated_run_replaces_generated_comments_at_bottom(monkeypatch):
     class Client:
         def __init__(self, _token=None):
             pass
+
+        def token_login(self):
+            return "openci-bot"
+
+        def find_comments_by_body_substring(self, repo, pr, tag):
+            return [
+                (cid, "openci-bot")
+                for cid, body in session.store.items()
+                if tag in body
+            ]
+
+        def get_comment_body(self, repo, comment_id):
+            return session.store.get(comment_id)
 
         def find_comments_by_tag(self, repo, pr, tag):
             return [cid for cid, body in session.store.items() if tag in body]
@@ -1111,6 +1153,19 @@ def test_replaceable_terminal_actions_still_carry_markers_and_replace(
             self.store: dict[int, str] = {}
             self.deleted: list[int] = []
             self.next_id = 1
+
+        def token_login(self):
+            return "openci-bot"
+
+        def find_comments_by_body_substring(self, _repo, _pr, tag):
+            return [
+                (cid, "openci-bot")
+                for cid, body in self.store.items()
+                if tag in body
+            ]
+
+        def get_comment_body(self, _repo, comment_id):
+            return self.store.get(comment_id)
 
         def find_comments_by_tag(self, _repo, _pr, tag):
             return [cid for cid, body in self.store.items() if tag in body]

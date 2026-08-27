@@ -16,6 +16,7 @@ from src.domain.formatters.command_text import (
     redact_confirm_token,
     sanitize_command_line,
 )
+from src.domain.github.comment_object_id import body_has_commands_run_audit_marker
 
 _TABLE_HEADER = "| Time | Command | Status |"
 _TABLE_SEP = "|------|---------|--------|"
@@ -148,8 +149,12 @@ def format_commands_run_marker(repo_name: str, pr_number: int) -> str:
     return f"comment_object_id: {repo_name}:::pr-{pr_number}::commands-run"
 
 
+def is_commands_run_audit_comment(body: str) -> bool:
+    return body_has_commands_run_audit_marker(body)
+
+
 def _is_marker_bearing_audit_comment(body: str) -> bool:
-    return "comment_object_id:" in body and "::commands-run" in body
+    return is_commands_run_audit_comment(body)
 
 
 def parse_audit_rows(body: str) -> list[AuditRow]:
@@ -182,6 +187,20 @@ def audit_row_exists_for_delivery(body: str | None, delivery_id: str | None) -> 
     if not body or not delivery_id:
         return False
     return any(row[3] == delivery_id for row in parse_audit_rows(body))
+
+
+def audit_delivery_has_status(
+    body: str | None, delivery_id: str | None, status: str
+) -> bool:
+    if not body or not delivery_id:
+        return False
+    if status not in {"accepted", "not supported"}:
+        raise ValueError(f"unsupported audit status: {status!r}")
+    return any(
+        row_delivery_id == delivery_id and row_status == status
+        for _time_value, _command_text, row_status, row_delivery_id, _legacy_id
+        in parse_audit_rows(body)
+    )
 
 
 def migrate_legacy_audit_rows(body: str, *, source_comment_id: int) -> list[AuditRow]:

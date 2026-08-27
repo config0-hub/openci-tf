@@ -13,6 +13,9 @@ from src.domain.formatters.artifacts import (
     status_comment_marker_prefix,
 )
 from src.domain.github.comment_object_id import (
+    body_has_legacy_opaque_tag,
+    body_has_status_comment_marker_prefix,
+    body_has_trailing_managed_marker,
     comment_type_for_action,
     folder_value_for_comment,
     format_comment_object_marker,
@@ -123,33 +126,70 @@ def _with_cleanup_warnings(result: dict[str, Any], warnings: list[str]) -> dict[
     return result
 
 
-def _bot_authored_comment_ids(
+def _candidate_comment_details(
     client: GitHubClient, repo: str, pr: int, needle: str
-) -> list[int]:
+) -> list[dict[str, str | int]]:
+    detail_search = getattr(client, "find_comment_details_by_body_substring", None)
+    if callable(detail_search):
+        return list(detail_search(repo, pr, needle))
     body_search = getattr(client, "find_comments_by_body_substring", None)
+    get_body = getattr(client, "get_comment_body", None)
+    if not callable(body_search) or not callable(get_body):
+        return []
+    details: list[dict[str, str | int]] = []
+    for comment_id, author_login in body_search(repo, pr, needle):
+        if type(comment_id) is not int:
+            raise ValueError("GitHub comment search returned no integer id")
+        body = get_body(repo, comment_id)
+        details.append(
+            {
+                "id": comment_id,
+                "author_login": author_login if isinstance(author_login, str) else "",
+                "body": body if isinstance(body, str) else "",
+            }
+        )
+    return details
+
+
+def _bot_authored_comment_ids(
+    client: GitHubClient,
+    repo: str,
+    pr: int,
+    needle: str,
+    *,
+    body_matches: Any,
+) -> list[int]:
     token_login = getattr(client, "token_login", None)
-    if callable(body_search) and callable(token_login):
-        try:
-            bot_login = token_login()
-        except AttributeError:
-            bot_login = ""
-        if bot_login:
-            return [
-                comment_id
-                for comment_id, author_login in body_search(repo, pr, needle)
-                if author_login == bot_login
-            ]
-    legacy_search = getattr(client, "find_comments_by_" + "tag", None)
-    if callable(legacy_search):
-        return list(legacy_search(repo, pr, needle))
-    return []
+    if not callable(token_login):
+        return []
+    bot_login = token_login()
+    if not bot_login:
+        return []
+    ids: list[int] = []
+    for comment in _candidate_comment_details(client, repo, pr, needle):
+        if comment.get("author_login") != bot_login:
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str) or not body_matches(body):
+            continue
+        comment_id = comment.get("id")
+        if type(comment_id) is not int:
+            raise ValueError("GitHub comment search returned no integer id")
+        ids.append(comment_id)
+    return ids
 
 
 def _delete_and_repost_unmanaged(
     client: GitHubClient, repo: str, pr: int, body: str, suffix: str
 ) -> int:
     tag = legacy_opaque_tag(repo, pr, suffix)
-    for comment_id in _bot_authored_comment_ids(client, repo, pr, tag):
+    for comment_id in _bot_authored_comment_ids(
+        client,
+        repo,
+        pr,
+        tag,
+        body_matches=lambda body: body_has_legacy_opaque_tag(body, tag),
+    ):
         client.delete_comment(repo, comment_id)
     return client.create_comment(repo, pr, bound_comment(body, suffix=f"\n\n#{tag}"))
 
@@ -186,9 +226,21 @@ def _delete_managed_comment(
     legacy_suffix: str,
 ) -> None:
     legacy_tag = legacy_opaque_tag(repo, pr, legacy_suffix)
-    for comment_id in _bot_authored_comment_ids(client, repo, pr, legacy_tag):
+    for comment_id in _bot_authored_comment_ids(
+        client,
+        repo,
+        pr,
+        legacy_tag,
+        body_matches=lambda body: body_has_legacy_opaque_tag(body, legacy_tag),
+    ):
         client.delete_comment(repo, comment_id)
-    for comment_id in _bot_authored_comment_ids(client, repo, pr, marker):
+    for comment_id in _bot_authored_comment_ids(
+        client,
+        repo,
+        pr,
+        marker,
+        body_matches=lambda body: body_has_trailing_managed_marker(body, marker),
+    ):
         client.delete_comment(repo, comment_id)
 
 
@@ -242,6 +294,12 @@ def _delete_transient_status_comment(
     client: GitHubClient, repo: str, pr: int, run_id: str
 ) -> list[str]:
     prefix = status_comment_marker_prefix(run_id)
-    for comment_id in _bot_authored_comment_ids(client, repo, pr, prefix):
+    for comment_id in _bot_authored_comment_ids(
+        client,
+        repo,
+        pr,
+        prefix,
+        body_matches=lambda body: body_has_status_comment_marker_prefix(body, prefix),
+    ):
         delete_acknowledged_command_comment(client, repo, comment_id)
     return []

@@ -9,6 +9,7 @@ from typing import Any
 import requests
 from botocore.exceptions import BotoCoreError, ClientError
 
+from src.core.errors import LockHeldError
 from src.core.logging import get_logger
 from src.domain.formatters.artifacts import (
     bound_comment,
@@ -23,7 +24,7 @@ from src.domain.intent.models import (
     intent_record_matches_current_request,
 )
 from src.platform.aws.intent_registry import IntentRegistryError
-from src.platform.aws.audit_lock import locks_table
+from src.platform.aws.audit_lock import AuditLockVersionError, locks_table
 from src.platform.aws.run_registry import set_run_pipeline_metadata
 from src.platform.aws.ssm import get_github_token
 from src.platform.github.client import GitHubClient, PullRequestState, comment_url
@@ -48,6 +49,14 @@ _CONFIRM_PR_STATE_ERRORS = (
     PullRequestNotOpenError,
     requests.RequestException,
     ValueError,
+)
+_AUDIT_STATUS_ERRORS = (
+    BotoCoreError,
+    ClientError,
+    LockHeldError,
+    requests.RequestException,
+    ValueError,
+    AuditLockVersionError,
 )
 
 
@@ -185,7 +194,7 @@ def _current_pr_head_sha(
 def _mark_delivery_audit_not_supported(
     webhook: dict[str, Any],
     settings: dict[str, Any],
-) -> None:
+) -> bool:
     pr_number = webhook.get("pr_number")
     repo = webhook.get("repo_name")
     delivery_id = webhook.get("delivery_id")
@@ -194,16 +203,19 @@ def _mark_delivery_audit_not_supported(
         or not isinstance(repo, str)
         or not isinstance(delivery_id, str)
     ):
-        return
+        return False
+    command_text = webhook.get("comment_body")
     token = get_github_token(settings["ssm_openci_tf_github_token"])
-    update_command_audit_status(
+    audit_comment_id = update_command_audit_status(
         GitHubClient(token),
         repo,
         pr_number,
         delivery_id=delivery_id,
         status="not supported",
         lock_table=locks_table(),
+        command_text=command_text if isinstance(command_text, str) else "",
     )
+    return isinstance(audit_comment_id, int)
 
 
 def _closed_pr_intent_failure(
@@ -225,7 +237,22 @@ def _closed_pr_intent_failure(
         if isinstance(webhook.get("comment_body"), str)
         else None,
     )
-    _mark_delivery_audit_not_supported(webhook, settings)
+    try:
+        audit_marked = _mark_delivery_audit_not_supported(webhook, settings)
+    except _AUDIT_STATUS_ERRORS as error:
+        logger.warning(
+            "failed to mark closed-PR delivery audit not supported for pr %s: %s",
+            pr_number,
+            error,
+        )
+        audit_marked = False
+    if not audit_marked:
+        return {
+            **event,
+            "confirm_token": None,
+            "intent_failed": True,
+            "intent_failures": [reason, "unable to update command audit"],
+        }
     if _post_comment(webhook, settings, body) is not None:
         _delete_comments_after_replacement(
             webhook,

@@ -14,9 +14,11 @@ from src.domain.formatters.command_audit import (
     MAX_AUDIT_BODY_CHARS,
     MAX_AUDIT_ROWS,
     append_audit_row,
+    audit_delivery_has_status,
     canonical_audit_rows,
     format_command_audit_comment,
     format_commands_run_marker,
+    is_commands_run_audit_comment,
     migrate_legacy_audit_rows,
     parse_audit_created_timestamp,
     update_audit_row_status,
@@ -71,8 +73,9 @@ def update_command_audit_status(
     delivery_id: str,
     status: str,
     lock_table: Any,
-) -> int | None:
-    """Update an existing audit row status under the per-PR audit lock."""
+    command_text: str | None = None,
+) -> int:
+    """Update an audit row status under the per-PR audit lock, recreating it if needed."""
     holder = uuid.uuid4().hex
     lock_version = _acquire_with_backoff(lock_table, repo, pr_number, holder)
     try:
@@ -85,6 +88,7 @@ def update_command_audit_status(
             lock_table=lock_table,
             holder=holder,
             lock_version=lock_version,
+            command_text=command_text,
         )
     finally:
         audit_lock.release(lock_table, repo, pr_number, holder)
@@ -101,19 +105,47 @@ def _acquire_with_backoff(lock_table: Any, repo: str, pr_number: int, holder: st
     raise LockHeldError(f"audit lock held for {repo}#{pr_number}")
 
 
+def _comment_details_by_body_substring(
+    client: GitHubClient, repo: str, pr_number: int, marker: str
+) -> list[dict[str, str | int]]:
+    detail_search = getattr(client, "find_comment_details_by_body_substring", None)
+    if callable(detail_search):
+        return list(detail_search(repo, pr_number, marker))
+    body_search = getattr(client, "find_comments_by_body_substring", None)
+    get_body = getattr(client, "get_comment_body", None)
+    if not callable(body_search) or not callable(get_body):
+        return []
+    details: list[dict[str, str | int]] = []
+    for comment_id, author_login in body_search(repo, pr_number, marker):
+        if type(comment_id) is not int:
+            raise ValueError("GitHub comment search returned no integer id")
+        body = get_body(repo, comment_id)
+        details.append(
+            {
+                "id": comment_id,
+                "author_login": author_login if isinstance(author_login, str) else "",
+                "body": body if isinstance(body, str) else "",
+            }
+        )
+    return details
+
+
 def _bot_authored_marker_ids(
     client: GitHubClient, repo: str, pr_number: int, marker: str
 ) -> list[int]:
     bot_login = client.token_login()
-    return sorted(
-        {
-            comment_id
-            for comment_id, author_login in client.find_comments_by_body_substring(
-                repo, pr_number, marker
-            )
-            if author_login == bot_login
-        }
-    )
+    ids: set[int] = set()
+    for comment in _comment_details_by_body_substring(client, repo, pr_number, marker):
+        if comment.get("author_login") != bot_login:
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str) or not is_commands_run_audit_comment(body):
+            continue
+        comment_id = comment.get("id")
+        if type(comment_id) is not int:
+            raise ValueError("GitHub comment search returned no integer id")
+        ids.add(comment_id)
+    return sorted(ids)
 
 
 def _record_locked(
@@ -190,15 +222,18 @@ def _update_status_locked(
     lock_table: Any,
     holder: str,
     lock_version: int,
-) -> int | None:
+    command_text: str | None,
+) -> int:
     marker = format_commands_run_marker(repo, pr_number)
     version = lock_version
     for attempt in range(3):
         existing_ids = _bot_authored_marker_ids(client, repo, pr_number, marker)
-        if not existing_ids:
-            return None
-        existing_id = existing_ids[0]
-        existing_body = client.get_comment_body(repo, existing_id) or ""
+        existing_id = existing_ids[0] if existing_ids else None
+        existing_body = (
+            client.get_comment_body(repo, existing_id)
+            if existing_id is not None
+            else None
+        )
         if len(existing_ids) > 1:
             try:
                 version = audit_lock.fence(
@@ -219,7 +254,26 @@ def _update_status_locked(
             repo_name=repo,
             pr_number=pr_number,
         )
-        if body != existing_body:
+        if not audit_delivery_has_status(body, delivery_id, status):
+            if command_text is None:
+                raise ValueError(
+                    f"audit delivery row {delivery_id!r} is missing and no command_text was supplied"
+                )
+            body = append_audit_row(
+                existing_body if existing_body and marker in existing_body else None,
+                command_text=command_text,
+                status=status,
+                repo_name=repo,
+                pr_number=pr_number,
+                delivery_id=delivery_id,
+            )
+        if not audit_delivery_has_status(body, delivery_id, status):
+            raise ValueError(
+                f"audit delivery row {delivery_id!r} was not written as {status!r}"
+            )
+        if existing_id is not None and existing_body is not None:
+            if body == existing_body:
+                return existing_id
             try:
                 version = audit_lock.fence(
                     lock_table, repo, pr_number, holder, version, int(time.time())
@@ -229,8 +283,15 @@ def _update_status_locked(
                     raise
                 version = _acquire_with_backoff(lock_table, repo, pr_number, holder)
                 continue
-            client.update_comment(repo, existing_id, body or "")
-        return existing_id
+            client.update_comment(repo, existing_id, body)
+            return existing_id
+        version = audit_lock.fence(
+            lock_table, repo, pr_number, holder, version, int(time.time())
+        )
+        created_id = client.create_comment(repo, pr_number, body)
+        if existing_id is not None and existing_body is None:
+            return created_id
+        return _merge_duplicate_audit_comments(client, repo, pr_number, marker, created_id)
     raise LockHeldError(f"audit lock fence failed for {repo}#{pr_number}")
 
 

@@ -1423,7 +1423,18 @@ def test_confirm_handler_closed_pr_between_webhook_and_confirm_ignores_without_c
 def test_confirm_handler_unreadable_pr_ignores_without_consuming_token(monkeypatch):
     posted: list[str] = []
     deleted: list[int] = []
+    comments = {
+        100: append_audit_row(
+            None,
+            command_text="tf apply confirm abc123",
+            status="accepted",
+            repo_name="o/r",
+            pr_number=1,
+            delivery_id="delivery-1",
+        )
+    }
     monkeypatch.setattr(intent_handler, "get_github_token", lambda _path: "token")
+    monkeypatch.setattr(intent_handler, "locks_table", FakeLocksTable)
     monkeypatch.setattr(
         "src.services.intent.handler.confirm_intent",
         lambda **_kwargs: pytest.fail("unreadable PR confirmation must not consume token"),
@@ -1435,6 +1446,18 @@ def test_confirm_handler_unreadable_pr_ignores_without_consuming_token(monkeypat
 
         def get_pr_state(self, _repo, _pr):
             raise requests.ConnectionError("github down")
+
+        def token_login(self):
+            return "openci-bot"
+
+        def find_comments_by_body_substring(self, _repo, _pr, needle):
+            return [(cid, "openci-bot") for cid, body in comments.items() if needle in body]
+
+        def get_comment_body(self, _repo, comment_id):
+            return comments.get(comment_id)
+
+        def update_comment(self, _repo, comment_id, body):
+            comments[comment_id] = body
 
         def create_comment(self, _repo, _pr, body):
             posted.append(body)
@@ -1453,6 +1476,7 @@ def test_confirm_handler_unreadable_pr_ignores_without_consuming_token(monkeypat
             "repo_name": "o/r",
             "comment_id": 55,
             "comment_body": "tf apply confirm abc123",
+            "delivery_id": "delivery-1",
         },
         "settings": {"ssm_openci_tf_github_token": "/token"},
     }
@@ -1467,6 +1491,9 @@ def test_confirm_handler_unreadable_pr_ignores_without_consuming_token(monkeypat
     assert posted[0].startswith("openci-tf ignored the command")
     assert "abc123" not in posted[0]
     assert deleted == [55]
+    assert [(row[2], row[3]) for row in parse_audit_rows(comments[100])] == [
+        ("not supported", "delivery-1")
+    ]
 
 
 def test_confirm_handler_failure_deletes_confirmation_intent_and_requested_comments(

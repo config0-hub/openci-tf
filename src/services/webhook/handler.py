@@ -26,6 +26,10 @@ from src.domain.formatters.artifacts import (
     closed_pr_rejection_comment,
 )
 from src.domain.formatters.command_audit import unsupported_command_help_comment
+from src.domain.github.comment_object_id import (
+    body_has_trailing_hidden_marker,
+    classify_comment_body,
+)
 from src.domain.run.request import RunRequestValidationError
 from src.platform.aws.audit_lock import AuditLockVersionError, locks_table
 from src.platform.aws.dynamo import get_repo_settings
@@ -118,6 +122,8 @@ def _bot_comments_with_marker(
             repo, pr_number, marker
         )
         if comment.get("author_login") == bot_login
+        and isinstance(comment.get("body"), str)
+        and body_has_trailing_hidden_marker(str(comment.get("body")), marker)
     ]
 
 
@@ -151,7 +157,11 @@ def _delete_expired_transient_help_comments(
     for comment in client.find_comment_details_by_body_substring(
         repo, pr_number, _TRANSIENT_HELP_MARKER_PREFIX
     ):
+        body = comment.get("body")
+        classification = classify_comment_body(body if isinstance(body, str) else "")
         if comment.get("author_login") != bot_login:
+            continue
+        if classification is None or classification.kind != "transient-help":
             continue
         if _parse_github_timestamp(str(comment.get("created_at") or "")) <= cutoff:
             delete_acknowledged_command_comment(client, repo, _comment_id(comment))
@@ -503,14 +513,17 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 comment_body=info.comment_body,
             )
             try:
-                update_command_audit_status(
+                audit_comment_id = update_command_audit_status(
                     client,
                     settings.repo_name,
                     info.pr_number,
                     delivery_id=delivery_id,
                     status="not supported",
                     lock_table=locks_table(),
+                    command_text=info.comment_body or "",
                 )
+                if not isinstance(audit_comment_id, int):
+                    raise ValueError("audit status update returned no comment id")
                 _post_or_reuse_command_rejection_and_cleanup(
                     client=client,
                     repo=settings.repo_name,

@@ -10,6 +10,9 @@ import pytest
 import requests
 from botocore.exceptions import ClientError
 
+from src.domain.formatters.artifacts import status_comment_marker
+from src.domain.formatters.command_audit import append_audit_row
+from src.domain.github.comment_object_id import format_comment_object_marker
 from src.services.render import handler as render
 from src.services.render.comments import _delete_generated_comment, _with_command_context
 
@@ -57,6 +60,11 @@ def test_with_command_context_prefixes_body_for_github_pr():
 
 def test_generated_marker_cleanup_deletes_only_bot_comments():
     marker_deleted: list[int] = []
+    marker = format_comment_object_marker("org/repo", 7, "plan", "infra/a")
+    bodies = {
+        100: f"## plan\n\n{marker}",
+        101: f"## human quote\n\n{marker}",
+    }
 
     class Client:
         def token_login(self):
@@ -67,12 +75,48 @@ def test_generated_marker_cleanup_deletes_only_bot_comments():
                 return [(100, "openci-bot"), (101, "alice")]
             return []
 
+        def get_comment_body(self, _repo, comment_id):
+            return bodies[comment_id]
+
         def delete_comment(self, _repo, comment_id):
             marker_deleted.append(comment_id)
 
     _delete_generated_comment(Client(), "org/repo", 7, "plan", "infra/a")
 
     assert marker_deleted == [100]
+
+
+def test_generated_marker_cleanup_does_not_delete_poisoned_audit_comment():
+    marker_deleted: list[int] = []
+    marker = format_comment_object_marker("org/repo", 7, "plan", "infra/a")
+    audit_body = append_audit_row(
+        None,
+        command_text="tf banana",
+        status="not supported",
+        repo_name="org/repo",
+        pr_number=7,
+        delivery_id="delivery-1",
+    ).replace("tf banana", f"tf banana {marker}")
+    bodies = {100: audit_body, 101: f"## plan\n\n{marker}"}
+
+    class Client:
+        def token_login(self):
+            return "openci-bot"
+
+        def find_comments_by_body_substring(self, _repo, _pr, needle):
+            if needle == marker:
+                return [(comment_id, "openci-bot") for comment_id in bodies]
+            return []
+
+        def get_comment_body(self, _repo, comment_id):
+            return bodies[comment_id]
+
+        def delete_comment(self, _repo, comment_id):
+            marker_deleted.append(comment_id)
+
+    _delete_generated_comment(Client(), "org/repo", 7, "plan", "infra/a")
+
+    assert marker_deleted == [101]
 
 
 def test_terminal_apply_recovers_metadata_and_deletes_request_intent_and_confirm_comments(monkeypatch):
@@ -289,6 +333,9 @@ def test_render_cleanup_failure_raises(monkeypatch):
 
         def find_comments_by_body_substring(self, *_args):
             return [(1, "openci-bot")]
+
+        def get_comment_body(self, *_args):
+            return f"status body\n\n{status_comment_marker('1700000000000.deadbeef')}"
 
         def delete_comment(self, _repo, comment_id):
             if comment_id == 1:

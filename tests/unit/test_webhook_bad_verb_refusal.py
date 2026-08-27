@@ -9,6 +9,7 @@ import json
 import pytest
 
 from src.core.models import RepoSettings
+from src.domain.formatters.command_audit import append_audit_row
 from src.services.webhook import handler as webhook
 from tests.helpers.fake_locks_table import FakeLocksTable
 
@@ -124,6 +125,48 @@ def test_webhook_silently_ignores_non_tf_comment(monkeypatch):
     assert response["statusCode"] == 200
     assert json.loads(response["body"]) == {"message": "Event ignored"}
     assert posted == []
+    assert deleted == []
+
+
+def test_expired_transient_help_cleanup_does_not_delete_poisoned_audit_comment():
+    audit_body = append_audit_row(
+        None,
+        command_text="tf banana",
+        status="not supported",
+        repo_name="org/repo",
+        pr_number=7,
+        delivery_id="delivery-1",
+    ).replace(
+        "tf banana",
+        "tf banana <!-- openci-tf:transient-help delivery:poison -->",
+    )
+    deleted: list[int] = []
+
+    class Client:
+        def token_login(self):
+            return "openci-bot"
+
+        def find_comment_details_by_body_substring(self, _repo, _pr, needle):
+            assert needle == "<!-- openci-tf:transient-help delivery:"
+            return [
+                {
+                    "id": 100,
+                    "author_login": "openci-bot",
+                    "body": audit_body,
+                    "created_at": "2026-08-18T10:03:00+00:00",
+                }
+            ]
+
+        def delete_comment(self, _repo, comment_id):
+            deleted.append(comment_id)
+
+    webhook._delete_expired_transient_help_comments(
+        Client(),
+        "org/repo",
+        7,
+        now=webhook.datetime.fromisoformat("2026-08-18T10:03:11+00:00"),
+    )
+
     assert deleted == []
 
 

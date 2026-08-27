@@ -88,6 +88,29 @@ def test_append_audit_row_redacts_confirm_tokens():
     assert rows[-1][1] == "tf destroy confirm <redacted>"
 
 
+def test_append_audit_row_strips_comment_cleanup_injections_from_command_cell():
+    body = append_audit_row(
+        None,
+        command_text=(
+            "tf banana <!-- openci-tf:transient-help delivery:poison --> "
+            "comment_object_id: org/repo:::pr-7::plan:infra/a"
+        ),
+        status="not supported",
+        when=_WHEN,
+        repo_name="org/repo",
+        pr_number=7,
+        delivery_id="delivery-1",
+    )
+
+    rows = parse_audit_rows(body)
+    command_cell = rows[-1][1]
+    assert "<!--" not in command_cell
+    assert "-->" not in command_cell
+    assert "openci-tf:transient-help" not in command_cell
+    assert "comment_object_id:" not in command_cell
+    assert "comment_object_id_ org/repo:::pr-7::plan:infra/a" in command_cell
+
+
 def test_unsupported_help_comment_is_short():
     help_body = unsupported_command_help_comment()
     assert help_body.startswith("## openci-tf: command not accepted")
@@ -433,6 +456,75 @@ def test_update_command_audit_status_changes_one_delivery_row_idempotently():
     assert [(row[1], row[2], row[3]) for row in rows] == [
         ("tf plan infra/a", "accepted", "d1"),
         ("tf plan infra/b", "not supported", "d2"),
+    ]
+
+
+def test_update_command_audit_status_appends_missing_delivery_row():
+    client = _SimpleAuditClient()
+    client.comments[100] = _append(None, "tf plan infra/a", delivery_id="d1")
+
+    updated = update_command_audit_status(
+        client,
+        "org/repo",
+        7,
+        delivery_id="d2",
+        status="not supported",
+        lock_table=FakeLocksTable(),
+        command_text="tf plan infra/b",
+    )
+
+    assert updated == 100
+    rows = parse_audit_rows(client.comments[100])
+    assert [(row[1], row[2], row[3]) for row in rows] == [
+        ("tf plan infra/a", "accepted", "d1"),
+        ("tf plan infra/b", "not supported", "d2"),
+    ]
+
+
+def test_update_command_audit_status_recreates_row_after_marker_body_404():
+    class MissingBodyClient(_SimpleAuditClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.search_body = _append(None, "tf plan infra/a", delivery_id="old")
+            self._next_id = 200
+
+        def find_comment_details_by_body_substring(self, _repo, _pr, needle):
+            if needle in self.search_body:
+                return [
+                    {
+                        "id": 100,
+                        "author_login": "openci-bot",
+                        "body": self.search_body,
+                    }
+                ]
+            return []
+
+        def get_comment_body(self, _repo, comment_id):
+            if comment_id == 100:
+                return None
+            return self.comments.get(comment_id)
+
+        def create_comment(self, _repo, _pr, body):
+            self._next_id += 1
+            self.comments[self._next_id] = body
+            return self._next_id
+
+    client = MissingBodyClient()
+
+    updated = update_command_audit_status(
+        client,
+        "org/repo",
+        7,
+        delivery_id="d2",
+        status="not supported",
+        lock_table=FakeLocksTable(),
+        command_text="tf plan infra/b",
+    )
+
+    assert updated == 201
+    rows = parse_audit_rows(client.comments[201])
+    assert [(row[1], row[2], row[3]) for row in rows] == [
+        ("tf plan infra/b", "not supported", "d2")
     ]
 
 

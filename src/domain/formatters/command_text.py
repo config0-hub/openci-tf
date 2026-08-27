@@ -10,6 +10,8 @@ import re
 MAX_COMMAND_CONTEXT_CHARS = 200
 _TRUNCATION_HASH_CHARS = 12
 _CONFIRM_TOKEN_RE = re.compile(r"\b(confirm)\s+(\S+)", re.IGNORECASE)
+_HTML_COMMENT_BLOCK_RE = re.compile(r"<!--.*?-->")
+_COMMENT_OBJECT_ID_TOKEN_RE = re.compile(r"\bcomment_object_id\s*:", re.IGNORECASE)
 
 
 def redact_confirm_token(text: str) -> str:
@@ -18,8 +20,13 @@ def redact_confirm_token(text: str) -> str:
 
 
 def sanitize_command_line(command_text: str) -> str:
-    """Collapse whitespace, drop backticks, and escape pipes for Markdown table cells."""
-    collapsed = " ".join(command_text.split()).replace("`", "")
+    """Collapse whitespace, strip comment markers, and escape Markdown table pipes."""
+    without_html_comments = _HTML_COMMENT_BLOCK_RE.sub(" ", command_text)
+    without_html_markers = without_html_comments.replace("<!--", " ").replace("-->", " ")
+    neutralized_markers = _COMMENT_OBJECT_ID_TOKEN_RE.sub(
+        "comment_object_id_", without_html_markers
+    )
+    collapsed = " ".join(neutralized_markers.split()).replace("`", "")
     unescaped = collapsed.replace("\\|", "|")
     return unescaped.replace("|", "\\|")
 
