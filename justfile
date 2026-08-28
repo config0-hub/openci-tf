@@ -293,12 +293,12 @@ deploy:
     # Fresh installs and interrupted deploys need module.ecr in state before push.
     # Upgrades skip the targeted apply when module.ecr already satisfies plan.
     set +e
-    terraform -chdir=infra/deploy plan -input=false -target=module.ecr -detailed-exitcode >/dev/null
+    terraform -chdir=infra/deploy plan -input=false -target=module.ecr -target=module.hub_setup.aws_iam_role.executor_local -target=module.hub_setup.aws_iam_role_policy.executor_local -detailed-exitcode >/dev/null
     ECR_PLAN_RC=$?
     set -e
     case "$ECR_PLAN_RC" in
       0) echo "ECR module already satisfied; skipping bootstrap target apply" ;;
-      2) terraform -chdir=infra/deploy apply -input=false -auto-approve -target=module.ecr ;;
+      2) terraform -chdir=infra/deploy apply -input=false -auto-approve -target=module.ecr -target=module.hub_setup.aws_iam_role.executor_local -target=module.hub_setup.aws_iam_role_policy.executor_local ;;
       *) echo "ERROR: terraform plan for module.ecr failed; aborting deploy" >&2; exit 1 ;;
     esac
     }
