@@ -228,17 +228,16 @@ def _mutation_folder_comment(
         "skipped",
     }
     plan_artifact = "plan.tfplan" if action == "apply" else "destroy.plan.tfplan"
+    source_run_id = _source_plan_run_id(outcome)
     plan_show = artifacts.get("plan-show.out", "")
-    if not plan_show.strip() and succeeded:
-        source_run_id = _source_plan_run_id(outcome)
-        if source_run_id:
-            plan_show = _fetch_source_plan_text(
-                repo_name=repo_name,
-                folder=folder,
-                action=action,
-                source_run_id=source_run_id,
-                pr_number=pr_number,
-            ) or ""
+    if not plan_show.strip() and succeeded and source_run_id:
+        plan_show = _fetch_source_plan_text(
+            repo_name=repo_name,
+            folder=folder,
+            action=action,
+            source_run_id=source_run_id,
+            pr_number=pr_number,
+        ) or ""
     plan_pointer = None
     if plan_show and len(plan_show.encode("utf-8")) > 8000:
         plan_pointer = f"openci-tf/{run_id}/{folder}/plan-show.out"
@@ -262,6 +261,7 @@ def _mutation_folder_comment(
         codebuild_account_id=os.environ.get("ENGINE_CODEBUILD_ACCOUNT_ID") or None,
         plan_show_text=plan_show or None,
         plan_show_pointer=plan_pointer,
+        source_plan_run_id=source_run_id,
         error=terminal_error,
     )
 

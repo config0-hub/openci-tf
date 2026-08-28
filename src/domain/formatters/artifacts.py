@@ -515,6 +515,7 @@ def mutation_terminal_comment(
     codebuild_account_id: str | None,
     plan_show_text: str | None,
     plan_show_pointer: str | None,
+    source_plan_run_id: str | None = None,
     error: str | None = None,
 ) -> str:
     """Terminal apply/destroy folder comment with bounded plan show output."""
@@ -523,8 +524,11 @@ def mutation_terminal_comment(
     lines = [
         f"## {verb} {status} — `{folder}` ({account_id})",
         f"+ pinned plan: `{pinned_plan_artifact}`",
-        f"+ commit: `{commit_hash[:7] if commit_hash else 'unknown'}`",
     ]
+    if source_plan_run_id:
+        source_label = "source destroy-plan run id" if action == "destroy" else "source plan run id"
+        lines.append(f"+ {source_label}: `{source_plan_run_id}`")
+    lines.append(f"+ commit: `{commit_hash[:7] if commit_hash else 'unknown'}`")
     if console_url:
         lines.append(f"+ [Step Functions execution]({console_url})")
     if codebuild_url:

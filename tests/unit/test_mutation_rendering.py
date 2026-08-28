@@ -72,7 +72,7 @@ def test_summary_does_not_render_icon_legend():
     assert "Security:" not in rendered
 
 
-def test_render_mutation_terminal_comment_is_markerless(monkeypatch):
+def _stub_render_mutation_dependencies(monkeypatch):
     monkeypatch.setenv("LOCKS_TABLE_NAME", "locks")
     monkeypatch.setenv("TMP_BUCKET_NAME", "tmp")
     monkeypatch.setattr(render, "get_github_token", lambda _: "token")
@@ -88,6 +88,13 @@ def test_render_mutation_terminal_comment_is_markerless(monkeypatch):
     )
     monkeypatch.setattr(render, "_plan_artifact_metadata", lambda *_, **__: None)
     monkeypatch.setattr(render.run_lock, "release", lambda *_, **__: None)
+    monkeypatch.setattr(render, "_delete_generated_comment", lambda *_, **__: None)
+    monkeypatch.setattr(render, "_delete_transient_status_comment", lambda *_, **__: [])
+    monkeypatch.setattr(render, "_cleanup_terminal_mutation_comments", lambda *_, **__: [])
+
+
+def test_render_mutation_terminal_comment_is_markerless(monkeypatch):
+    _stub_render_mutation_dependencies(monkeypatch)
     comments: list[str] = []
 
     def capture(_client, _repo, _pr, body, action, folder, **kwargs):
@@ -96,8 +103,6 @@ def test_render_mutation_terminal_comment_is_markerless(monkeypatch):
         return 1
 
     monkeypatch.setattr(render, "_delete_and_repost", capture)
-    monkeypatch.setattr(render, "_delete_generated_comment", lambda *_, **__: None)
-    monkeypatch.setattr(render, "_delete_transient_status_comment", lambda *_, **__: [])
 
     render.handler(
         {
@@ -128,3 +133,68 @@ def test_render_mutation_terminal_comment_is_markerless(monkeypatch):
     _assert_plan_in_collapsed_details(body)
     assert "Apply complete!" not in body
     assert "Destroy complete!" not in body
+
+
+@pytest.mark.parametrize(
+    ("action", "source_label", "source_run_id"),
+    [
+        ("apply", "source plan run id", "1787880280961.7e34ddd6"),
+        ("destroy", "source destroy-plan run id", "1787884548233.c7ac9302"),
+    ],
+)
+def test_render_mutation_terminal_comment_includes_source_plan_run_id(
+    monkeypatch, action, source_label, source_run_id
+):
+    _stub_render_mutation_dependencies(monkeypatch)
+    monkeypatch.setattr(
+        render,
+        "get_bounded_json",
+        lambda *_args, **_kwargs: {"source_plan_run_id": source_run_id},
+    )
+    comments: list[str] = []
+
+    def capture(_client, _repo, _pr, body, captured_action, folder, **kwargs):
+        if captured_action == action and folder == "terraform/eu-west-1/02-ec2":
+            comments.append(body)
+        return 1
+
+    monkeypatch.setattr(render, "_delete_and_repost", capture)
+
+    render.handler(
+        {
+            "action": action,
+            "run_id": "1787000000000.abc12345",
+            "webhook_info": {
+                "repo_name": "<REPO_ORG>/<REPO_NAME>",
+                "pr_number": 22,
+                "comment_id": 102,
+                "comment_body": f"tf {action} confirm deadbee",
+                "commit_hash": "a" * 40,
+            },
+            "requested_comment_id": 101,
+            "requested_comment_body": f"tf {action} terraform/eu-west-1/02-ec2",
+            "intent_comment_id": 103,
+            "consumed_confirm_token": "deadbee",
+            "settings": {"ssm_openci_tf_github_token": "/token"},
+            "outcomes": [
+                {
+                    "folder": "terraform/eu-west-1/02-ec2",
+                    "account_id": "REPLACE_MAIN_ACCOUNT",
+                    "execution_id": "outer.child",
+                    "output": {
+                        "exec_id": "inner.mutation.0",
+                        "succeeded": True,
+                        "manifest_s3_uri": "s3://tmp/openci-tf/manifest.json",
+                    },
+                }
+            ],
+            "skipped": [],
+        },
+        None,
+    )
+
+    assert len(comments) == 1
+    body = comments[0]
+    assert f"+ {source_label}: `{source_run_id}`" in body
+    assert "deadbee" not in body
+    assert f"tf {action} confirm <redacted>" in body
