@@ -14,10 +14,11 @@ server packaged as a Lambda.
 
 ## Users
 
-Primary users are platform and DevOps engineers — the people who install and
-operate openci-tf across repositories and AWS accounts. They monitor run health,
+Primary users are platform and DevOps engineers who install and operate
+openci-tf across repositories and AWS accounts. They monitor run health,
 investigate failures, and manage installation-level configuration. Application
-team developers interact with openci-tf mainly through GitHub PR comments.
+team developers interact with openci-tf mainly through GitHub PR comments, which
+are the primary user interface for pull request results.
 
 ## Product Purpose
 
@@ -26,9 +27,11 @@ over Terraform/OpenTofu folders in GitHub pull requests. Apply and destroy are
 blocked by default and require the explicit gated flow documented in
 [docs/APPLY.md](docs/APPLY.md).
 
-The web console is an operator surface for the same core API: run history,
-folder status, manifests, artifacts, registered repositories/accounts, locks,
-and gate visibility.
+GitHub PR comments are the primary result view. They summarize folder status,
+drift, security findings, and cost, with detailed output kept behind collapsed
+sections. The web console is an optional operator view for run history, folder
+status, manifests, artifacts, registered repositories/accounts, locks, and gate
+visibility.
 
 ## Positioning
 
@@ -56,6 +59,18 @@ resources first.
   and cursor pagination.
 - Operator visibility for registered repositories, accounts, locks, and mutation
   gates.
+- For `tf report`, any successfully parsed nonzero Terraform/OpenTofu plan delta
+  is presented as drift. Zero changes are clean. Missing or invalid evidence
+  remains unknown, and execution failure still takes precedence.
+- `tf report` comments keep every non-clean folder visible, ordered by the worst
+  execution, security, or drift condition. Clean folders are collapsed.
+- One expansion of a `tf report` folder comment shows the human-readable plan
+  output inline. Low-frequency setup, cost, security detail, and download
+  pointers can stay collapsed.
+- Managed PR comment identity and replacement semantics remain stable so repeated
+  runs update the intended folder and report summary comments.
+- PR comment status indicators pair an icon with a text label so meaning does not
+  depend on color alone.
 - Apply and destroy must not bypass the two-step confirmation flow in
   [docs/APPLY.md](docs/APPLY.md).
 
@@ -63,6 +78,8 @@ resources first.
 
 - Keep read-only plan work and mutation work structurally isolated.
 - Make failure details actionable without exposing secrets or unbounded output.
+- Make drift and security findings scannable in GitHub PR comments before showing
+  detailed artifacts.
 - Treat retention as real: views should show when artifacts are bounded or
   expired instead of implying permanence.
 - Keep the console a thin operator view over the documented core API.

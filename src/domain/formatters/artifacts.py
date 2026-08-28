@@ -8,6 +8,7 @@ import html
 import json
 import re
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from src.core.terminal_evidence import redact_and_bound_terminal_evidence
@@ -29,7 +30,9 @@ from src.domain.formatters.tfsec_findings import (  # noqa: F401  (re-exported)
     _analyze_tfsec_severity,
     _artifact_skipped,
     _strip_ansi,
+    _tfsec_text_from_json,
     tfsec,
+    tfsec_summary_line,
 )
 
 _MAX_CONFIGURATION_ERROR_CHARS = 465
@@ -39,9 +42,7 @@ _HIDDEN_AUDIT_ROW_ID = re.compile(r"<!--\s*[dl]:[^\s>]+\s*-->")
 _HIDDEN_DELIVERY_ID_LINE = re.compile(
     r"^\s*<!--\s*openci-tf:[^>]*\bdelivery:[^>]+-->\s*$"
 )
-_LEGACY_COMMENT_ID_LINE = re.compile(
-    r"^\s*#openci-tf:::(?:tag::|status_comment\b).*$"
-)
+_LEGACY_COMMENT_ID_LINE = re.compile(r"^\s*#openci-tf:::(?:tag::|status_comment\b).*$")
 _IDENTITY_LINE_PLACEHOLDER = "[identity-line-removed]"
 
 
@@ -230,7 +231,9 @@ def _triggering_comment_line(
     if comment_id is None:
         return None
     if removed or not comment_link:
-        return f"- triggering comment id: `{comment_id}` (removed after acknowledgement)"
+        return (
+            f"- triggering comment id: `{comment_id}` (removed after acknowledgement)"
+        )
     suffix = f" ({live_suffix})" if live_suffix else ""
     return f"- triggering comment: [{comment_id}]({comment_link}){suffix}"
 
@@ -370,12 +373,160 @@ def closed_pr_rejection_comment(
         detail = f"\n\nIgnored command ({trigger}): `{redacted}`"
     return (
         "openci-tf ignored the command because this pull request is closed or merged. "
-        "Commands must be posted on an open pull request."
-        + detail
+        "Commands must be posted on an open pull request." + detail
     )
 
 
-_PLAN_SUMMARY_ACTIONS = frozenset({"plan", "report", "plan_destroy"})
+_PLAN_SUMMARY_ACTIONS = frozenset({"plan", "plan_destroy"})
+_REPORT_DRIFT_LABELS = {
+    "clean": "✅ CLEAN",
+    "drift": "⚠️ DRIFT",
+    "failed": "❌ FAILED",
+    "unknown": "❔ UNKNOWN",
+    "pending": "⏳ PENDING",
+    "skipped": "⏭️ NOT RUN",
+}
+_REPORT_SECURITY_LABELS = {
+    "clean": "✅ CLEAN",
+    "critical": "🛑 CRITICAL",
+    "high": "🛑 HIGH",
+    "medium": "⚠️ MEDIUM",
+    "low": "⚠️ LOW",
+    "unknown": "❔ UNKNOWN",
+    "pending": "⏳ PENDING",
+    "skipped": "⏭️ NOT RUN",
+}
+_REPORT_SECURITY_SORT = {
+    "critical": 0,
+    "high": 1,
+    "medium": 2,
+    "low": 3,
+    "clean": 4,
+    "unknown": 5,
+}
+
+
+@dataclass(frozen=True)
+class _ReportRow:
+    folder: str
+    account_id: str
+    status: str
+    succeeded: bool | None
+    plan_counts: tuple[int, int, int] | None
+    security: str
+    finding_count: int | None
+    cost: str
+
+    @property
+    def failed(self) -> bool:
+        return (
+            self.status in {"failed", "infrastructure_error"} or self.succeeded is False
+        )
+
+    @property
+    def pending(self) -> bool:
+        return self.status == "in_progress"
+
+    @property
+    def skipped(self) -> bool:
+        return self.status == "skipped"
+
+    @property
+    def unknown(self) -> bool:
+        return (
+            not self.failed
+            and not self.pending
+            and not self.skipped
+            and (
+                self.status == "unknown"
+                or self.plan_counts is None
+                or self.security == "unknown"
+            )
+        )
+
+    @property
+    def destroy_count(self) -> int:
+        return self.plan_counts[2] if self.plan_counts is not None else 0
+
+    @property
+    def delta_count(self) -> int:
+        return sum(self.plan_counts) if self.plan_counts is not None else 0
+
+    @property
+    def clean(self) -> bool:
+        return (
+            not self.failed
+            and not self.pending
+            and not self.skipped
+            and self.status != "unknown"
+            and self.plan_counts == (0, 0, 0)
+            and self.security == "clean"
+        )
+
+    @property
+    def bucket(self) -> int:
+        if self.failed or self.unknown or self.skipped or self.pending:
+            return 0
+        if self.security in {"critical", "high"} or self.destroy_count > 0:
+            return 1
+        if self.security in {"medium", "low"} or self.delta_count > 0:
+            return 2
+        return 3
+
+    @property
+    def sort_key(self) -> tuple[int | str, ...]:
+        if self.bucket == 0:
+            sub = 0 if self.failed else 1 if self.unknown else 2 if self.skipped else 3
+            return (self.bucket, sub, self.folder)
+        if self.bucket == 1:
+            high_security = (
+                self.security if self.security in {"critical", "high"} else "clean"
+            )
+            return (
+                self.bucket,
+                _REPORT_SECURITY_SORT[high_security],
+                -(self.finding_count or 0),
+                -self.destroy_count,
+                self.folder,
+            )
+        if self.bucket == 2:
+            return (
+                self.bucket,
+                _REPORT_SECURITY_SORT[self.security],
+                -(self.finding_count or 0),
+                -self.delta_count,
+                self.folder,
+            )
+        return (self.bucket, self.folder)
+
+    @property
+    def needs_attention(self) -> bool:
+        return not self.clean
+
+    def drift_cell(self) -> str:
+        if self.failed:
+            return _REPORT_DRIFT_LABELS["failed"]
+        if self.pending:
+            return _REPORT_DRIFT_LABELS["pending"]
+        if self.skipped:
+            return _REPORT_DRIFT_LABELS["skipped"]
+        if self.status == "unknown" or self.plan_counts is None:
+            return _REPORT_DRIFT_LABELS["unknown"]
+        add, change, destroy = self.plan_counts
+        if add == 0 and change == 0 and destroy == 0:
+            return _REPORT_DRIFT_LABELS["clean"]
+        return f"{_REPORT_DRIFT_LABELS['drift']} +{add} ~{change} -{destroy}"
+
+    def security_cell(self) -> str:
+        if self.failed:
+            return "not run"
+        if self.pending:
+            return _REPORT_SECURITY_LABELS["pending"]
+        if self.skipped:
+            return _REPORT_SECURITY_LABELS["skipped"]
+        if self.status == "unknown":
+            return _REPORT_SECURITY_LABELS["unknown"]
+        return _report_security_label(self.security, count=self.finding_count)
 
 
 def _plan_cell(plan_text: str) -> str:
@@ -400,7 +551,360 @@ def _drift_cell(plan_text: str) -> str:
 
 
 def _summary_delta_header(action: str) -> str:
+    if action == "report":
+        return "Drift"
     return "Plan" if action in _PLAN_SUMMARY_ACTIONS else "Drift Check"
+
+
+def _plan_counts(plan_text: str) -> tuple[int, int, int] | None:
+    summary = extract_plan_summary(plan_text)
+    if summary is None:
+        return None
+    return int(summary["add"]), int(summary["change"]), int(summary["destroy"])
+
+
+def _report_security_label(security: str, *, count: int | None = None) -> str:
+    base = _REPORT_SECURITY_LABELS.get(security, _REPORT_SECURITY_LABELS["unknown"])
+    if security in {"clean", "unknown", "pending", "skipped"} or count is None:
+        return base
+    noun = "finding" if count == 1 else "findings"
+    return f"{base} · {count} {noun}"
+
+
+def _report_row(outcome: dict[str, Any], artifacts: dict[str, str]) -> _ReportRow:
+    folder = str(outcome.get("folder", "unknown"))
+    status = str(
+        outcome.get("status", "succeeded" if outcome.get("succeeded") else "unknown")
+    )
+    account_id = "-" if folder == "config" else _account_cell(outcome, folder)
+    security, finding_count = tfsec_summary_line(artifacts.get("tfsec.json", ""))
+    return _ReportRow(
+        folder=folder,
+        account_id=account_id,
+        status=status,
+        succeeded=outcome.get("succeeded"),
+        plan_counts=_plan_counts(artifacts.get("tf/plan.out", "")),
+        security=security,
+        finding_count=finding_count,
+        cost=_cost_cell(artifacts.get("infracost.json", "{}")),
+    )
+
+
+def _report_rows(
+    outcomes: list[dict[str, Any]], artifacts_by_folder: dict[str, dict[str, str]]
+) -> list[_ReportRow]:
+    return [
+        _report_row(
+            outcome, artifacts_by_folder.get(str(outcome.get("folder", "")), {})
+        )
+        for outcome in outcomes
+    ]
+
+
+def _report_highest_alert(rows: list[_ReportRow]) -> str | None:
+    attention = [row for row in rows if row.needs_attention]
+    if not attention:
+        return None
+    row = min(attention, key=lambda item: item.sort_key)
+    if row.failed:
+        return f"> [!CAUTION]\n> **{row.folder}** - ❌ FAILED execution"
+    if row.unknown:
+        return f"> [!CAUTION]\n> **{row.folder}** - ❔ UNKNOWN evidence"
+    if row.skipped:
+        return f"> [!IMPORTANT]\n> **{row.folder}** - ⏭️ NOT RUN"
+    if row.pending:
+        return f"> [!IMPORTANT]\n> **{row.folder}** - ⏳ PENDING"
+    if row.bucket == 1:
+        return f"> [!WARNING]\n> **{row.folder}** - review critical/high security findings or planned destroys"
+    return f"> [!IMPORTANT]\n> **{row.folder}** - review drift or security findings"
+
+
+def _report_folder_summary_line(
+    folder: str,
+    account_id: str,
+    commit_hash: str,
+    outcome: dict[str, Any],
+    artifacts: dict[str, str],
+) -> str:
+    row = _report_row(
+        {**outcome, "folder": folder, "account_id": account_id}, artifacts
+    )
+    return (
+        f"`{folder}` · {account_id} · {_short_hash(commit_hash)} · "
+        f"{row.drift_cell()} · {row.security_cell()}"
+    )
+
+
+def _init_status(text: str) -> str:
+    if not text:
+        return "Init unavailable"
+    return (
+        "Init succeeded"
+        if "successfully initialized" in _strip_ansi(text).lower()
+        else "Init failed"
+    )
+
+
+def _validate_status(text: str) -> str:
+    if not text:
+        return "Validate unavailable"
+    clean = _strip_ansi(text).lower()
+    return (
+        "Validate succeeded"
+        if "success!" in clean or "configuration is valid" in clean
+        else "Validate failed"
+    )
+
+
+def _highlight_plan(text: str) -> str:
+    return "\n".join(
+        "+ " + line
+        if line.strip().startswith("+ resource")
+        else "- " + line
+        if line.strip().startswith("- resource")
+        else "! " + line
+        if line.strip().startswith(("~ resource", "# resource"))
+        else line
+        for line in text.splitlines()
+    )
+
+
+def _report_plan_inline(text: str) -> str:
+    clean = _neutralize_comment_identity_lines(_strip_ansi(text))
+    counts = _plan_counts(clean)
+    parts: list[str] = ["### Plan"]
+    if counts is None:
+        parts.extend(
+            ["", "❔ UNKNOWN - plan output was unavailable or unparseable.", ""]
+        )
+    else:
+        add, change, destroy = counts
+        parts.extend(
+            [
+                "",
+                "**Plan summary:**",
+                f"- **{add} to add**",
+                f"- **{change} to change**",
+                f"- **{destroy} to destroy**",
+                "",
+            ]
+        )
+    parts.append(_fenced_block(_highlight_plan(clean), "diff"))
+    return "\n".join(parts)
+
+
+def _report_tfsec_collapsible(text: str) -> str:
+    if text and _artifact_skipped(text, "not run"):
+        return ""
+    security, finding_count = tfsec_summary_line(text)
+    readable = _tfsec_text_from_json(text) if text else "Security data unavailable."
+    if not readable.strip():
+        readable = "Security data unavailable."
+    body = "\n **Security Scan Results**\n\n" + _fenced_block(readable)
+    return _wrap_collapsed(
+        f"Security · {_report_security_label(security, count=finding_count)}", body
+    )
+
+
+def _report_infracost_collapsible(text: str) -> str:
+    if text and _artifact_skipped(text, "not run"):
+        return ""
+    monthly = extract_infracost_monthly(text)
+    summary = {
+        "not configured": "Cost · not configured",
+        "N/A": "Cost · unavailable",
+    }.get(monthly, f"Cost · {monthly}/mo")
+    body = "\n **Cost Analysis**\n\n"
+    if not text:
+        body += "Cost data unavailable.\n"
+        return _wrap_collapsed(summary, body)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        body += "Cost data unavailable (invalid JSON).\n"
+        return _wrap_collapsed(summary, body)
+    if data.get("skipped"):
+        body += "**Summary:**\n- Cost analysis: not configured\n\n"
+    elif monthly not in {"N/A", "not configured"}:
+        body += f"**Summary:**\n- Monthly cost {monthly}\n\n"
+    body += _fenced_block(render_infracost_table(text))
+    return _wrap_collapsed(summary, body)
+
+
+def _report_tf_setup_collapsible(init_text: str, validate_text: str) -> str:
+    validate_clean = _neutralize_comment_identity_lines(_strip_ansi(validate_text))
+    validate_body = (
+        "\n **Configuration is valid**\n"
+        if _validate_status(validate_text) == "Validate succeeded"
+        else f"\n **Validation failed**\n\n{_fenced_block(validate_clean)}"
+    )
+    body = (
+        "#### Initialize\n\n"
+        f"{_fenced_block(_decorate_init(init_text) if init_text else 'No artifact was produced.')}\n\n"
+        "#### Validate\n"
+        f"{validate_body}"
+    )
+    return _wrap_collapsed(
+        f"TF setup · {_init_status(init_text)} · {_validate_status(validate_text)}",
+        body,
+    )
+
+
+def _report_artifacts_collapsible(
+    *,
+    repo_name: str,
+    run_id: str,
+    folder: str,
+    pr_number: int | None,
+    manifest_s3_uri: str | None,
+    commit_hash: str,
+    console_url: str | None,
+    succeeded: bool,
+) -> str:
+    parts: list[str] = []
+    if run_id and repo_name:
+        parts.append(
+            plan_artifact_pointer(
+                repo_name=repo_name,
+                run_id=run_id,
+                folder=folder,
+                pr_number=pr_number,
+            )
+        )
+    if manifest_s3_uri and run_id:
+        parts.append(execution_artifacts_section(run_id, manifest_s3_uri))
+    if console_url and commit_hash:
+        parts.append(
+            ci_details(commit_hash, console_url, "succeeded" if succeeded else "failed")
+        )
+    if not parts:
+        return ""
+    return "### Download and execution artifacts\n" + _wrap_collapsed(
+        "Download and execution artifacts", "\n\n".join(parts)
+    )
+
+
+def _report_folder_comment(
+    folder: str,
+    outcome: dict[str, Any],
+    artifacts: dict[str, str],
+    *,
+    commit_hash: str = "",
+    console_url: str | None = None,
+    manifest_s3_uri: str | None = None,
+    run_id: str | None = None,
+    repo_name: str = "",
+    pr_number: int | None = None,
+) -> str:
+    account_id = _require_account_id(outcome, folder)
+    parts = [
+        _folder_heading(folder, account_id, action="report").rstrip(),
+        _report_plan_inline(artifacts.get("tf/plan.out", "")),
+        _report_tfsec_collapsible(artifacts.get("tfsec.json", "")),
+        _report_infracost_collapsible(artifacts.get("infracost.json", "")),
+        _report_tf_setup_collapsible(
+            artifacts.get("init.out", ""), artifacts.get("validate.out", "")
+        ),
+        _report_artifacts_collapsible(
+            repo_name=repo_name,
+            run_id=str(run_id or ""),
+            folder=folder,
+            pr_number=pr_number,
+            manifest_s3_uri=manifest_s3_uri,
+            commit_hash=commit_hash,
+            console_url=console_url,
+            succeeded=outcome.get("succeeded", True),
+        ),
+    ]
+    return _wrap_collapsed(
+        _report_folder_summary_line(
+            folder, account_id, commit_hash, outcome, artifacts
+        ),
+        "\n\n".join(part for part in parts if part),
+    )
+
+
+def _report_summary(
+    outcomes: list[dict[str, Any]],
+    artifacts_by_folder: dict[str, dict[str, str]] | None = None,
+    *,
+    folder_urls: dict[str, str] | None = None,
+    commit_hash: str = "",
+    console_url: str | None = None,
+    steps: list[list[str]] | None = None,
+) -> str:
+    artifacts = artifacts_by_folder or {}
+    report_rows = _report_rows(outcomes, artifacts)
+    attention = sorted(
+        (row for row in report_rows if row.needs_attention),
+        key=lambda row: row.sort_key,
+    )
+    clean = sorted(
+        (row for row in report_rows if row.clean), key=lambda row: row.folder
+    )
+    lines: list[str] = ["## openci-tf Report Summary", ""]
+    if steps is not None and len(steps) > 1:
+        lines.extend(_pipeline_step_rows(steps, outcomes))
+        lines.append("")
+    lines.extend(
+        [
+            f"**{len(report_rows)}** folder{'s' if len(report_rows) != 1 else ''} · "
+            f"**{len(attention)}** need attention · **{len(clean)}** clean",
+            "",
+        ]
+    )
+    alert = _report_highest_alert(report_rows)
+    if alert:
+        lines.extend([alert, ""])
+    if attention:
+        lines.extend(
+            [
+                "### Needs attention",
+                "",
+                "| Folder | Account | Drift | Security | Cost |",
+                "|--------|---------|-------|----------|------|",
+            ]
+        )
+        for row in attention:
+            lines.append(
+                _summary_row(
+                    row.folder,
+                    row.account_id,
+                    row.drift_cell(),
+                    row.security_cell(),
+                    row.cost,
+                    folder_urls=folder_urls,
+                )
+            )
+        lines.append("")
+    elif report_rows:
+        lines.extend(["✅ **All folders clean** - no drift or security findings.", ""])
+    if clean:
+        clean_table = [
+            "| Folder | Account | Drift | Security | Cost |",
+            "|--------|---------|-------|----------|------|",
+        ]
+        for row in clean:
+            clean_table.append(
+                _summary_row(
+                    row.folder,
+                    row.account_id,
+                    row.drift_cell(),
+                    row.security_cell(),
+                    row.cost,
+                    folder_urls=folder_urls,
+                )
+            )
+        lines.append(
+            _wrap_collapsed(
+                f"✅ {len(clean)} clean folder{'s' if len(clean) != 1 else ''}",
+                "\n".join(clean_table),
+            )
+        )
+    body = "\n".join(lines)
+    if console_url and commit_hash:
+        body += ci_details(commit_hash, console_url, _terminal_status(outcomes))
+    return body
 
 
 def _summary_delta_cell(action: str, plan_text: str) -> str:
@@ -526,7 +1030,11 @@ def mutation_terminal_comment(
         f"+ pinned plan: `{pinned_plan_artifact}`",
     ]
     if source_plan_run_id:
-        source_label = "source destroy-plan run id" if action == "destroy" else "source plan run id"
+        source_label = (
+            "source destroy-plan run id"
+            if action == "destroy"
+            else "source plan run id"
+        )
         lines.append(f"+ {source_label}: `{source_plan_run_id}`")
     lines.append(f"+ commit: `{commit_hash[:7] if commit_hash else 'unknown'}`")
     if console_url:
@@ -636,7 +1144,9 @@ def plan_artifact_pointer(
             folder_path=folder,
             pointer_type=pointer_type,
         )
-        pointer_label = "Destroy plan pointer" if pointer_type == "destroy" else "Plan pointer"
+        pointer_label = (
+            "Destroy plan pointer" if pointer_type == "destroy" else "Plan pointer"
+        )
         return (
             "### Plan Artifact\n"
             f"- Execution ID: `{run_id}`\n"
@@ -726,6 +1236,8 @@ def pending_plan_comment(
 def pending_summary_all(commit_hash: str, action: str) -> str:
     short = commit_hash[:7]
     verb = _running_label(action)
+    if action == "report":
+        return f"## openci-tf Report Summary\n\n{verb} all folders at `{short}`…"
     return f"## Terraform Multi-Folder Summary\n\n {verb} all folders at `{short}`…"
 
 
@@ -753,8 +1265,13 @@ def pending_summary(
     action: str = "plan",
 ) -> str:
     delta_header = _summary_delta_header(action)
+    heading = (
+        "## openci-tf Report Summary"
+        if action == "report"
+        else "## Terraform Multi-Folder Summary"
+    )
     rows = [
-        "## Terraform Multi-Folder Summary",
+        heading,
         "",
         f"| Folder | Account | {delta_header} | Security | Cost |",
         "|--------|---------|------------|----------|------|",
@@ -833,6 +1350,19 @@ def folder_comment(
             _summary_line(folder, account_id, commit_hash, status_label), body
         )
 
+    if action == "report":
+        return _report_folder_comment(
+            folder,
+            outcome,
+            artifacts,
+            commit_hash=commit_hash,
+            console_url=console_url,
+            manifest_s3_uri=manifest_s3_uri,
+            run_id=run_id,
+            repo_name=repo_name,
+            pr_number=pr_number,
+        )
+
     sections = [
         _folder_heading(folder, account_id, action=action).rstrip(),
         initialize(artifacts.get("init.out", "")),
@@ -874,7 +1404,9 @@ def folder_comment(
     )
 
 
-def _pipeline_step_rows(steps: list[list[str]], outcomes: list[dict[str, Any]]) -> list[str]:
+def _pipeline_step_rows(
+    steps: list[list[str]], outcomes: list[dict[str, Any]]
+) -> list[str]:
     rows = ["| Pipeline Step |", "|---------------|"]
     by_folder = {str(outcome.get("folder") or ""): outcome for outcome in outcomes}
     total = len(steps)
@@ -896,7 +1428,10 @@ def _pipeline_step_status(
         if item is None:
             return "not run"
         status = str(item.get("status") or "")
-        if status in {"failed", "infrastructure_error"} or item.get("succeeded") is False:
+        if (
+            status in {"failed", "infrastructure_error"}
+            or item.get("succeeded") is False
+        ):
             return "failed"
     return "ok"
 
@@ -911,6 +1446,15 @@ def summary(
     console_url: str | None = None,
     steps: list[list[str]] | None = None,
 ) -> str:
+    if action == "report":
+        return _report_summary(
+            outcomes,
+            artifacts_by_folder,
+            folder_urls=folder_urls,
+            commit_hash=commit_hash,
+            console_url=console_url,
+            steps=steps,
+        )
     delta_header = _summary_delta_header(action)
     rows = ["## Terraform Multi-Folder Summary", ""]
     if steps is not None and len(steps) > 1:

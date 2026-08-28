@@ -20,6 +20,8 @@ def _artifact_skipped(text: str, reason: str) -> bool:
         payload = json.loads(text)
     except json.JSONDecodeError:
         return False
+    if not isinstance(payload, dict):
+        return False
     return payload.get("skipped") is True and payload.get("reason") == reason
 
 
@@ -67,6 +69,18 @@ def _analyze_tfsec_severity(text: str) -> str:
     return "unknown"
 
 
+def _tfsec_findings_list(payload: dict[str, Any]) -> list[Any] | None:
+    if "results" in payload:
+        findings = payload["results"]
+    elif "findings" in payload:
+        findings = payload["findings"]
+    else:
+        return None
+    if not isinstance(findings, list):
+        return None
+    return findings
+
+
 def _tfsec_text_from_json(text: str) -> str:
     """Render tfsec JSON as human-readable text matching the legacy .out layout."""
     try:
@@ -74,21 +88,28 @@ def _tfsec_text_from_json(text: str) -> str:
     except json.JSONDecodeError:
         return _strip_ansi(text)
 
+    if not isinstance(payload, dict):
+        return "Security data unavailable.\n"
     if payload.get("skipped"):
         return ""
 
-    findings = payload.get("results") or payload.get("findings") or []
-    if not findings:
+    findings = _tfsec_findings_list(payload)
+    if findings is None:
+        return "Security data unavailable.\n"
+    validated = _valid_tfsec_findings(findings)
+    if validated is None:
+        return "Security data unavailable.\n"
+    if not validated:
         return "No problems detected.\n"
 
     severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
     sorted_findings = sorted(
-        findings,
+        validated,
         key=lambda item: severity_order.get(str(item.get("severity", "")).upper(), 99),
     )
 
     counts: dict[str, int] = {}
-    for item in findings:
+    for item in validated:
         severity = str(item.get("severity", "UNKNOWN")).upper()
         counts[severity] = counts.get(severity, 0) + 1
 
@@ -132,6 +153,36 @@ def _tfsec_text_from_json(text: str) -> str:
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def tfsec_summary_line(text: str) -> tuple[str, int | None]:
+    """Return report security severity and finding count when the JSON is valid."""
+    if not text or not text.strip():
+        return "unknown", None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return "unknown", None
+    if not isinstance(payload, dict) or not payload or payload.get("skipped"):
+        return "unknown", None
+    findings = _tfsec_findings_list(payload)
+    if findings is None:
+        return "unknown", None
+    validated = _valid_tfsec_findings(findings)
+    if validated is None:
+        return "unknown", None
+    if not validated:
+        return "clean", 0
+    severities = {str(item.get("severity", "")).upper() for item in validated}
+    if "CRITICAL" in severities:
+        return "critical", len(validated)
+    if "HIGH" in severities:
+        return "high", len(validated)
+    if "MEDIUM" in severities:
+        return "medium", len(validated)
+    if "LOW" in severities:
+        return "low", len(validated)
+    return "unknown", None
 
 
 def tfsec(text: str) -> str:

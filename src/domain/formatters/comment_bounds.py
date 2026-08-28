@@ -15,6 +15,7 @@ _DETAILS_CLOSE = "\n\n</details>"
 _TRUNCATION_NOTE = "\n\n> Comment truncated for GitHub size limits. See S3 artifacts for full output.\n"
 _COST_SECTION_MARKER = "### Cost Analysis"
 _PLAN_SECTION_MARKER = "### Plan"
+_ARTIFACT_SECTION_MARKER = "### Download and execution artifacts"
 _CI_DETAILS_MARKER = "\n## CI Details"
 
 
@@ -86,18 +87,32 @@ def _truncate_plan_section(body: str, max_chars: int) -> str:
     return before + trimmed_plan + _TRUNCATION_NOTE + after
 
 
-def _bound_comment_preserving_cost(body: str, *, max_chars: int, suffix: str) -> str:
-    """Keep the itemized cost section even when earlier plan output dominates the body."""
-    extracted = _extract_section(body, _COST_SECTION_MARKER)
+def _bound_comment_preserving_section(
+    body: str, *, marker: str, max_chars: int, suffix: str
+) -> str:
+    """Keep a low-frequency evidence section when earlier plan output dominates."""
+    extracted = _extract_section(body, marker)
     if extracted is None:
         return _truncate_head(body, max_chars=max_chars, suffix=suffix)
-    before_cost, cost_section, after_cost = extracted
-    reserved = len(_TRUNCATION_NOTE) + len(suffix) + len(cost_section) + len(after_cost)
+    before_section, section_body, after_section = extracted
+    reserved = (
+        len(_TRUNCATION_NOTE) + len(suffix) + len(section_body) + len(after_section)
+    )
     if reserved >= max_chars:
         return _truncate_head(body, max_chars=max_chars, suffix=suffix)
     before_budget = max_chars - reserved
-    trimmed_before = _truncate_plan_section(before_cost, before_budget)
-    return trimmed_before + cost_section + after_cost + _TRUNCATION_NOTE + suffix
+    trimmed_before = _truncate_plan_section(before_section, before_budget)
+    truncation_note = (
+        "" if _TRUNCATION_NOTE.strip() in trimmed_before else _TRUNCATION_NOTE
+    )
+    return trimmed_before + section_body + after_section + truncation_note + suffix
+
+
+def _bound_comment_preserving_cost(body: str, *, max_chars: int, suffix: str) -> str:
+    """Keep the itemized cost section even when earlier plan output dominates the body."""
+    return _bound_comment_preserving_section(
+        body, marker=_COST_SECTION_MARKER, max_chars=max_chars, suffix=suffix
+    )
 
 
 def _truncate_head(body: str, *, max_chars: int, suffix: str) -> str:
@@ -109,6 +124,10 @@ def _truncate_head(body: str, *, max_chars: int, suffix: str) -> str:
 
 
 def _bound_inner_comment(body: str, *, max_chars: int, suffix: str) -> str:
+    if _ARTIFACT_SECTION_MARKER in body:
+        return _bound_comment_preserving_section(
+            body, marker=_ARTIFACT_SECTION_MARKER, max_chars=max_chars, suffix=suffix
+        )
     if _COST_SECTION_MARKER in body:
         return _bound_comment_preserving_cost(body, max_chars=max_chars, suffix=suffix)
     return _truncate_head(body, max_chars=max_chars, suffix=suffix)

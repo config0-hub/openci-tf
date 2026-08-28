@@ -25,7 +25,7 @@ from src.domain.formatters.artifacts import (
 from src.platform.aws.infracost_key import validate_infracost_key_path
 from src.services.render import handler as render_handler
 from src.services.run_folder import prepare_and_submit as prepare_handler
-from tests.helpers.frozen_account import HUB_ACCOUNT_ID, apply_prepare_handler_env, frozen_account_fields
+from tests.helpers.frozen_account import apply_prepare_handler_env, frozen_account_fields
 
 _CLONE_TOKEN = "/openci-tf/clone-token/test"
 _INFRACOST_KEY = "/openci-tf/infracost/api_key"
@@ -377,7 +377,7 @@ def _prepare_env(monkeypatch, tmp_path):
 
 
 def test_prepare_plan_injects_infracost_key_only_into_encrypted_secrets(monkeypatch, tmp_path):
-    folder = _prepare_env(monkeypatch, tmp_path)
+    _prepare_env(monkeypatch, tmp_path)
     captured: dict[str, object] = {}
 
     def encrypt(plain, _kms):
@@ -399,7 +399,7 @@ def test_prepare_plan_injects_infracost_key_only_into_encrypted_secrets(monkeypa
 
 
 def test_prepare_report_injects_infracost_key_only_into_encrypted_secrets(monkeypatch, tmp_path):
-    folder = _prepare_env(monkeypatch, tmp_path)
+    _prepare_env(monkeypatch, tmp_path)
     captured: dict[str, object] = {}
 
     def encrypt(plain, _kms):
@@ -423,7 +423,7 @@ def test_prepare_report_injects_infracost_key_only_into_encrypted_secrets(monkey
 
 
 def test_prepare_report_without_infracost_setting_omits_api_key(monkeypatch, tmp_path):
-    folder = _prepare_env(monkeypatch, tmp_path)
+    _prepare_env(monkeypatch, tmp_path)
     captured: dict[str, object] = {}
     fetch = Mock()
 
@@ -502,7 +502,6 @@ done
         "OPENCI_TF_FOLDER": str(folder),
         "OPENCI_TF_ACTION": "report",
         "OPENCI_TF_TF_RUNTIME": "tofu:1.8.0",
-        "OPENCI_TF_RUN_ID": "exec",
         "OPENCI_TF_RUN_ID": "0",
         **{f"CACHE_GET_URL_{binary.upper()}": f"https://cache/{binary.lower()}" for binary in ("TOFU", "TFSEC", "INFRACOST")},
         **{f"CACHE_PUT_URL_{binary.upper()}": f"https://cache-put/{binary.lower()}" for binary in ("TOFU", "TFSEC", "INFRACOST")},
@@ -556,10 +555,10 @@ def test_folder_comment_parses_both_report_artifacts(tmp_path):
         "infracost.json": json.dumps({"skipped": True, "reason": "not configured"}),
     }
     rendered = folder_comment("infra/a", {"status": "succeeded", "account_id": "123456789012"}, artifacts, action="report")
-    assert "Report - \"infra/a\" (123456789012)" in rendered
-    assert "Security Scan" in rendered
+    assert 'Report - "infra/a"' in rendered
+    assert "Security ·" in rendered
     assert "not configured" in rendered
-    assert "Validate" in rendered
+    assert "TF setup ·" in rendered
 
 
 def test_render_plan_all_posts_linked_multi_folder_summary(monkeypatch):

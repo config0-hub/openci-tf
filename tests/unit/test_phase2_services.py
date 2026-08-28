@@ -436,8 +436,9 @@ def test_render_final_summary_for_multi_folder_plan_and_report(monkeypatch):
     assert posted[:3] == ["folder-good", "folder-bad", "summary"]
     assert posted[-3:] == ["folder-good", "folder-bad", "summary"]
     assert deleted == []
+    assert "Terraform Multi-Folder Summary" in summary_bodies[0]
+    assert "openci-tf Report Summary" in summary_bodies[1]
     for body in summary_bodies:
-        assert "Terraform Multi-Folder Summary" in body
         assert "[`good`]" in body
         assert "[`bad`]" in body
         assert "Legend" not in body
@@ -767,8 +768,13 @@ def _assert_render_placeholder_for_action(monkeypatch, action: str, needle: str)
     assert suffixes.count("folder-infra/b") == 1
     assert suffixes.count("summary") == 1
     assert all(needle in body for body, suffix in comments if suffix.startswith("folder-"))
-    assert "| `infra/a` | `123456789012` | in progress |" in comments[-1][0]
-    assert "Terraform Multi-Folder Summary" in comments[-1][0]
+    summary_body = comments[-1][0]
+    assert "| `infra/a` | `123456789012` | in progress |" in summary_body
+    if action == "report":
+        assert "## openci-tf Report Summary" in summary_body
+        assert "| Drift |" in summary_body
+    else:
+        assert "Terraform Multi-Folder Summary" in summary_body
 
 
 def test_render_placeholder_includes_skipped_folders_in_summary(monkeypatch):

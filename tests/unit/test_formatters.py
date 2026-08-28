@@ -178,13 +178,24 @@ def test_folder_comment_plan_destroy_uses_destroy_output_and_pointer():
     assert "plan.env" not in rendered
 
 
-@pytest.mark.parametrize("action", ["plan", "report"])
-def test_folder_comment_plan_and_report_include_scan_and_cost_sections(action):
+@pytest.mark.parametrize("action", ["plan"])
+def test_folder_comment_plan_includes_scan_and_cost_sections(action):
     artifacts = {name: _fixture_text(name) for name in ("init.out", "validate.out", "tf/plan.out", "tfsec.json", "infracost.json")}
     rendered = folder_comment("infra/good", {"status": "succeeded", "account_id": "123456789012"}, artifacts, action=action)
 
     for heading in ("Initialize", "Validate", "Plan", "Security Scan", "Cost Analysis"):
         assert heading in rendered
+
+
+def test_folder_comment_report_uses_report_layout():
+    artifacts = {name: _fixture_text(name) for name in ("init.out", "validate.out", "tf/plan.out", "tfsec.json", "infracost.json")}
+    rendered = folder_comment("infra/good", {"status": "succeeded", "account_id": "123456789012"}, artifacts, action="report")
+    assert '## Report - "infra/good"' in rendered
+    assert "### Plan\n<details>" not in rendered
+    assert "```diff" in rendered
+    assert "TF setup ·" in rendered
+    assert "Security ·" in rendered
+    assert "Cost ·" in rendered
 
 
 @pytest.mark.parametrize("artifacts", [
