@@ -962,9 +962,9 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 client,
                 repo,
                 pr,
-                _append_footer(
-                    _with_command_context(
-                        event,
+                _with_command_context(
+                    event,
+                    _append_footer(
                         _render_folder_body(
                             folder,
                             outcome,
@@ -979,14 +979,14 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                             existing_names=existing_names,
                             approved_plan_pointer_key=approved_plan_pointer_key,
                         ),
-                        run_id=run_id,
-                        comments_removed=True,
-                        account_id=str(outcome.get("account_id") or "")
-                        if isinstance(outcome.get("account_id"), str)
-                        else None,
-                        source_plan_run_id=source_plan_run_id,
+                        pipeline_footer,
                     ),
-                    pipeline_footer,
+                    run_id=run_id,
+                    comments_removed=True,
+                    account_id=str(outcome.get("account_id") or "")
+                    if isinstance(outcome.get("account_id"), str)
+                    else None,
+                    source_plan_run_id=source_plan_run_id,
                 ),
                 action,
                 folder,
@@ -1001,9 +1001,9 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             client,
             repo,
             pr,
-            _append_footer(
-                _with_command_context(
-                    event,
+            _with_command_context(
+                event,
+                _append_footer(
                     summary(
                         render_items,
                         artifacts_by_folder,
@@ -1013,12 +1013,12 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                         console_url=console_url,
                         steps=event.get("steps") if isinstance(event.get("steps"), list) else None,
                     ),
-                    run_id=run_id,
-                    comments_removed=True,
-                    include_account=False,
-                    include_source_plan_run_id=False,
+                    pipeline_footer,
                 ),
-                pipeline_footer,
+                run_id=run_id,
+                comments_removed=True,
+                include_account=False,
+                include_source_plan_run_id=False,
             ),
             action,
             "all",

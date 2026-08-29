@@ -222,3 +222,92 @@ def test_render_mutation_terminal_comment_includes_source_plan_run_id(
     assert "deadbee" not in body
     assert f"tf {action} confirm <redacted>" in body
     assert "<summary>Metadata</summary>" in body
+
+
+def _pipeline_apply_render_event(
+    *,
+    step_index: int,
+    step_count: int,
+    confirm_token: str = "deadbee",
+) -> dict:
+    return {
+        "action": "apply",
+        "run_id": "1787000000000.abc12345",
+        "webhook_info": {
+            "repo_name": "<REPO_ORG>/<REPO_NAME>",
+            "pr_number": 22,
+            "commit_hash": "a" * 40,
+            "comment_id": 102,
+            "comment_body": (
+                f"tf apply pipeline data/primary step {step_index} confirm {confirm_token}"
+            ),
+            "pipeline": "data/primary",
+            "pipeline_step_index": step_index,
+            "pipeline_step_count": step_count,
+        },
+        "requested_comment_id": 101,
+        "requested_comment_body": f"tf apply pipeline data/primary step {step_index}",
+        "intent_comment_id": 103,
+        "consumed_confirm_token": confirm_token,
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+        "outcomes": [
+            {
+                "folder": "terraform/eu-west-1/02-ec2",
+                "account_id": "REPLACE_MAIN_ACCOUNT",
+                "execution_id": "inner.apply.0",
+                "status": "succeeded",
+                "succeeded": True,
+            }
+        ],
+        "skipped": [],
+    }
+
+
+def _capture_pipeline_apply_terminal_body(monkeypatch, *, step_index: int, step_count: int) -> str:
+    _stub_render_mutation_dependencies(monkeypatch)
+    comments: list[str] = []
+
+    def capture(_client, _repo, _pr, body, action, folder, **kwargs):
+        if action == "apply" and folder == "terraform/eu-west-1/02-ec2":
+            comments.append(body)
+        return 1
+
+    monkeypatch.setattr(render, "_delete_and_repost", capture)
+    render.handler(
+        _pipeline_apply_render_event(step_index=step_index, step_count=step_count),
+        None,
+    )
+    assert len(comments) == 1
+    return comments[0]
+
+
+def _assert_pipeline_apply_body_order(body: str, *, note: str) -> None:
+    metadata_marker = "<summary>Metadata</summary>"
+    main_details_start = body.index("<details>")
+    note_pos = body.index(note)
+    metadata_pos = body.index(metadata_marker)
+
+    assert main_details_start < note_pos < metadata_pos
+    assert body.rstrip().endswith("</details>")
+    assert "deadbee" not in body
+    assert "confirm <redacted>" in body
+    assert body.count(note) == 1
+    assert body.count(metadata_marker) == 1
+
+
+def test_render_pipeline_apply_next_step_body_order(monkeypatch):
+    body = _capture_pipeline_apply_terminal_body(
+        monkeypatch, step_index=1, step_count=2
+    )
+    note = "> [!NOTE]\n> Next step: `tf apply pipeline data/primary step 2`"
+    _assert_pipeline_apply_body_order(body, note=note)
+    _assert_plan_in_collapsed_details(body)
+
+
+def test_render_pipeline_apply_completion_body_order(monkeypatch):
+    body = _capture_pipeline_apply_terminal_body(
+        monkeypatch, step_index=2, step_count=2
+    )
+    note = "> [!NOTE]\n> Pipeline `data/primary` complete (2 steps)."
+    _assert_pipeline_apply_body_order(body, note=note)
+    _assert_plan_in_collapsed_details(body)
