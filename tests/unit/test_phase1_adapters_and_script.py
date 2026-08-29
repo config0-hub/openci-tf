@@ -13,6 +13,48 @@ from src.domain.config.outer_state import resolve_outer_state
 from src.platform.aws.sops import encrypt_file
 
 
+def _upload_content_type_case_lines(script: str) -> list[str]:
+    lines = script.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip() == 'case "$name" in')
+    end = next(i for i in range(start, len(lines)) if lines[i].strip() == "esac")
+    return [line.strip() for line in lines[start : end + 1]]
+
+
+def _simulate_upload_content_type(case_lines: list[str], artifact_name: str) -> str:
+    for line in case_lines:
+        if line.startswith("*.out)"):
+            if artifact_name.endswith(".out") and not artifact_name.endswith(".output"):
+                return "text/plain"
+        elif line.startswith("*.output)"):
+            if artifact_name.endswith(".output"):
+                return "text/plain"
+        elif line.startswith("*.json)"):
+            if artifact_name.endswith(".json"):
+                return "application/json"
+        elif line.startswith("*)"):
+            return "application/octet-stream"
+    raise AssertionError(f"no upload content-type case matched {artifact_name!r}")
+
+
+@pytest.mark.parametrize("verb", ["plan", "report"])
+def test_native_output_artifacts_upload_with_text_plain_content_type(verb):
+    """Regression: presigned tfsec.output/infracost.output require text/plain."""
+    script = render(ScriptParams(verb=verb, execution_target="lambda"))
+    case_lines = _upload_content_type_case_lines(script)
+    assert any(line.startswith("*.output)") and "text/plain" in line for line in case_lines)
+    for artifact in ("tfsec.output", "infracost.output"):
+        assert _simulate_upload_content_type(case_lines, artifact) == "text/plain", artifact
+    assert _simulate_upload_content_type(case_lines, "tfsec.json") == "application/json"
+    assert _simulate_upload_content_type(case_lines, "tf/plan.out") == "text/plain"
+
+
+@pytest.mark.parametrize("verb", ["apply", "destroy"])
+def test_mutation_upload_helpers_map_output_suffix_to_text_plain(verb):
+    script = render(ScriptParams(verb=verb, execution_target="lambda"))
+    case_lines = _upload_content_type_case_lines(script)
+    assert any(line.startswith("*.output)") and "text/plain" in line for line in case_lines)
+
+
 @pytest.mark.parametrize("verb", ["plan", "drift", "report"])
 def test_script_is_generated_for_each_safe_verb(verb):
     script = render(ScriptParams(verb=verb, execution_target="lambda", folder="folder with spaces"))

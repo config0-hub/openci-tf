@@ -339,6 +339,7 @@ upload_artifacts() {{
     [ -n "$url" ] || continue
     case "$name" in
       *.out) ctype="text/plain" ;;
+      *.output) ctype="text/plain" ;;
       *.json) ctype="application/json" ;;
       *) ctype="application/octet-stream" ;;
     esac
@@ -399,6 +400,7 @@ upload_artifacts() {{
     [ -n "$url" ] || continue
     case "$name" in
       *.out) ctype="text/plain" ;;
+      *.output) ctype="text/plain" ;;
       *.json) ctype="application/json" ;;
       *) ctype="application/octet-stream" ;;
     esac
