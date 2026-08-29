@@ -31,7 +31,12 @@ from src.services.intent.confirm import confirm_intent
 from src.services.intent.create import IntentCreationError, create_intent
 from src.services.intent import handler as intent_handler
 from src.services.intent.handler import confirm_handler, create_handler
-from src.services.intent.registry import delete_unused_intent, mark_intent_used, put_intent, get_intent
+from src.services.intent.registry import (
+    delete_unused_intent,
+    mark_intent_used,
+    put_intent,
+    get_intent,
+)
 from src.platform.aws.run_registry import RunRegistryError
 from src.platform.github.client import PullRequestState
 from src.services.render.handler import _pipeline_apply_footer
@@ -130,7 +135,9 @@ def test_collect_accepts_destroy_plan_metadata_key_for_plan_destroy():
 
     assert _expected_plan_metadata_key("plan", keys) == keys.plan_metadata
     assert _expected_plan_metadata_key("report", keys) == keys.plan_metadata
-    assert _expected_plan_metadata_key("plan_destroy", keys) == keys.destroy_plan_metadata
+    assert (
+        _expected_plan_metadata_key("plan_destroy", keys) == keys.destroy_plan_metadata
+    )
 
 
 def test_cross_application_refusal_in_pinned_plan_helper():
@@ -269,7 +276,9 @@ def test_intent_gate_refuses_stale_apply_plan_after_successful_mutation(monkeypa
     def fake_lookup(**_kwargs):
         return PlanLookupResult(match=None, stale=True)
 
-    monkeypatch.setattr("src.domain.intent.gates.find_newest_fresh_plan_run", fake_lookup)
+    monkeypatch.setattr(
+        "src.domain.intent.gates.find_newest_fresh_plan_run", fake_lookup
+    )
     result = evaluate_intent_gates(
         action="apply",
         folders=["infra/vpc"],
@@ -297,7 +306,9 @@ def test_intent_gate_refuses_stale_destroy_plan_after_successful_mutation(monkey
     def fake_lookup(**_kwargs):
         return PlanLookupResult(match=None, stale=True)
 
-    monkeypatch.setattr("src.domain.intent.gates.find_newest_fresh_plan_run", fake_lookup)
+    monkeypatch.setattr(
+        "src.domain.intent.gates.find_newest_fresh_plan_run", fake_lookup
+    )
     result = evaluate_intent_gates(
         action="destroy",
         folders=["infra/vpc"],
@@ -314,8 +325,7 @@ def test_intent_gate_refuses_stale_destroy_plan_after_successful_mutation(monkey
     )
     assert result.ok is False
     assert (
-        result.failures[0].message
-        == "stale plan — re-run tf plan --destroy infra/vpc"
+        result.failures[0].message == "stale plan — re-run tf plan --destroy infra/vpc"
     )
 
 
@@ -359,7 +369,9 @@ def test_plan_lookup_marks_plan_stale_when_newer_mutation_succeeded(monkeypatch)
             return {"status": "succeeded", "manifest_sha256": "d" * 64}
         return None
 
-    monkeypatch.setattr("src.domain.intent.plan_lookup.get_folder_record", folder_record)
+    monkeypatch.setattr(
+        "src.domain.intent.plan_lookup.get_folder_record", folder_record
+    )
 
     result = find_newest_fresh_plan_run(
         trigger_id="trigger",
@@ -397,7 +409,9 @@ def _phase4_pipeline() -> Pipeline:
 
 def _phase4_configs() -> dict[str, FolderConfig]:
     return {
-        folder: FolderConfig(account_alias="target", apply=MutationVerbConfig(allow=True))
+        folder: FolderConfig(
+            account_alias="target", apply=MutationVerbConfig(allow=True)
+        )
         for folder in ["infra/vpc", "infra/rds", "infra/ec2", "infra/db"]
     }
 
@@ -430,14 +444,22 @@ def test_apply_pipeline_intent_checks_all_pipeline_folders_before_step(monkeypat
             )
         return SimpleNamespace(ok=True, failures=[], record=_phase4_record(folders))
 
-    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
-    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create.get_repo_settings",
+        lambda *_args, **_kwargs: _intent_gate_settings(),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.get_github_token", lambda _path: "github-token"
+    )
     monkeypatch.setattr(
         "src.services.intent.create._pipeline_for_intent",
         lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "h" * 64),
     )
     monkeypatch.setattr("src.services.intent.create.evaluate_intent_gates", _fake_gates)
-    monkeypatch.setattr("src.services.intent.create.put_intent", lambda _record: pytest.fail("blocked pipeline must not store an intent"))
+    monkeypatch.setattr(
+        "src.services.intent.create.put_intent",
+        lambda _record: pytest.fail("blocked pipeline must not store an intent"),
+    )
 
     failure, record = create_intent(
         action="apply",
@@ -461,8 +483,13 @@ def test_apply_pipeline_intent_scopes_record_to_requested_step(monkeypatch):
         folders = list(kwargs["folders"])
         return SimpleNamespace(ok=True, failures=[], record=_phase4_record(folders))
 
-    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
-    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create.get_repo_settings",
+        lambda *_args, **_kwargs: _intent_gate_settings(),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.get_github_token", lambda _path: "github-token"
+    )
     monkeypatch.setattr(
         "src.services.intent.create._pipeline_for_intent",
         lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "c" * 64),
@@ -472,7 +499,9 @@ def test_apply_pipeline_intent_scopes_record_to_requested_step(monkeypatch):
         lambda **_kwargs: {"pipeline_sha256": "c" * 64},
     )
     monkeypatch.setattr("src.services.intent.create.evaluate_intent_gates", _fake_gates)
-    monkeypatch.setattr("src.services.intent.create.put_intent", lambda record: stored.append(record))
+    monkeypatch.setattr(
+        "src.services.intent.create.put_intent", lambda record: stored.append(record)
+    )
 
     failure, record = create_intent(
         action="apply",
@@ -506,7 +535,9 @@ def _us08_two_step_pipeline() -> Pipeline:
 
 def _us08_two_step_configs() -> dict[str, FolderConfig]:
     return {
-        folder: FolderConfig(account_alias="target", apply=MutationVerbConfig(allow=True))
+        folder: FolderConfig(
+            account_alias="target", apply=MutationVerbConfig(allow=True)
+        )
         for folder in [
             "terraform/primary/ap-northeast-1/03-sqs",
             "terraform/primary/ap-northeast-1/06-sns-topic",
@@ -536,11 +567,20 @@ def test_pipeline_apply_step_2_succeeds_without_replan_after_step_1_apply(monkey
             )
         return PlanLookupResult(match=None)
 
-    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
-    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create.get_repo_settings",
+        lambda *_args, **_kwargs: _intent_gate_settings(),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.get_github_token", lambda _path: "github-token"
+    )
     monkeypatch.setattr(
         "src.services.intent.create._pipeline_for_intent",
-        lambda **_kwargs: (_us08_two_step_pipeline(), _us08_two_step_configs(), "p" * 64),
+        lambda **_kwargs: (
+            _us08_two_step_pipeline(),
+            _us08_two_step_configs(),
+            "p" * 64,
+        ),
     )
     monkeypatch.setattr(
         "src.services.intent.create.find_latest_successful_pipeline_apply",
@@ -557,8 +597,12 @@ def test_pipeline_apply_step_2_succeeds_without_replan_after_step_1_apply(monkey
             enable_apply=True,
         ),
     )
-    monkeypatch.setattr("src.domain.intent.gates.find_newest_fresh_plan_run", fake_lookup)
-    monkeypatch.setattr("src.services.intent.create.put_intent", lambda record: stored.append(record))
+    monkeypatch.setattr(
+        "src.domain.intent.gates.find_newest_fresh_plan_run", fake_lookup
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.put_intent", lambda record: stored.append(record)
+    )
 
     failure, record = create_intent(
         action="apply",
@@ -578,11 +622,20 @@ def test_pipeline_apply_step_2_succeeds_without_replan_after_step_1_apply(monkey
 
 
 def test_pipeline_apply_step_2_refused_when_step_1_not_applied(monkeypatch):
-    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
-    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create.get_repo_settings",
+        lambda *_args, **_kwargs: _intent_gate_settings(),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.get_github_token", lambda _path: "github-token"
+    )
     monkeypatch.setattr(
         "src.services.intent.create._pipeline_for_intent",
-        lambda **_kwargs: (_us08_two_step_pipeline(), _us08_two_step_configs(), "p" * 64),
+        lambda **_kwargs: (
+            _us08_two_step_pipeline(),
+            _us08_two_step_configs(),
+            "p" * 64,
+        ),
     )
     monkeypatch.setattr(
         "src.services.intent.create.find_latest_successful_pipeline_apply",
@@ -590,7 +643,9 @@ def test_pipeline_apply_step_2_refused_when_step_1_not_applied(monkeypatch):
     )
     monkeypatch.setattr(
         "src.domain.intent.gates.find_newest_fresh_plan_run",
-        lambda **_kwargs: pytest.fail("missing step 1 anchor must reject before plan lookup"),
+        lambda **_kwargs: pytest.fail(
+            "missing step 1 anchor must reject before plan lookup"
+        ),
     )
 
     failure, record = create_intent(
@@ -605,12 +660,20 @@ def test_pipeline_apply_step_2_refused_when_step_1_not_applied(monkeypatch):
 
     assert record is None
     assert failure is not None
-    assert failure.message == "pipeline primary-msg step 2 requires a completed apply of step 1 first"
+    assert (
+        failure.message
+        == "pipeline primary-msg step 2 requires a completed apply of step 1 first"
+    )
 
 
 def test_apply_pipeline_intent_rejects_pipeline_hash_mismatch(monkeypatch):
-    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
-    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create.get_repo_settings",
+        lambda *_args, **_kwargs: _intent_gate_settings(),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.get_github_token", lambda _path: "github-token"
+    )
     monkeypatch.setattr(
         "src.services.intent.create._pipeline_for_intent",
         lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "new"),
@@ -619,7 +682,10 @@ def test_apply_pipeline_intent_rejects_pipeline_hash_mismatch(monkeypatch):
         "src.services.intent.create.find_latest_successful_pipeline_apply",
         lambda **_kwargs: {"pipeline_sha256": "old"},
     )
-    monkeypatch.setattr("src.services.intent.create.evaluate_intent_gates", lambda **_kwargs: pytest.fail("hash mismatch must reject before gates"))
+    monkeypatch.setattr(
+        "src.services.intent.create.evaluate_intent_gates",
+        lambda **_kwargs: pytest.fail("hash mismatch must reject before gates"),
+    )
 
     failure, record = create_intent(
         action="apply",
@@ -633,12 +699,20 @@ def test_apply_pipeline_intent_rejects_pipeline_hash_mismatch(monkeypatch):
 
     assert record is None
     assert failure is not None
-    assert failure.message == "pipeline data/primary changed since step 1 was applied; restart from step 1"
+    assert (
+        failure.message
+        == "pipeline data/primary changed since step 1 was applied; restart from step 1"
+    )
 
 
 def test_apply_pipeline_intent_rejects_missing_prior_step_anchor(monkeypatch):
-    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
-    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create.get_repo_settings",
+        lambda *_args, **_kwargs: _intent_gate_settings(),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.get_github_token", lambda _path: "github-token"
+    )
     monkeypatch.setattr(
         "src.services.intent.create._pipeline_for_intent",
         lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "h" * 64),
@@ -647,7 +721,10 @@ def test_apply_pipeline_intent_rejects_missing_prior_step_anchor(monkeypatch):
         "src.services.intent.create.find_latest_successful_pipeline_apply",
         lambda **_kwargs: None,
     )
-    monkeypatch.setattr("src.services.intent.create.evaluate_intent_gates", lambda **_kwargs: pytest.fail("missing anchor must reject before gates"))
+    monkeypatch.setattr(
+        "src.services.intent.create.evaluate_intent_gates",
+        lambda **_kwargs: pytest.fail("missing anchor must reject before gates"),
+    )
 
     failure, record = create_intent(
         action="apply",
@@ -661,12 +738,20 @@ def test_apply_pipeline_intent_rejects_missing_prior_step_anchor(monkeypatch):
 
     assert record is None
     assert failure is not None
-    assert failure.message == "pipeline data/primary step 3 requires a completed apply of step 2 first"
+    assert (
+        failure.message
+        == "pipeline data/primary step 3 requires a completed apply of step 2 first"
+    )
 
 
 def test_apply_pipeline_intent_propagates_prior_step_registry_errors(monkeypatch):
-    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
-    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create.get_repo_settings",
+        lambda *_args, **_kwargs: _intent_gate_settings(),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.get_github_token", lambda _path: "github-token"
+    )
     monkeypatch.setattr(
         "src.services.intent.create._pipeline_for_intent",
         lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "h" * 64),
@@ -675,7 +760,10 @@ def test_apply_pipeline_intent_propagates_prior_step_registry_errors(monkeypatch
     def _fail_registry(**_kwargs):
         raise RunRegistryError("registry query failed")
 
-    monkeypatch.setattr("src.services.intent.create.find_latest_successful_pipeline_apply", _fail_registry)
+    monkeypatch.setattr(
+        "src.services.intent.create.find_latest_successful_pipeline_apply",
+        _fail_registry,
+    )
 
     with pytest.raises(IntentCreationError, match="registry query failed"):
         create_intent(
@@ -689,15 +777,22 @@ def test_apply_pipeline_intent_propagates_prior_step_registry_errors(monkeypatch
         )
 
 
-def test_apply_pipeline_intent_accepts_same_hash_prior_step_from_previous_day(monkeypatch):
+def test_apply_pipeline_intent_accepts_same_hash_prior_step_from_previous_day(
+    monkeypatch,
+):
     stored: list[IntentRecord] = []
 
     def _fake_gates(**kwargs):
         folders = list(kwargs["folders"])
         return SimpleNamespace(ok=True, failures=[], record=_phase4_record(folders))
 
-    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
-    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create.get_repo_settings",
+        lambda *_args, **_kwargs: _intent_gate_settings(),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.get_github_token", lambda _path: "github-token"
+    )
     monkeypatch.setattr(
         "src.services.intent.create._pipeline_for_intent",
         lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "w" * 64),
@@ -710,7 +805,9 @@ def test_apply_pipeline_intent_accepts_same_hash_prior_step_from_previous_day(mo
         },
     )
     monkeypatch.setattr("src.services.intent.create.evaluate_intent_gates", _fake_gates)
-    monkeypatch.setattr("src.services.intent.create.put_intent", lambda record: stored.append(record))
+    monkeypatch.setattr(
+        "src.services.intent.create.put_intent", lambda record: stored.append(record)
+    )
 
     failure, record = create_intent(
         action="apply",
@@ -734,8 +831,13 @@ def test_apply_pipeline_intent_accepts_whitespace_only_pipeline_change(monkeypat
         folders = list(kwargs["folders"])
         return SimpleNamespace(ok=True, failures=[], record=_phase4_record(folders))
 
-    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
-    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create.get_repo_settings",
+        lambda *_args, **_kwargs: _intent_gate_settings(),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.get_github_token", lambda _path: "github-token"
+    )
     monkeypatch.setattr(
         "src.services.intent.create._pipeline_for_intent",
         lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "canonical"),
@@ -745,7 +847,9 @@ def test_apply_pipeline_intent_accepts_whitespace_only_pipeline_change(monkeypat
         lambda **_kwargs: {"pipeline_sha256": "canonical"},
     )
     monkeypatch.setattr("src.services.intent.create.evaluate_intent_gates", _fake_gates)
-    monkeypatch.setattr("src.services.intent.create.put_intent", lambda record: stored.append(record))
+    monkeypatch.setattr(
+        "src.services.intent.create.put_intent", lambda record: stored.append(record)
+    )
 
     failure, record = create_intent(
         action="apply",
@@ -763,8 +867,13 @@ def test_apply_pipeline_intent_accepts_whitespace_only_pipeline_change(monkeypat
 
 
 def test_apply_pipeline_intent_rejects_step_out_of_range(monkeypatch):
-    monkeypatch.setattr("src.services.intent.create.get_repo_settings", lambda *_args, **_kwargs: _intent_gate_settings())
-    monkeypatch.setattr("src.services.intent.create.get_github_token", lambda _path: "github-token")
+    monkeypatch.setattr(
+        "src.services.intent.create.get_repo_settings",
+        lambda *_args, **_kwargs: _intent_gate_settings(),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.get_github_token", lambda _path: "github-token"
+    )
     monkeypatch.setattr(
         "src.services.intent.create._pipeline_for_intent",
         lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "h" * 64),
@@ -795,7 +904,10 @@ def test_pipeline_apply_footer_renders_next_step_and_completion():
     }
     outcomes = [{"folder": "infra/vpc", "status": "succeeded", "succeeded": True}]
 
-    assert _pipeline_apply_footer(event, "apply", outcomes, []) == "next: tf apply pipeline data/primary step 2"
+    assert (
+        _pipeline_apply_footer(event, "apply", outcomes, [])
+        == "next: tf apply pipeline data/primary step 2"
+    )
 
     complete_event = {
         "webhook_info": {
@@ -804,7 +916,10 @@ def test_pipeline_apply_footer_renders_next_step_and_completion():
             "pipeline_step_count": 2,
         }
     }
-    assert _pipeline_apply_footer(complete_event, "apply", outcomes, []) == "pipeline data/primary complete (2 steps)"
+    assert (
+        _pipeline_apply_footer(complete_event, "apply", outcomes, [])
+        == "pipeline data/primary complete (2 steps)"
+    )
     assert _pipeline_apply_footer(event, "apply", [{"status": "failed"}], []) is None
 
 
@@ -1074,6 +1189,295 @@ def test_create_handler_success_keeps_requested_command_until_terminal_render(
     assert "removed after acknowledgement" not in posted[0]
 
 
+def test_create_handler_success_terminalizes_run_after_comment_metadata(monkeypatch):
+    monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")
+    monkeypatch.setattr(
+        "src.services.intent.handler._current_pr_head_sha",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.create_intent",
+        lambda **_kwargs: (
+            None,
+            {
+                "token": "abc123",
+                "trigger_id": "t",
+                "pr_number": 1,
+                "action": "apply",
+                "source_run_id": "plan-run",
+                "folders": ["infra/vpc"],
+                "commit_hash": "a" * 40,
+                "expires_at": 9999999999,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.store_intent_comment_metadata",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._post_comment",
+        lambda *_args, **_kwargs: 9001,
+    )
+    terminalized: list[tuple[dict[str, object], str]] = []
+    monkeypatch.setattr(
+        "src.services.intent.handler.terminalize_intent_create_run",
+        lambda event, status: terminalized.append((event, status)),
+    )
+
+    event = {
+        "run_id": "intent-run-1",
+        "action": "apply",
+        "folders": ["infra/vpc"],
+        "webhook_info": {
+            "pr_number": 1,
+            "trigger_id": "t",
+            "repo_name": "o/r",
+            "comment_id": 44,
+            "comment_body": "tf apply infra/vpc",
+        },
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    result = create_handler(event, None)
+
+    assert result["intent_created"] is True
+    assert terminalized == [(event, "succeeded")]
+
+
+def test_create_handler_pipeline_success_terminalizes_run_after_comment_metadata(
+    monkeypatch,
+):
+    monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")
+    monkeypatch.setattr(
+        "src.services.intent.handler._current_pr_head_sha",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.create_intent",
+        lambda **_kwargs: (
+            None,
+            {
+                "token": "abc123",
+                "trigger_id": "t",
+                "pr_number": 1,
+                "action": "apply",
+                "source_run_id": "plan-run",
+                "folders": ["infra/rds", "infra/ec2"],
+                "commit_hash": "a" * 40,
+                "expires_at": 9999999999,
+                "pipeline": "data/primary",
+                "step_index": 2,
+                "step_count": 3,
+                "pipeline_sha256": "c" * 64,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.store_intent_comment_metadata",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._post_comment",
+        lambda *_args, **_kwargs: 9001,
+    )
+    terminalized: list[str] = []
+    monkeypatch.setattr(
+        "src.services.intent.handler.terminalize_intent_create_run",
+        lambda _event, status: terminalized.append(status),
+    )
+
+    event = {
+        "run_id": "intent-run-pipeline",
+        "action": "apply",
+        "folders": [],
+        "pipeline": "data/primary",
+        "pipeline_step": 2,
+        "webhook_info": {
+            "pr_number": 1,
+            "trigger_id": "t",
+            "repo_name": "o/r",
+            "comment_id": 44,
+            "comment_body": "tf apply data/primary:2",
+        },
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    result = create_handler(event, None)
+
+    assert result["intent_created"] is True
+    assert terminalized == ["succeeded"]
+
+
+@patch("src.services.intent.run_terminal.update_run_status")
+def test_terminalize_intent_create_run_does_not_index_pipeline_apply_step(
+    mock_update_run_status, monkeypatch
+):
+    monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")
+    from src.services.intent.run_terminal import terminalize_intent_create_run
+
+    terminalize_intent_create_run({"run_id": "intent-run-1"}, "succeeded")
+
+    mock_update_run_status.assert_called_once_with("intent-run-1", "succeeded")
+
+
+def test_create_handler_gate_refusal_terminalizes_run_failed(monkeypatch):
+    monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")
+    monkeypatch.setattr(
+        "src.services.intent.handler._current_pr_head_sha",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.create_intent",
+        lambda **_kwargs: (
+            IntentGateFailure("apply not allowed", folder="infra/vpc"),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._post_comment",
+        lambda *_args, **_kwargs: 9001,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_triggering_comment_after_replacement",
+        lambda *_args, **_kwargs: None,
+    )
+    terminalized: list[str] = []
+    monkeypatch.setattr(
+        "src.services.intent.handler.terminalize_intent_create_run",
+        lambda _event, status: terminalized.append(status),
+    )
+
+    event = {
+        "run_id": "intent-run-failed",
+        "action": "apply",
+        "folders": ["infra/vpc"],
+        "webhook_info": {
+            "pr_number": 1,
+            "trigger_id": "t",
+            "repo_name": "o/r",
+            "comment_id": 44,
+            "comment_body": "tf apply infra/vpc",
+        },
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    result = create_handler(event, None)
+
+    assert result["intent_failed"] is True
+    assert terminalized == ["failed"]
+
+
+def test_create_handler_metadata_failure_does_not_terminalize_succeeded(monkeypatch):
+    monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")
+    monkeypatch.setattr(
+        "src.services.intent.handler._current_pr_head_sha",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.create_intent",
+        lambda **_kwargs: (
+            None,
+            {
+                "token": "abc123",
+                "trigger_id": "t",
+                "pr_number": 1,
+                "action": "apply",
+                "source_run_id": "plan-run",
+                "folders": ["infra/vpc"],
+                "commit_hash": "a" * 40,
+                "expires_at": 9999999999,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.store_intent_comment_metadata",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            EndpointConnectionError(endpoint_url="https://dynamodb.example.test")
+        ),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._post_comment",
+        lambda *_args, **_kwargs: 9001,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_comments_after_replacement",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.delete_unused_intent",
+        lambda _token: None,
+    )
+    terminalized: list[str] = []
+    monkeypatch.setattr(
+        "src.services.intent.handler.terminalize_intent_create_run",
+        lambda _event, status: terminalized.append(status),
+    )
+
+    event = {
+        "run_id": "intent-run-1",
+        "action": "apply",
+        "folders": ["infra/vpc"],
+        "webhook_info": {
+            "pr_number": 1,
+            "trigger_id": "t",
+            "repo_name": "o/r",
+            "comment_id": 44,
+            "comment_body": "tf apply infra/vpc",
+        },
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    with pytest.raises(EndpointConnectionError):
+        create_handler(event, None)
+
+    assert terminalized == []
+
+
+def test_confirm_handler_does_not_terminalize_intent_create_run(monkeypatch):
+    monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")
+    monkeypatch.setattr(
+        "src.services.intent.handler._current_pr_head_sha",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.confirm_intent",
+        lambda **_kwargs: (
+            [],
+            {
+                "action": "apply",
+                "folders": ["infra/vpc"],
+                "folder_pins": {"infra/vpc": {"source_run_id": "plan-run"}},
+                "source_plan_run_id": "plan-run",
+            },
+        ),
+    )
+    terminalized: list[str] = []
+    monkeypatch.setattr(
+        "src.services.intent.handler.terminalize_intent_create_run",
+        lambda _event, status: terminalized.append(status),
+    )
+
+    event = {
+        "run_id": "mutation-run-1",
+        "action": "apply",
+        "confirm_token": "abc123",
+        "webhook_info": {
+            "pr_number": 1,
+            "trigger_id": "t",
+            "repo_name": "o/r",
+            "comment_id": 55,
+            "comment_body": "tf apply confirm abc123",
+        },
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    result = confirm_handler(event, None)
+
+    assert result["intent_confirmed"] is True
+    assert terminalized == []
+
+
 def test_create_handler_closed_pr_posts_ignore_without_creating_intent(monkeypatch):
     comments = {
         100: append_audit_row(
@@ -1107,7 +1511,9 @@ def test_create_handler_closed_pr_posts_ignore_without_creating_intent(monkeypat
             return "openci-bot"
 
         def find_comments_by_body_substring(self, _repo, _pr, needle):
-            return [(cid, "openci-bot") for cid, body in comments.items() if needle in body]
+            return [
+                (cid, "openci-bot") for cid, body in comments.items() if needle in body
+            ]
 
         def get_comment_body(self, _repo, comment_id):
             return comments.get(comment_id)
@@ -1172,7 +1578,12 @@ def test_intent_post_comment_bounds_large_command_context(monkeypatch):
     monkeypatch.setattr(intent_handler, "GitHubClient", Client)
     huge_command = "tf " + (" " * 65_520) + "apply a"
     body = intent_handler._with_intent_command_context(
-        {"repo_name": "o/r", "pr_number": 1, "comment_id": 44, "comment_body": huge_command},
+        {
+            "repo_name": "o/r",
+            "pr_number": 1,
+            "comment_id": 44,
+            "comment_body": huge_command,
+        },
         "apply",
         "## confirm",
     )
@@ -1227,7 +1638,9 @@ def test_create_handler_metadata_endpoint_failure_deletes_intent_comment_and_inv
     )
     monkeypatch.setattr(
         "src.services.intent.handler._delete_comments_after_replacement",
-        lambda _webhook, _settings, comment_ids: deleted_batches.append(list(comment_ids)),
+        lambda _webhook, _settings, comment_ids: deleted_batches.append(
+            list(comment_ids)
+        ),
     )
     monkeypatch.setattr(
         "src.services.intent.handler.delete_unused_intent",
@@ -1284,7 +1697,9 @@ def test_create_handler_ambiguous_post_sweeps_bot_token_comment_and_invalidates_
     )
     monkeypatch.setattr(
         "src.services.intent.handler.store_intent_comment_metadata",
-        lambda *_args, **_kwargs: pytest.fail("metadata must not run after ambiguous post"),
+        lambda *_args, **_kwargs: pytest.fail(
+            "metadata must not run after ambiguous post"
+        ),
     )
     monkeypatch.setattr(intent_handler, "get_github_token", lambda _path: "token")
 
@@ -1383,7 +1798,9 @@ def test_confirm_handler_closed_pr_between_webhook_and_confirm_ignores_without_c
             return "openci-bot"
 
         def find_comments_by_body_substring(self, _repo, _pr, needle):
-            return [(cid, "openci-bot") for cid, body in comments.items() if needle in body]
+            return [
+                (cid, "openci-bot") for cid, body in comments.items() if needle in body
+            ]
 
         def get_comment_body(self, _repo, comment_id):
             return comments.get(comment_id)
@@ -1421,7 +1838,9 @@ def test_confirm_handler_closed_pr_between_webhook_and_confirm_ignores_without_c
 
     assert result["intent_failed"] is True
     assert result["confirm_token"] is None
-    assert result["intent_failures"] == ["pull request is not open; confirmation ignored"]
+    assert result["intent_failures"] == [
+        "pull request is not open; confirmation ignored"
+    ]
     assert "intent_confirmed" not in result
     assert len(posted) == 1
     assert order[:2] == ["audit-update", "post"]
@@ -1449,7 +1868,9 @@ def test_confirm_handler_unreadable_pr_ignores_without_consuming_token(monkeypat
     monkeypatch.setattr(intent_handler, "locks_table", FakeLocksTable)
     monkeypatch.setattr(
         "src.services.intent.handler.confirm_intent",
-        lambda **_kwargs: pytest.fail("unreadable PR confirmation must not consume token"),
+        lambda **_kwargs: pytest.fail(
+            "unreadable PR confirmation must not consume token"
+        ),
     )
 
     class Client:
@@ -1463,7 +1884,9 @@ def test_confirm_handler_unreadable_pr_ignores_without_consuming_token(monkeypat
             return "openci-bot"
 
         def find_comments_by_body_substring(self, _repo, _pr, needle):
-            return [(cid, "openci-bot") for cid, body in comments.items() if needle in body]
+            return [
+                (cid, "openci-bot") for cid, body in comments.items() if needle in body
+            ]
 
         def get_comment_body(self, _repo, comment_id):
             return comments.get(comment_id)
@@ -1497,7 +1920,9 @@ def test_confirm_handler_unreadable_pr_ignores_without_consuming_token(monkeypat
 
     assert result["intent_failed"] is True
     assert result["confirm_token"] is None
-    assert result["intent_failures"] == ["pull request is not open; confirmation ignored"]
+    assert result["intent_failures"] == [
+        "pull request is not open; confirmation ignored"
+    ]
     assert "intent_confirmed" not in result
     assert len(posted) == 1
     assert posted[0].startswith("openci-tf ignored the command")
@@ -1543,7 +1968,9 @@ def test_confirm_handler_failure_deletes_confirmation_intent_and_requested_comme
     )
     monkeypatch.setattr(
         "src.services.intent.handler._delete_comments_after_replacement",
-        lambda _webhook, _settings, comment_ids: deleted_batches.append(list(comment_ids)),
+        lambda _webhook, _settings, comment_ids: deleted_batches.append(
+            list(comment_ids)
+        ),
     )
     monkeypatch.setattr(
         "src.services.intent.handler._delete_stale_confirm_token_comments_after_replacement",
@@ -1609,7 +2036,9 @@ def test_confirm_handler_foreign_pr_token_deletes_only_current_confirmation(
     )
     monkeypatch.setattr(
         "src.services.intent.handler._delete_comments_after_replacement",
-        lambda _webhook, _settings, comment_ids: deleted_batches.append(list(comment_ids)),
+        lambda _webhook, _settings, comment_ids: deleted_batches.append(
+            list(comment_ids)
+        ),
     )
     monkeypatch.setattr(
         "src.services.intent.handler._delete_stale_confirm_token_comments_after_replacement",
@@ -1674,7 +2103,9 @@ def test_confirm_handler_action_mismatch_deletes_only_current_confirmation(
     )
     monkeypatch.setattr(
         "src.services.intent.handler._delete_comments_after_replacement",
-        lambda _webhook, _settings, comment_ids: deleted_batches.append(list(comment_ids)),
+        lambda _webhook, _settings, comment_ids: deleted_batches.append(
+            list(comment_ids)
+        ),
     )
     monkeypatch.setattr(
         "src.services.intent.handler._delete_stale_confirm_token_comments_after_replacement",
@@ -1701,7 +2132,9 @@ def test_confirm_handler_action_mismatch_deletes_only_current_confirmation(
     assert stale_tokens == []
 
 
-def test_confirm_handler_metadata_gap_deletes_only_confirmation_and_keeps_intent_live(monkeypatch):
+def test_confirm_handler_metadata_gap_deletes_only_confirmation_and_keeps_intent_live(
+    monkeypatch,
+):
     monkeypatch.setattr(
         "src.services.intent.handler._current_pr_head_sha",
         lambda *_args, **_kwargs: "a" * 40,
@@ -1727,7 +2160,9 @@ def test_confirm_handler_metadata_gap_deletes_only_confirmation_and_keeps_intent
     )
     monkeypatch.setattr(
         "src.services.intent.handler.get_intent",
-        lambda _token: pytest.fail("not ready cleanup must not read or delete the live intent"),
+        lambda _token: pytest.fail(
+            "not ready cleanup must not read or delete the live intent"
+        ),
     )
     deleted_batches: list[list[int | None]] = []
     stale_tokens: list[str | None] = []
@@ -1737,7 +2172,9 @@ def test_confirm_handler_metadata_gap_deletes_only_confirmation_and_keeps_intent
     )
     monkeypatch.setattr(
         "src.services.intent.handler._delete_comments_after_replacement",
-        lambda _webhook, _settings, comment_ids: deleted_batches.append(list(comment_ids)),
+        lambda _webhook, _settings, comment_ids: deleted_batches.append(
+            list(comment_ids)
+        ),
     )
     monkeypatch.setattr(
         "src.services.intent.handler._delete_stale_confirm_token_comments_after_replacement",
@@ -1761,7 +2198,9 @@ def test_confirm_handler_metadata_gap_deletes_only_confirmation_and_keeps_intent
 
     assert result["intent_failed"] is True
     assert result["confirm_token"] is None
-    assert result["intent_failures"] == ["intent not ready; comment metadata is still publishing"]
+    assert result["intent_failures"] == [
+        "intent not ready; comment metadata is still publishing"
+    ]
     assert deleted_batches == [[55]]
     assert stale_tokens == []
 
@@ -1791,7 +2230,9 @@ def test_confirm_handler_success_leaves_comments_for_terminal_render(monkeypatch
     stale_tokens: list[str | None] = []
     monkeypatch.setattr(
         "src.services.intent.handler._delete_comments_after_replacement",
-        lambda _webhook, _settings, comment_ids: deleted_batches.append(list(comment_ids)),
+        lambda _webhook, _settings, comment_ids: deleted_batches.append(
+            list(comment_ids)
+        ),
     )
     monkeypatch.setattr(
         "src.services.intent.handler._delete_stale_confirm_token_comments_after_replacement",
@@ -2080,7 +2521,10 @@ def test_token_single_use_race(monkeypatch):
     confirmed = mark_intent_used("abc123", trigger_id="t", pr_number=1, now=1)
     assert confirmed.used is True
     table.update_item.assert_called_once()
-    assert "attribute_exists(intent_comment_id)" in table.update_item.call_args.kwargs["ConditionExpression"]
+    assert (
+        "attribute_exists(intent_comment_id)"
+        in table.update_item.call_args.kwargs["ConditionExpression"]
+    )
 
 
 def test_delete_unused_intent_does_not_delete_already_used_record(monkeypatch):
