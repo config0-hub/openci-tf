@@ -742,11 +742,6 @@ def test_render_plan_all_posts_linked_multi_folder_summary(monkeypatch):
     monkeypatch.setattr(render_handler, "get_github_token", lambda _: "token")
     monkeypatch.setattr(render_handler.boto3, "resource", lambda *_: SimpleNamespace(Table=lambda _: object()))
     monkeypatch.setattr(render_handler, "list_text_prefix", lambda *_args, **_kw: artifacts)
-    monkeypatch.setattr(
-        render_handler,
-        "list_prefix_object_names",
-        lambda *_args, **_kw: frozenset(artifacts),
-    )
     monkeypatch.setattr(render_handler, "_plan_artifact_metadata", lambda *_, **__: None)
     monkeypatch.setattr(render_handler.run_lock, "release", lambda *_, **__: None)
     monkeypatch.setattr(render_handler, "GitHubClient", lambda _: SimpleNamespace(delete_comment=lambda *_a, **_k: None))
@@ -827,11 +822,6 @@ def test_render_plan_destroy_posts_linked_multi_folder_summary(monkeypatch):
     monkeypatch.setattr(render_handler, "get_github_token", lambda _: "token")
     monkeypatch.setattr(render_handler.boto3, "resource", lambda *_: SimpleNamespace(Table=lambda _: object()))
     monkeypatch.setattr(render_handler, "list_text_prefix", lambda *_args, **_kw: artifacts)
-    monkeypatch.setattr(
-        render_handler,
-        "list_prefix_object_names",
-        lambda *_args, **_kw: frozenset(artifacts),
-    )
     monkeypatch.setattr(render_handler, "_plan_artifact_metadata", lambda *_, **__: None)
     monkeypatch.setattr(render_handler.run_lock, "release", lambda *_, **__: None)
     monkeypatch.setattr(render_handler, "GitHubClient", lambda _: SimpleNamespace(delete_comment=lambda *_a, **_k: None))

@@ -146,7 +146,7 @@ def test_pipeline_summary_renders_per_step_status_table() -> None:
     assert "Step 1/3 · infra/vpc · ok" in rendered
     assert "Step 2/3 · infra/rds, infra/ec2 · failed" in rendered
     assert "Step 3/3 · infra/app · not run" in rendered
-    assert "| `infra/app` | `123456789012` | not run | not run | n/a |" in rendered
+    assert "| `infra/app` | ⏭️ | ⏭️ |   |" in rendered
 
 
 def test_pipeline_step_index_matches_between_inner_collect_and_final_replay() -> None:

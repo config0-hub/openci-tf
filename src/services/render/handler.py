@@ -37,7 +37,8 @@ from src.domain.engine.summary import (
     validate_outer_map_outcome,
 )
 from src.platform.aws.intent_registry import get_intent_record
-from src.platform.aws.s3 import get_bounded_json, list_prefix_object_names, list_text_prefix
+from src.domain.engine.artifact_paths import pr_pointer_key
+from src.platform.aws.s3 import get_bounded_json, list_text_prefix
 from src.platform.aws.ssm import get_github_token
 from src.platform.github.client import GitHubClient, comment_url
 from src.platform.github.command_comment_cleanup import (
@@ -294,6 +295,7 @@ def _render_folder_body(
     render_items: list[dict[str, Any]],
     pr_number: int | None = None,
     existing_names: frozenset[str] | None = None,
+    approved_plan_pointer_key: str | None = None,
 ) -> str:
     if action in {"apply", "destroy"}:
         return _mutation_folder_comment(
@@ -324,6 +326,7 @@ def _render_folder_body(
         hub_account_id=os.environ.get("ENGINE_CODEBUILD_ACCOUNT_ID") or None,
         identity_center_start_url=os.environ.get("AWS_CONSOLE_START_URL") or None,
         identity_center_role_name=os.environ.get("AWS_CONSOLE_ROLE_NAME") or None,
+        approved_plan_pointer_key=approved_plan_pointer_key,
     )
 
 
@@ -930,20 +933,26 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                     MAX_ARTIFACT_BYTES,
                     ALLOWED_ARTIFACT_CONTENT_TYPES,
                 )
-                existing_names = (
-                    list_prefix_object_names(
-                        os.environ["TMP_BUCKET_NAME"], prefix
-                    )
-                    if _should_list_execution_artifacts(outcome)
-                    else frozenset()
-                )
+                existing_names = frozenset(artifacts)
             else:
                 artifacts = {}
                 existing_names = frozenset()
             artifacts_by_folder[folder] = artifacts
-            _plan_artifact_metadata(
+            validated_plan_metadata = _plan_artifact_metadata(
                 outcome, action, webhook, run_id, pr_number=scoped_pr
             )
+            approved_plan_pointer_key = None
+            if validated_plan_metadata is not None and scoped_pr is not None:
+                _, pointer_type = _scoped_pr_context(
+                    run_id, pr if isinstance(pr, int) else None, action
+                )
+                if pointer_type is not None:
+                    approved_plan_pointer_key = pr_pointer_key(
+                        repo_name=repo,
+                        pr_number=scoped_pr,
+                        folder_path=folder,
+                        pointer_type=pointer_type,
+                    )
             source_plan_run_id = (
                 _source_plan_run_id(outcome)
                 if action in {"apply", "destroy"}
@@ -968,6 +977,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                             render_items=render_items,
                             pr_number=scoped_pr,
                             existing_names=existing_names,
+                            approved_plan_pointer_key=approved_plan_pointer_key,
                         ),
                         run_id=run_id,
                         comments_removed=True,

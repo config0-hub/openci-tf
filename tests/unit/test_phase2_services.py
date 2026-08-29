@@ -403,7 +403,6 @@ def test_render_final_summary_for_multi_folder_plan_and_report(monkeypatch):
     monkeypatch.setattr(render, "get_github_token", lambda _: "token")
     monkeypatch.setattr(render.boto3, "resource", lambda *_: SimpleNamespace(Table=lambda _: object()))
     monkeypatch.setattr(render, "list_text_prefix", lambda *_: {})
-    monkeypatch.setattr(render, "list_prefix_object_names", lambda *_: frozenset())
     monkeypatch.setattr(render, "_plan_artifact_metadata", lambda *_, **__: None)
     monkeypatch.setattr(render.run_lock, "release", lambda *_, **__: None)
     monkeypatch.setattr(render, "GitHubClient", lambda _: _noop_render_client())
@@ -437,11 +436,14 @@ def test_render_final_summary_for_multi_folder_plan_and_report(monkeypatch):
     assert posted[:3] == ["folder-good", "folder-bad", "summary"]
     assert posted[-3:] == ["folder-good", "folder-bad", "summary"]
     assert deleted == []
-    assert "Terraform Multi-Folder Summary" in summary_bodies[0]
-    assert "openci-tf report" in summary_bodies[1]
+    assert "## openci-tf plan" in summary_bodies[0]
+    assert "**Type:** Plan" in summary_bodies[0]
+    assert "## openci-tf report" in summary_bodies[1]
+    assert "**Type:** Report" in summary_bodies[1]
     for body in summary_bodies:
         assert "[`good`]" in body
         assert "[`bad`]" in body
+        assert "| Folder | Drift | Security | Cost |" in body
         assert "Legend" not in body
 
 
@@ -585,7 +587,7 @@ def test_render_posts_bounded_config_error_feedback_from_normalized_outcome(monk
     result = render.handler({"webhook_info": _webhook_for_run_id(), "settings": {"ssm_openci_tf_github_token": _CLONE_TOKEN}, "outcomes": [{"folder": "config", "status": "infrastructure_error", "error": error}], "skipped": []}, None)
     assert result["rendered"]
     assert len(comments) == 1
-    assert "### openci-tf command" in comments[0][0]
+    assert "<summary>Metadata</summary>" in comments[0][0]
     assert "<details>" in comments[0][0]
     assert "configuration error" in comments[0][0].lower()
     assert error[:253] in comments[0][0]
@@ -770,12 +772,16 @@ def _assert_render_placeholder_for_action(monkeypatch, action: str, needle: str)
     assert suffixes.count("summary") == 1
     assert all(needle in body for body, suffix in comments if suffix.startswith("folder-"))
     summary_body = comments[-1][0]
-    assert "| `infra/a` | `123456789012` | in progress |" in summary_body
+    assert "| `infra/a` | ⏳ | ⏳ | — |" in summary_body
     if action == "report":
         assert "## openci-tf report" in summary_body
         assert "| Drift |" in summary_body
+    elif action == "drift":
+        assert "## openci-tf drift" in summary_body
+        assert "**Type:** Drift check" in summary_body
     else:
-        assert "Terraform Multi-Folder Summary" in summary_body
+        assert "## openci-tf plan" in summary_body
+        assert "**Type:** Plan" in summary_body
 
 
 def test_render_placeholder_includes_skipped_folders_in_summary(monkeypatch):
@@ -792,8 +798,8 @@ def test_render_placeholder_includes_skipped_folders_in_summary(monkeypatch):
         "skipped": [{"folder": "infra/b", "account_id": "210987654321", "status": "in_progress", "reply": "Run already in progress."}],
     }, None)
     summary_body = comments[-1][0]
-    assert "| `infra/a` | `123456789012` | in progress |" in summary_body
-    assert "| `infra/b` | `210987654321` | in progress |" in summary_body
+    assert "| `infra/a` | ⏳ | ⏳ | — |" in summary_body
+    assert "| `infra/b` | ⏳ | ⏳ | — |" in summary_body
 
 
 def test_render_placeholder_still_posts_summary_when_all_folders_locked(monkeypatch):
@@ -814,9 +820,9 @@ def test_render_placeholder_still_posts_summary_when_all_folders_locked(monkeypa
     assert result["placeholder_rendered"] is True
     body, suffix = comments[0]
     assert suffix == "summary"
-    assert "### openci-tf command" in body
-    assert "## Terraform Multi-Folder Summary" in body
-    assert "| `infra/a` | `123456789012` | in progress | in progress | in progress |" in body
+    assert "<summary>Metadata</summary>" in body
+    assert "## openci-tf plan" in body
+    assert "| `infra/a` | ⏳ | ⏳ | — |" in body
 
 
 def test_render_placeholder_uses_same_markers_as_final_render(monkeypatch):

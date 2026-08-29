@@ -9,9 +9,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.domain.formatters.artifacts import _MAX_COMMENT_CHARS, bound_comment, folder_comment, infracost
+from src.domain.formatters.artifacts import bound_comment, folder_comment, infracost
 from src.domain.formatters.infracost_table import render_infracost_table
-from src.platform.github.client import GitHubClient, generate_search_tag
+from src.platform.github.client import GitHubClient
 from src.services.render import handler as render_handler
 
 _FIXTURES = Path("tests/fixtures/artifacts")
@@ -246,18 +246,21 @@ def test_bound_comment_preserves_cost_section_after_huge_plan():
     from src.domain.formatters.artifacts import folder_comment
 
     tag = "#openci-tf:::tag::folder-infra/a"
+    sample = _load_sample()
     artifacts = {
         "init.out": "Terraform has been successfully initialized!",
         "validate.out": "Success! The configuration is valid.",
         "tf/plan.out": "Plan: 1 to add, 0 to change, 0 to destroy.\n" + ("+ resource aws_instance.probe\n" * 20_000),
         "tfsec.json": '{"results":[]}',
-        "infracost.json": _load_sample(),
+        "tfsec.output": "No problems detected!",
+        "infracost.json": sample,
+        "infracost.output": render_infracost_table(sample),
     }
     body = folder_comment("infra/a", {"folder": "infra/a", "succeeded": True, "account_id": "123456789012"}, artifacts)
     rendered = bound_comment(body, max_chars=8_000, suffix=f"\n\n{tag}")
     assert len(rendered) <= 8_000
     assert rendered.count(tag) == 1
-    assert "### Cost Analysis" in rendered
+    assert "> <summary>Cost" in rendered
     assert "aws_instance.probe" in rendered
     assert "Instance usage (Linux/UNIX, on-demand, t3.nano)" in rendered
     assert "OVERALL TOTAL" in rendered
@@ -265,8 +268,8 @@ def test_bound_comment_preserves_cost_section_after_huge_plan():
     assert "truncated" in rendered.lower()
     assert '{"projects"' not in rendered
     _assert_balanced_markdown(rendered)
-    assert "### Security Scan" in rendered
-    assert "Security Scan Results" in rendered
+    assert "> <summary>Security" in rendered
+    assert "No problems detected!" in rendered
 
 
 def test_bound_comment_huge_plan_preserves_realistic_folder_comment_order():
@@ -288,16 +291,18 @@ def test_bound_comment_huge_plan_preserves_realistic_folder_comment_order():
         "validate.out": "Success! The configuration is valid.",
         "tf/plan.out": "Plan: 1 to add, 0 to change, 0 to destroy.\n" + ("+ resource aws_instance.probe\n" * 20_000),
         "tfsec.json": tfsec_json,
+        "tfsec.output": "Result #1 HIGH S3 bucket encryption disabled",
         "infracost.json": _load_sample(),
+        "infracost.output": render_infracost_table(_load_sample()),
     }
     body = folder_comment("infra/a", {"folder": "infra/a", "succeeded": True, "account_id": "123456789012"}, artifacts)
     rendered = bound_comment(body, max_chars=8_000, suffix=f"\n\n{tag}")
     assert len(rendered) <= 8_000
     assert rendered.count(tag) == 1
     _assert_balanced_markdown(rendered)
-    assert "### Security Scan" in rendered
+    assert "> <summary>Security" in rendered
     assert "S3 bucket encryption disabled" in rendered
-    assert "### Cost Analysis" in rendered
+    assert "> <summary>Cost" in rendered
     assert "OVERALL TOTAL" in rendered
     assert "$5.73" in rendered
     assert '{"projects"' not in rendered

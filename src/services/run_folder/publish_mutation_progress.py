@@ -13,8 +13,7 @@ from src.domain.formatters.console_urls import (
 )
 from src.domain.formatters.artifacts import (
     bound_comment,
-    command_context_block,
-    mutation_command_context_block,
+    metadata_section,
     mutation_status_comment_in_progress,
     status_comment_marker_prefix,
 )
@@ -60,7 +59,7 @@ def _progress_body_with_command_context(
     confirmation_body = _str_field(command_context.get("comment_body"))
     confirmation_id = _int_field(command_context.get("comment_id"))
     if requested_body is not None:
-        context = mutation_command_context_block(
+        context = metadata_section(
             action=action,
             requested_comment_body=requested_body,
             requested_comment_id=requested_id,
@@ -76,11 +75,9 @@ def _progress_body_with_command_context(
             commit_hash=commit_hash,
         )
     else:
-        context = command_context_block(
+        context = metadata_section(
             action=action,
             folders=[folder],
-            all_flag=False,
-            affected_flag=False,
             comment_body=confirmation_body,
             comment_id=confirmation_id,
             comment_link=comment_url(repo_name, pr_number, confirmation_id)
@@ -89,7 +86,7 @@ def _progress_body_with_command_context(
             run_id=run_id,
             commit_hash=commit_hash,
         )
-    return f"{context}\n\n---\n\n{body}"
+    return f"{body}\n\n{context}"
 
 
 def _replace_bot_progress_comment(

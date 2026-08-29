@@ -82,7 +82,6 @@ def _stub_render_mutation_dependencies(monkeypatch):
             "destroy.out": "Destroy complete! Resources: 1 destroyed.",
         },
     )
-    monkeypatch.setattr(render, "list_prefix_object_names", lambda *_: frozenset())
     monkeypatch.setattr(render, "_plan_artifact_metadata", lambda *_, **__: None)
     monkeypatch.setattr(render.run_lock, "release", lambda *_, **__: None)
     monkeypatch.setattr(render, "_delete_generated_comment", lambda *_, **__: None)

@@ -10,7 +10,6 @@ from src.domain.formatters.artifacts import (
     status_comment_marker,
 )
 from src.platform.github import client as github_client
-from src.services.render.comments import _with_command_context
 from src.services.run_folder import publish_mutation_progress
 
 
@@ -36,32 +35,6 @@ def test_codebuild_progress_keeps_placeholder_command_context(monkeypatch) -> No
     run_id = "run-1"
     repo_name = "org/repo"
     captured: list[str] = []
-    placeholder_event = {
-        "action": "apply",
-        "folders": ["infra/ec2"],
-        "requested_comment_id": 10,
-        "requested_comment_body": "tf apply infra/ec2",
-        "intent_comment_id": 11,
-        "webhook_info": {
-            "repo_name": repo_name,
-            "pr_number": 7,
-            "comment_id": 55,
-            "comment_body": "tf apply confirm <redacted>",
-            "commit_hash": "a" * 40,
-        },
-    }
-    placeholder = _with_command_context(
-        placeholder_event,
-        mutation_status_comment_in_progress(
-            action="apply",
-            folder="infra/ec2",
-            commit_hash="a" * 40,
-            grace_seconds=15,
-            console_url="https://example.test/states",
-            run_id=run_id,
-        ),
-        run_id=run_id,
-    )
 
     class Client:
         def __init__(self, _token):
@@ -111,8 +84,7 @@ def test_codebuild_progress_keeps_placeholder_command_context(monkeypatch) -> No
     )
 
     assert result["updated"] is True
-    assert placeholder.startswith("### openci-tf command")
-    assert captured[0].startswith("### openci-tf command")
+    assert "<summary>Metadata</summary>" in captured[0]
     assert "requested command: `tf apply infra/ec2`" in captured[0]
     assert "## Apply in progress" in captured[0]
 
@@ -235,7 +207,8 @@ def test_codebuild_progress_bounds_large_command_context(monkeypatch) -> None:
 
     assert result["updated"] is True
     assert len(captured[0]) <= 65_536
-    assert "- command: `tf apply a`" in captured[0]
+    assert "<summary>Metadata</summary>" in captured[0]
+    assert "confirmation command:" in captured[0]
 
 
 def test_mutation_terminal_labels_codebuild_hub_account() -> None:

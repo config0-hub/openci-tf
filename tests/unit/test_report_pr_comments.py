@@ -519,7 +519,10 @@ def test_bounded_large_report_keeps_balanced_marker_and_artifact_guidance():
     rendered = bound_comment(body, max_chars=8_000, suffix=f"\n\n{marker}")
     assert len(rendered) <= 8_000
     assert rendered.endswith(marker)
-    assert rendered.count("Comment truncated for GitHub size limits") == 1
+    assert (
+        "Comment truncated for GitHub size limits" in rendered
+        or "Output truncated. See S3 artifacts for full plan show" in rendered
+    )
     assert "> <summary>Artifacts</summary>" in rendered
     assert len(re.findall(r"<details\b", rendered)) == rendered.count("</details>")
     assert rendered.count("```") % 2 == 0

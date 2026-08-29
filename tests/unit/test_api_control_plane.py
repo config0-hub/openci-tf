@@ -852,9 +852,11 @@ def test_folder_comment_includes_execution_artifacts_when_provided():
         "infra/a",
         {"succeeded": True, "account_id": "123456789012"},
         {"init.out": "ok", "validate.out": "ok", "tf/plan.out": "Plan: 0 to add"},
-        manifest_s3_uri="s3://tmp/openci-tf/org/repo/run/infra/a/manifest.json",
         run_id="run-id",
         repo_name="org/repo",
+        existing_names=frozenset({"manifest.json", "init.out", "validate.out", "tf/plan.out"}),
+        tmp_bucket="tmp",
+        region="us-east-1",
     )
-    assert "### Execution Artifacts" in rendered
+    assert "> <summary>Artifacts</summary>" in rendered
     assert rendered.startswith("<details>")

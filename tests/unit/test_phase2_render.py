@@ -13,8 +13,8 @@ def test_render_mixed_outcomes_includes_folder_reports_and_summary_columns():
         {"folder": "infra/good", "status": "succeeded", "account_id": _ACCOUNT},
         {"folder": "infra/bad", "status": "infrastructure_error", "account_id": _ACCOUNT},
     ])
-    assert "Initialize" in good and "Infrastructure error" in failed
-    assert "| Folder | Account | Plan | Security | Cost |" in table
+    assert "> <summary>Setup" in good and "Infrastructure error" in failed
+    assert "| Folder | Drift | Security | Cost |" in table
 
 
 def test_rejected_artifact_is_rendered_as_bounded_text():

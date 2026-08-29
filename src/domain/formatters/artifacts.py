@@ -461,6 +461,8 @@ def _action_type_line(action: str) -> str:
         "plan_destroy": "**Type:** Destroy plan",
         "drift": "**Type:** Drift check",
         "report": "**Type:** Report",
+        "apply": "**Type:** Apply",
+        "destroy": "**Type:** Destroy",
     }[action]
 
 
@@ -514,6 +516,20 @@ def closed_pr_rejection_comment(
 
 
 _PLAN_SUMMARY_ACTIONS = frozenset({"plan", "plan_destroy"})
+
+_BOUND_PLAN_CHARS = 8000
+_REPORT_PLAN_CHARS = 2500
+_BOUND_PLAN_TRUNCATION_NOTE = (
+    "\n\n> Output truncated. See S3 artifacts for full plan show."
+)
+
+
+def _bound_plan_display_text(text: str, *, max_chars: int = _BOUND_PLAN_CHARS) -> str:
+    """Bound human-readable plan output before composing folder comments."""
+    bounded = text[:max_chars]
+    if len(text) > max_chars:
+        bounded += _BOUND_PLAN_TRUNCATION_NOTE
+    return bounded
 
 
 def _human_plan_output_key(action: str) -> str:
@@ -910,6 +926,7 @@ def _highlight_plan(text: str) -> str:
 
 def _report_plan_collapsible(text: str) -> str:
     clean = _neutralize_comment_identity_lines(_strip_ansi(text))
+    bounded = _bound_plan_display_text(clean, max_chars=_REPORT_PLAN_CHARS)
     counts = _plan_counts(clean)
     parts: list[str] = []
     if counts is None:
@@ -925,7 +942,7 @@ def _report_plan_collapsible(text: str) -> str:
                 "",
             ]
         )
-    parts.append(_fenced_block(_highlight_plan(clean), "diff"))
+    parts.append(_fenced_block(_highlight_plan(bounded), "diff"))
     return _report_child_collapsible(
         f"Plan {_plan_status_icon(text)}",
         "\n".join(parts),
@@ -1146,6 +1163,7 @@ def _report_artifacts_collapsible(
     identity_center_role_name: str | None,
     pr_number: int | None = None,
     action: str = "report",
+    approved_plan_pointer_key: str | None = None,
 ) -> str:
     lines = _report_artifact_link_lines(
         repo_name=repo_name,
@@ -1160,6 +1178,18 @@ def _report_artifacts_collapsible(
         pr_number=pr_number,
         action=action,
     )
+    if approved_plan_pointer_key and tmp_bucket and region:
+        pointer_label = approved_plan_pointer_key.rsplit("/", 1)[-1]
+        pointer_url = s3_object_console_url(
+            tmp_bucket,
+            approved_plan_pointer_key,
+            region=region,
+            account_id=hub_account_id,
+            identity_center_start_url=identity_center_start_url,
+            identity_center_role_name=identity_center_role_name,
+        )
+        lines.insert(0, "Approved plan")
+        lines.insert(1, f"  [{pointer_label}]({pointer_url})")
     if not lines:
         return ""
     return _report_child_collapsible("Artifacts", "\n".join(lines))
@@ -1202,6 +1232,7 @@ def _report_folder_comment(
     hub_account_id: str | None = None,
     identity_center_start_url: str | None = None,
     identity_center_role_name: str | None = None,
+    approved_plan_pointer_key: str | None = None,
 ) -> str:
     if folder != "config":
         _require_account_id(outcome, folder)
@@ -1233,6 +1264,7 @@ def _report_folder_comment(
             identity_center_role_name=identity_center_role_name,
             pr_number=pr_number,
             action=action,
+            approved_plan_pointer_key=approved_plan_pointer_key,
         ),
     ]
     return _wrap_collapsed(
@@ -1421,9 +1453,7 @@ def _mutation_plan_collapsible(
         )
     if not plan_show_text:
         return ""
-    bounded = plan_show_text[:8000]
-    if len(plan_show_text) > 8000:
-        bounded += "\n\n> Output truncated. See S3 artifacts for full plan show."
+    bounded = _bound_plan_display_text(_strip_ansi(plan_show_text))
     counts = _plan_counts(_strip_ansi(plan_show_text))
     icon = "❔" if counts is None else "✅" if counts == (0, 0, 0) else "⚠️"
     body = _fenced_block(_highlight_plan(_strip_ansi(bounded)), "diff")
@@ -1771,6 +1801,7 @@ def folder_comment(
     hub_account_id: str | None = None,
     identity_center_start_url: str | None = None,
     identity_center_role_name: str | None = None,
+    approved_plan_pointer_key: str | None = None,
 ) -> str:
     if folder == "config" and outcome.get("status") == "infrastructure_error":
         error = _format_error(outcome)[:_MAX_CONFIGURATION_ERROR_CHARS]
@@ -1840,6 +1871,7 @@ def folder_comment(
         hub_account_id=hub_account_id,
         identity_center_start_url=identity_center_start_url,
         identity_center_role_name=identity_center_role_name,
+        approved_plan_pointer_key=approved_plan_pointer_key,
     )
 
 

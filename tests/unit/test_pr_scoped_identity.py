@@ -436,6 +436,9 @@ def test_render_lists_scoped_artifacts_and_shows_plan_env(monkeypatch):
         run_id=run_id,
         repo_name=repo_name,
         pr_number=pr_number,
+        approved_plan_pointer_key=plan_env,
+        tmp_bucket="tmp",
+        region="us-east-1",
     )
     assert plan_env in body
     assert "latest/" not in body
