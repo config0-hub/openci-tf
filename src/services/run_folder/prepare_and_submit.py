@@ -241,12 +241,15 @@ def _persist_submission_acknowledgement(
     submitted_at = result.get("submitted_at")
     if not isinstance(submitted_at, (int, float)) or isinstance(submitted_at, bool):
         raise TypeError("accepted submission requires numeric submitted_at")
+    attempt_value = result.get("attempt")
+    if type(attempt_value) is not int:
+        raise TypeError("accepted submission requires integer attempt")
     accepted = put_folder_submission(
         run_id=str(event["run_id"]),
         folder=str(event["folder"]),
         account_id=account_id,
         execution_id=str(result["exec_id"]),
-        attempt=int(result["attempt"]),
+        attempt=attempt_value,
         submitted_at=float(submitted_at),
         engine_execution_arn=(
             str(result["engine_execution_arn"])

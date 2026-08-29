@@ -8,6 +8,7 @@ import inspect
 import json
 from pathlib import Path
 
+import pytest
 from botocore.exceptions import ClientError
 
 from src.core.models import FolderConfig
@@ -221,6 +222,29 @@ def test_engine_acceptance_survives_progress_comment_failure(monkeypatch) -> Non
     assert "github-secret" not in str(result["notification_error"])
     assert notification[0]["notification_status"] == "failed"
     assert notification[0]["notification_error"] == result["notification_error"]
+
+
+def test_persist_submission_acknowledgement_rejects_non_integer_attempt(monkeypatch) -> None:
+    monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")
+    event = {"run_id": "run", "folder": "infra/app"}
+    base_result: dict[str, object] = {
+        "exec_id": "run.infra-app.0",
+        "submitted_at": 100.0,
+    }
+
+    with pytest.raises(TypeError, match="integer attempt"):
+        prepare_and_submit._persist_submission_acknowledgement(
+            event=event,
+            account_id="123456789012",
+            result={**base_result, "attempt": True},
+        )
+
+    with pytest.raises(TypeError, match="integer attempt"):
+        prepare_and_submit._persist_submission_acknowledgement(
+            event=event,
+            account_id="123456789012",
+            result={**base_result, "attempt": "0"},
+        )
 
 
 def test_prepare_handler_keeps_engine_acceptance_when_comment_fails(

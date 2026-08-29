@@ -7,7 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any
 
 from src.domain.engine.artifact_limits import (
@@ -19,7 +19,6 @@ from src.domain.engine.artifact_limits import (
 )
 from src.domain.engine.artifact_paths import (
     build_folder_artifact_keys,
-    build_folder_artifact_keys_for_run,
     expected_plan_artifact_uris,
     manifest_key,
 )
@@ -157,18 +156,6 @@ def complete_plan_object_mocks(
     )
     plan_digest = metadata["sha256"]
     metadata_body = json.dumps(metadata, separators=(",", ":"), sort_keys=True).encode()
-    if pr_number is not None and pointer_type is not None:
-        keys = build_folder_artifact_keys_for_run(
-            repo_name=repo_name,
-            run_id=run_id,
-            folder_path=folder,
-            pr_number=pr_number,
-            pointer_type=pointer_type,
-        )
-    else:
-        keys = build_folder_artifact_keys(
-            repo_name=repo_name, run_id=run_id, folder_path=folder
-        )
     if package_body is None:
         package_body = plan_body
 

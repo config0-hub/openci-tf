@@ -91,7 +91,6 @@ def test_report_script_upload_loop_includes_infracost_output():
 
 
 def test_report_script_uploads_infracost_output_when_configured(tmp_path):
-    uploads: list[str] = []
     downloads = tmp_path / "downloads"
     downloads.mkdir()
     for binary in ("tofu", "tfsec", "infracost"):
