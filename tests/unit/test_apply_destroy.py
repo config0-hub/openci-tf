@@ -995,9 +995,14 @@ def test_create_handler_unknown_account_alias_returns_intent_failed(
         "src.services.intent.handler._current_pr_head_sha",
         lambda *_args, **_kwargs: "a" * 40,
     )
+    monkeypatch.setattr(
+        "src.services.intent.handler._terminalize_intent_create_run",
+        lambda *_args, **_kwargs: None,
+    )
 
     event = {
         "action": "apply",
+        "run_id": "intent-run-unknown-alias",
         "folders": ["infra/vpc"],
         "webhook_info": {"pr_number": 1, "trigger_id": "t", "repo_name": "o/r"},
         "settings": {"ssm_openci_tf_github_token": "/token"},
@@ -1037,9 +1042,14 @@ def test_create_handler_malformed_account_alias_returns_intent_failed(
         "src.services.intent.handler._current_pr_head_sha",
         lambda *_args, **_kwargs: "a" * 40,
     )
+    monkeypatch.setattr(
+        "src.services.intent.handler._terminalize_intent_create_run",
+        lambda *_args, **_kwargs: None,
+    )
 
     event = {
         "action": "apply",
+        "run_id": "intent-run-malformed-alias",
         "folders": ["infra/vpc"],
         "webhook_info": {"pr_number": 1, "trigger_id": "t", "repo_name": "o/r"},
         "settings": {"ssm_openci_tf_github_token": "/token"},
@@ -1086,9 +1096,14 @@ def test_create_handler_failure_posts_context_before_deleting_command(
         "src.services.intent.handler._delete_triggering_comment_after_replacement",
         lambda _webhook, _settings, comment_id: deleted.append(comment_id),
     )
+    monkeypatch.setattr(
+        "src.services.intent.handler._terminalize_intent_create_run",
+        lambda *_args, **_kwargs: None,
+    )
 
     event = {
         "action": "apply",
+        "run_id": "intent-run-failure-context",
         "folders": ["infra/vpc"],
         "webhook_info": {
             "pr_number": 1,
@@ -1158,9 +1173,14 @@ def test_create_handler_success_keeps_requested_command_until_terminal_render(
         "src.services.intent.handler._delete_triggering_comment_after_replacement",
         lambda _webhook, _settings, comment_id: deleted.append(comment_id),
     )
+    monkeypatch.setattr(
+        "src.services.intent.handler._terminalize_intent_create_run",
+        lambda *_args, **_kwargs: None,
+    )
 
     event = {
         "action": "apply",
+        "run_id": "intent-run-success",
         "folders": ["infra/vpc"],
         "webhook_info": {
             "pr_number": 1,
@@ -1533,9 +1553,15 @@ def test_create_handler_closed_pr_posts_ignore_without_creating_intent(monkeypat
             deleted.append(comment_id)
 
     monkeypatch.setattr(intent_handler, "GitHubClient", Client)
+    monkeypatch.setattr(
+        intent_handler,
+        "_terminalize_intent_create_run",
+        lambda *_args, **_kwargs: None,
+    )
 
     event = {
         "action": "apply",
+        "run_id": "intent-run-closed-pr",
         "folders": ["infra/vpc"],
         "webhook_info": {
             "pr_number": 1,
@@ -1820,8 +1846,14 @@ def test_confirm_handler_closed_pr_between_webhook_and_confirm_ignores_without_c
             deleted.append(comment_id)
 
     monkeypatch.setattr(intent_handler, "GitHubClient", Client)
+    monkeypatch.setattr(
+        intent_handler,
+        "_terminalize_intent_create_run",
+        lambda *_args, **_kwargs: None,
+    )
     event = {
         "action": action,
+        "run_id": f"intent-run-closed-confirm-{action}",
         "confirm_token": "abc123",
         "webhook_info": {
             "pr_number": 1,
@@ -1902,8 +1934,14 @@ def test_confirm_handler_unreadable_pr_ignores_without_consuming_token(monkeypat
             deleted.append(comment_id)
 
     monkeypatch.setattr(intent_handler, "GitHubClient", Client)
+    monkeypatch.setattr(
+        intent_handler,
+        "_terminalize_intent_create_run",
+        lambda *_args, **_kwargs: None,
+    )
     event = {
         "action": "apply",
+        "run_id": "intent-run-unreadable-pr",
         "confirm_token": "abc123",
         "webhook_info": {
             "pr_number": 1,

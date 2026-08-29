@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Config0, Inc.
 # SPDX-License-Identifier: AGPL-3.0-or-later
 from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 
@@ -164,19 +165,31 @@ def test_tmp_bucket_has_openci_tf_lifecycle_rule() -> None:
 
 
 def test_comment_shows_run_id_and_plan_pointers_only() -> None:
+    artifacts = {
+        "init.out": "init",
+        "validate.out": "ok",
+        "tf/plan.out": "Plan: 0 to add, 0 to change, 0 to destroy",
+        "tf/plan.tfplan": "",
+    }
     rendered = folder_comment(
         "infra/app",
         {"succeeded": True, "account_id": _ACCOUNT},
-        {
-            "init.out": "init",
-            "validate.out": "ok",
-            "tf/plan.out": "Plan: 0 to add, 0 to change, 0 to destroy",
-        },
+        artifacts,
         run_id=_RUN_ID,
         repo_name="org/repo",
+        existing_names=frozenset(artifacts),
+        tmp_bucket="tmp-bucket",
+        region="us-east-1",
+        hub_account_id="999999999999",
+        identity_center_start_url="https://d-9567aa6b98.awsapps.com/start",
+        identity_center_role_name="AWSAdministratorAccess",
     )
-    assert "Plan Artifact" in rendered
+    assert "> <summary>Artifacts</summary>" in rendered
+    assert "[plan.tfplan]" in rendered
     assert _RUN_ID in rendered
-    assert f"openci-tf/org/repo/{_RUN_ID}/infra/app/tf/plan.tfplan" in rendered
+    assert (
+        f"openci-tf/org/repo/{_RUN_ID}/infra/app/tf/plan.tfplan" in unquote(rendered)
+    )
     assert "SHA-256" not in rendered
     assert "Expires" not in rendered
+    assert "Plan Artifact" not in rendered

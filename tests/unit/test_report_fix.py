@@ -241,13 +241,18 @@ def test_summary_uses_icon_cells_without_legend():
         commit_hash="a" * 40,
         console_url="https://console.aws.amazon.com/states/home?region=us-east-1#/executions/details/arn",
     )
-    assert "## Terraform Multi-Folder Summary" in rendered
-    assert "[`vpc`](https://github.com/org/repo/pull/1#issuecomment-1)" in rendered
-    assert "| [`vpc`](https://github.com/org/repo/pull/1#issuecomment-1) | `123456789012` | no changes | clean | $0 |" in rendered
-    assert "| [`eks`](https://github.com/org/repo/pull/1#issuecomment-2) | `210987654321` | +15 ~0 -0 | low | $12.50 |" in rendered
+    assert "## openci-tf plan" in rendered
+    assert "**Type:** Plan" in rendered
+    assert "**2 folders** · **1 need attention** · **1 clean**" in rendered
+    assert "### Needs attention" in rendered
+    assert "| Folder | Drift | Security | Cost |" in rendered
+    assert "| Account |" not in rendered
+    assert "| [`eks`](https://github.com/org/repo/pull/1#issuecomment-2) | ⚠️ | ⚠️ | $12.50 |" in rendered
+    assert "<summary>1 clean folder ✅</summary>" in rendered
+    assert "| [`vpc`](https://github.com/org/repo/pull/1#issuecomment-1) | ✅ | ✅ | $0 |" in rendered
     assert "Drift:" not in rendered
     assert "Security:" not in rendered
-    assert "## CI Details" in rendered
+    assert "Legend" not in rendered
 
 
 def test_plan_all_summary_renders_drift_and_security_icons_for_each_folder():
@@ -270,8 +275,11 @@ def test_plan_all_summary_renders_drift_and_security_icons_for_each_folder():
             },
         },
     )
-    assert "| `terraform/ap-northeast-1` | `123456789012` | no changes | clean | $0 |" in rendered
-    assert "| `terraform/eu-west-1` | `210987654321` | +2 ~1 -0 | high | $5.00 |" in rendered
+    assert "## openci-tf plan" in rendered
+    assert "**1 need attention** · **1 clean**" in rendered
+    assert "| `terraform/eu-west-1` | ⚠️ | 🛑 | $5.00 |" in rendered
+    assert "<summary>1 clean folder ✅</summary>" in rendered
+    assert "| `terraform/ap-northeast-1` | ✅ | ✅ | $0 |" in rendered
     assert "Drift:" not in rendered
 
 
@@ -280,24 +288,27 @@ def test_summary_renders_not_configured_cost_column():
         [{"folder": "infra/a", "succeeded": True, "account_id": "123456789012"}],
         {"infra/a": {"tf/plan.out": "Plan: 0 to add, 0 to change, 0 to destroy", "tfsec.json": '{"results":[]}', "infracost.json": '{"skipped":true,"reason":"not configured"}'}},
     )
-    assert "| `infra/a` | `123456789012` | no changes | clean | not configured |" in rendered
+    assert "<summary>1 clean folder ✅</summary>" in rendered
+    assert "| `infra/a` | ✅ | ✅ | not configured |" in rendered
 
 
 @pytest.mark.parametrize(
-    ("tfsec_payload", "expected_security"),
+    ("tfsec_payload", "expected_security_icon", "expects_attention"),
     [
-        pytest.param(None, "unknown", id="absent-folder-artifacts"),
-        pytest.param("", "unknown", id="absent-tfsec"),
-        pytest.param("{}", "unknown", id="empty-object"),
-        pytest.param('{"skipped":true,"reason":"not run"}', "unknown", id="skipped-marker"),
-        pytest.param("not-json tfsec output", "unknown", id="malformed-text"),
-        pytest.param('{"results":["bad-entry"]}', "unknown", id="malformed-result-entry"),
-        pytest.param('{"results":[{"severity":""}]}', "unknown", id="missing-severity"),
-        pytest.param('{"results":[]}', "clean", id="valid-empty-results"),
-        pytest.param('{"findings":[]}', "clean", id="valid-empty-findings"),
+        pytest.param(None, "❔", True, id="absent-folder-artifacts"),
+        pytest.param("", "❔", True, id="absent-tfsec"),
+        pytest.param("{}", "❔", True, id="empty-object"),
+        pytest.param('{"skipped":true,"reason":"not run"}', "❔", True, id="skipped-marker"),
+        pytest.param("not-json tfsec output", "❔", True, id="malformed-text"),
+        pytest.param('{"results":["bad-entry"]}', "❔", True, id="malformed-result-entry"),
+        pytest.param('{"results":[{"severity":""}]}', "❔", True, id="missing-severity"),
+        pytest.param('{"results":[]}', "✅", False, id="valid-empty-results"),
+        pytest.param('{"findings":[]}', "✅", False, id="valid-empty-findings"),
     ],
 )
-def test_summary_tfsec_security_unknown_unless_valid_empty(tfsec_payload, expected_security):
+def test_summary_tfsec_security_unknown_unless_valid_empty(
+    tfsec_payload, expected_security_icon, expects_attention
+):
     artifacts: dict[str, str] = {"tf/plan.out": "Plan: 0 to add, 0 to change, 0 to destroy"}
     if tfsec_payload is not None:
         artifacts["tfsec.json"] = tfsec_payload
@@ -305,7 +316,14 @@ def test_summary_tfsec_security_unknown_unless_valid_empty(tfsec_payload, expect
         [{"folder": "infra/a", "succeeded": True, "account_id": "123456789012"}],
         {"infra/a": artifacts},
     )
-    assert f"| `infra/a` | `123456789012` | no changes | {expected_security} |" in rendered
+    row = f"| `infra/a` | ✅ | {expected_security_icon} |"
+    assert row in rendered
+    if expects_attention:
+        assert "### Needs attention" in rendered
+        assert "clean folder" not in rendered
+    else:
+        assert "<summary>1 clean folder ✅</summary>" in rendered
+        assert "### Needs attention" not in rendered
 
 
 def test_tfsec_formatter_omits_not_run_marker():
@@ -751,10 +769,20 @@ def test_render_plan_all_posts_linked_multi_folder_summary(monkeypatch):
     )
 
     summary_body = posted_bodies["summary"]
-    assert "## Terraform Multi-Folder Summary" in summary_body
+    assert "## openci-tf plan" in summary_body
+    assert "**Type:** Plan" in summary_body
+    assert "**2 folders** · **0 need attention** · **2 clean**" in summary_body
     assert f"[`infra/a`]({comment_url('org/repo', 7, comment_ids['infra/a'])})" in summary_body
     assert f"[`infra/b`]({comment_url('org/repo', 7, comment_ids['infra/b'])})" in summary_body
-    assert "| no changes | clean | $0 |" in summary_body
+    assert (
+        f"| [`infra/a`]({comment_url('org/repo', 7, comment_ids['infra/a'])}) | ✅ | ✅ | $0 |"
+        in summary_body
+    )
+    assert (
+        f"| [`infra/b`]({comment_url('org/repo', 7, comment_ids['infra/b'])}) | ✅ | ✅ | $0 |"
+        in summary_body
+    )
+    assert "<summary>2 clean folders ✅</summary>" in summary_body
     assert "Legend" not in summary_body
     assert "Drift:" not in summary_body
 
@@ -826,10 +854,21 @@ def test_render_plan_destroy_posts_linked_multi_folder_summary(monkeypatch):
     )
 
     summary_body = posted_bodies["summary"]
-    assert "## Terraform Multi-Folder Summary" in summary_body
+    assert "## openci-tf plan --destroy" in summary_body
+    assert "**Type:** Destroy plan" in summary_body
+    assert "**2 folders** · **2 need attention** · **0 clean**" in summary_body
+    assert "### Needs attention" in summary_body
     assert f"[`infra/a`]({comment_url('org/repo', 9, comment_ids['infra/a'])})" in summary_body
     assert f"[`infra/b`]({comment_url('org/repo', 9, comment_ids['infra/b'])})" in summary_body
-    assert "| +0 ~0 -1 | clean | $0 |" in summary_body
-    assert "unknown" not in summary_body
+    assert (
+        f"| [`infra/a`]({comment_url('org/repo', 9, comment_ids['infra/a'])}) | ⚠️ | ✅ | $0 |"
+        in summary_body
+    )
+    assert (
+        f"| [`infra/b`]({comment_url('org/repo', 9, comment_ids['infra/b'])}) | ⚠️ | ✅ | $0 |"
+        in summary_body
+    )
+    assert "❔" not in summary_body
+    assert "clean folder" not in summary_body
     folder_body = posted_bodies["folder-infra/a"]
     assert "1 to destroy" in folder_body
