@@ -14,6 +14,7 @@ from src.core.errors import EngineAckError
 from src.domain.formatters.console_urls import (
     codebuild_build_url,
     is_valid_codebuild_build_id,
+    s3_object_console_url,
     step_functions_execution_url,
 )
 from src.domain.engine.artifact_paths import artifact_env_suffix
@@ -164,6 +165,26 @@ def test_codebuild_url_rejects_step_functions_execution_arn():
 def test_codebuild_url_rejects_fabricated_trigger_suffix():
     fake_id = "openci-tf-worker:run.infra.0"
     assert is_valid_codebuild_build_id(fake_id) is False
+
+
+def test_s3_object_console_url_can_wrap_destination_in_identity_center_shortcut():
+    url = s3_object_console_url(
+        "tmp-bucket",
+        "openci-tf/org/repo/run/infra/a/tfsec.json",
+        region="us-east-1",
+        account_id=MAIN_ACCOUNT_ID,
+        identity_center_start_url="https://d-9567aa6b98.awsapps.com/start/#",
+        identity_center_role_name="AWSAdministratorAccess",
+    )
+
+    parsed = urlparse(url)
+    fragment_query = parsed.fragment.split("?", 1)[1]
+    query = parse_qs(fragment_query)
+    assert url.startswith("https://d-9567aa6b98.awsapps.com/start/#/console?")
+    assert query["account_id"] == [MAIN_ACCOUNT_ID]
+    destination = unquote(query["destination"][0])
+    assert destination.startswith("https://us-east-1.console.aws.amazon.com/s3/object/tmp-bucket")
+    assert "openci-tf/org/repo/run/infra/a/tfsec.json" in destination
 
 
 def test_codebuild_url_can_wrap_destination_in_identity_center_shortcut():

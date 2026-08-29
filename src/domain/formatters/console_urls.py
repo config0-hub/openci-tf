@@ -51,6 +51,36 @@ def step_functions_execution_url(
     )
 
 
+def s3_object_console_url(
+    bucket: str,
+    key: str,
+    *,
+    region: str,
+    account_id: str | None = None,
+    identity_center_start_url: str | None = None,
+    identity_center_role_name: str | None = None,
+) -> str:
+    """Return an AWS Console URL for one S3 object."""
+    if not isinstance(bucket, str) or not bucket:
+        raise ValueError("bucket is required")
+    if not isinstance(key, str) or not key:
+        raise ValueError("key is required")
+    resolved_region = _validate_region(region)
+    encoded_key = quote(key, safe="/")
+    destination = (
+        f"https://{resolved_region}.console.aws.amazon.com/s3/object/{bucket}"
+        f"?region={resolved_region}&prefix={encoded_key}"
+    )
+    if account_id and identity_center_start_url and identity_center_role_name:
+        return identity_center_console_url(
+            destination,
+            start_url=identity_center_start_url,
+            account_id=account_id,
+            role_name=identity_center_role_name,
+        )
+    return destination
+
+
 def _normalize_identity_center_start_url(start_url: str) -> str:
     if not isinstance(start_url, str) or not start_url.strip():
         raise ValueError("identity center start URL is required")

@@ -328,7 +328,7 @@ def test_build_manifest_uses_existing_objects_only():
 
     def head(bucket: str, key: str):
         base = {"content_length": 12, "content_type": "text/plain", "last_modified": __import__("datetime").datetime(2026, 8, 10, tzinfo=__import__("datetime").timezone.utc)}
-        if key.endswith(("init.out", "validate.out", "tf/plan.out")):
+        if key.endswith(("init.out", "validate.out", "tf/plan.out", "tfsec.output")):
             return base
         if key.endswith(("tfsec.json", "infracost.json")):
             return {**base, "content_type": "application/json"}

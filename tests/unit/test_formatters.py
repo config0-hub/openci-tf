@@ -188,14 +188,33 @@ def test_folder_comment_plan_includes_scan_and_cost_sections(action):
 
 
 def test_folder_comment_report_uses_report_layout():
-    artifacts = {name: _fixture_text(name) for name in ("init.out", "validate.out", "tf/plan.out", "tfsec.json", "infracost.json")}
-    rendered = folder_comment("infra/good", {"status": "succeeded", "account_id": "123456789012"}, artifacts, action="report")
-    assert '## Report - "infra/good"' in rendered
+    artifacts = {
+        name: _fixture_text(name)
+        for name in (
+            "init.out",
+            "validate.out",
+            "tf/plan.out",
+            "tfsec.json",
+            "infracost.json",
+        )
+    }
+    artifacts["tfsec.output"] = _fixture_text("tfsec.json")
+    rendered = folder_comment(
+        "infra/good",
+        {"status": "succeeded", "account_id": "123456789012"},
+        artifacts,
+        action="report",
+        existing_names=frozenset(artifacts),
+        tmp_bucket="tmp-bucket",
+        region="us-east-1",
+    )
+    assert "infra/good · Drift" in rendered
     assert "### Plan\n<details>" not in rendered
+    assert "> <summary>Plan" in rendered
     assert "```diff" in rendered
-    assert "TF setup ·" in rendered
-    assert "Security ·" in rendered
-    assert "Cost ·" in rendered
+    assert "> <summary>Setup" in rendered
+    assert "> <summary>Security" in rendered
+    assert "> <summary>Cost" in rendered
 
 
 @pytest.mark.parametrize("artifacts", [

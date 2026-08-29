@@ -29,7 +29,9 @@ _ARTIFACT_CONTENT_TYPES: dict[str, str] = {
     "destroy-plan-metadata.json": "application/json",
     "drift.json": "application/json",
     "tfsec.json": "application/json",
+    "tfsec.output": "text/plain",
     "infracost.json": "application/json",
+    "infracost.output": "text/plain",
     "plan.tfplan": "application/octet-stream",
     "plan.tfplan.sha256": "text/plain",
     "plan-metadata.json": "application/json",
@@ -266,6 +268,17 @@ def get_bounded_text(bucket: str, key: str, max_bytes: int, allowed_content_type
         if error.response["Error"]["Code"] in {"404", "NoSuchKey"}:
             return None
         raise
+
+
+def list_prefix_object_names(bucket: str, prefix: str) -> frozenset[str]:
+    """Return relative object names beneath one prefix without reading bodies."""
+    client = boto3.client("s3")
+    response = client.list_objects_v2(Bucket=bucket, Prefix=prefix)
+    return frozenset(
+        item["Key"].removeprefix(prefix)
+        for item in response.get("Contents", [])
+        if item.get("Key", "").startswith(prefix)
+    )
 
 
 def list_text_prefix(bucket: str, prefix: str, max_bytes: int, allowed_content_types: frozenset[str]) -> dict[str, str]:

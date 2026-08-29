@@ -16,6 +16,8 @@ _TRUNCATION_NOTE = "\n\n> Comment truncated for GitHub size limits. See S3 artif
 _COST_SECTION_MARKER = "### Cost Analysis"
 _PLAN_SECTION_MARKER = "### Plan"
 _ARTIFACT_SECTION_MARKER = "### Download and execution artifacts"
+_REPORT_ARTIFACTS_MARKER = "> <summary>Artifacts</summary>"
+_REPORT_PLAN_MARKER = "> <details>\n> <summary>Plan"
 _CI_DETAILS_MARKER = "\n## CI Details"
 
 
@@ -33,9 +35,17 @@ def _close_open_markdown(text: str) -> str:
     """Close any open code fence or details block left by a hard character cut."""
     closed = text.rstrip()
     if _count_code_fences(closed) % 2 == 1:
-        closed += "\n```"
+        if "\n> ```" in closed or closed.startswith("> ```"):
+            closed += "\n> ```"
+        else:
+            closed += "\n```"
     opens, closes = _count_details_tags(closed)
-    closed += "\n\n</details>" * max(0, opens - closes)
+    missing = max(0, opens - closes)
+    if missing:
+        if "> <details>" in closed or "\n> </details>" in closed:
+            closed += "\n> </details>" * missing
+        else:
+            closed += "\n\n</details>" * missing
     return closed
 
 
@@ -52,7 +62,10 @@ def _trim_and_close_markdown(text: str, max_chars: int) -> str:
 
 
 def _next_section_start(text: str) -> int | None:
-    match = re.search(r"\n### [^#]|\n## CI Details", text)
+    match = re.search(
+        r"\n\n> <details>|\n### [^#]|\n## CI Details",
+        text,
+    )
     return match.start() if match else None
 
 
@@ -71,30 +84,65 @@ def _extract_section(body: str, marker: str) -> tuple[str, str, str] | None:
 
 
 def _truncate_plan_section(body: str, max_chars: int) -> str:
-    extracted = _extract_section(body, _PLAN_SECTION_MARKER)
-    if extracted is None:
-        return _trim_and_close_markdown(body, max_chars)
-    before, plan_section, after = extracted
-    budget = max_chars - len(before) - len(after)
-    if budget <= len(_PLAN_SECTION_MARKER):
-        return (before + after)[:max_chars].rstrip()
-    if len(plan_section) <= budget:
-        return before + plan_section + after
-    plan_budget = budget - len(_TRUNCATION_NOTE)
-    if plan_budget <= len(_PLAN_SECTION_MARKER):
-        return (before + after)[:max_chars].rstrip()
-    trimmed_plan = _trim_and_close_markdown(plan_section, plan_budget)
-    return before + trimmed_plan + _TRUNCATION_NOTE + after
+    for marker in (_PLAN_SECTION_MARKER, _REPORT_PLAN_MARKER):
+        extracted = _extract_section(body, marker)
+        if extracted is not None:
+            before, plan_section, after = extracted
+            budget = max_chars - len(before) - len(after)
+            if budget <= len(marker):
+                return (before + after)[:max_chars].rstrip()
+            if len(plan_section) <= budget:
+                return before + plan_section + after
+            plan_budget = budget - len(_TRUNCATION_NOTE)
+            if plan_budget <= len(marker):
+                return (before + after)[:max_chars].rstrip()
+            trimmed_plan = _trim_and_close_markdown(plan_section, plan_budget)
+            return before + trimmed_plan + _TRUNCATION_NOTE + after
+    return _trim_and_close_markdown(body, max_chars)
+
+
+def _strip_report_middle_sections(before_artifacts: str) -> str:
+    """Drop Security/Cost/Execution child blocks when report comments are bounded."""
+    cut = len(before_artifacts)
+    for marker in (
+        "> <summary>Security",
+        "> <summary>Cost",
+        "> <summary>Execution",
+    ):
+        idx = before_artifacts.find(marker)
+        if idx != -1:
+            cut = min(cut, idx)
+    return before_artifacts[:cut].rstrip()
+
+
+def _report_artifacts_section_start(body: str) -> int | None:
+    marker = f"> <details>\n{_REPORT_ARTIFACTS_MARKER}"
+    idx = body.find(marker)
+    if idx != -1:
+        return idx
+    idx = body.find(_REPORT_ARTIFACTS_MARKER)
+    if idx == -1:
+        return None
+    prior = body.rfind("> <details>", 0, idx)
+    return prior if prior != -1 else idx
 
 
 def _bound_comment_preserving_section(
     body: str, *, marker: str, max_chars: int, suffix: str
 ) -> str:
     """Keep a low-frequency evidence section when earlier plan output dominates."""
-    extracted = _extract_section(body, marker)
-    if extracted is None:
-        return _truncate_head(body, max_chars=max_chars, suffix=suffix)
-    before_section, section_body, after_section = extracted
+    if marker == _REPORT_ARTIFACTS_MARKER:
+        start = _report_artifacts_section_start(body)
+        if start is None:
+            return _truncate_head(body, max_chars=max_chars, suffix=suffix)
+        before_section = _strip_report_middle_sections(body[:start])
+        section_body = body[start:]
+        after_section = ""
+    else:
+        extracted = _extract_section(body, marker)
+        if extracted is None:
+            return _truncate_head(body, max_chars=max_chars, suffix=suffix)
+        before_section, section_body, after_section = extracted
     reserved = (
         len(_TRUNCATION_NOTE) + len(suffix) + len(section_body) + len(after_section)
     )
@@ -124,10 +172,11 @@ def _truncate_head(body: str, *, max_chars: int, suffix: str) -> str:
 
 
 def _bound_inner_comment(body: str, *, max_chars: int, suffix: str) -> str:
-    if _ARTIFACT_SECTION_MARKER in body:
-        return _bound_comment_preserving_section(
-            body, marker=_ARTIFACT_SECTION_MARKER, max_chars=max_chars, suffix=suffix
-        )
+    for marker in (_ARTIFACT_SECTION_MARKER, _REPORT_ARTIFACTS_MARKER):
+        if marker in body:
+            return _bound_comment_preserving_section(
+                body, marker=marker, max_chars=max_chars, suffix=suffix
+            )
     if _COST_SECTION_MARKER in body:
         return _bound_comment_preserving_cost(body, max_chars=max_chars, suffix=suffix)
     return _truncate_head(body, max_chars=max_chars, suffix=suffix)
@@ -152,5 +201,9 @@ def bound_comment(
         bounded_inner = _bound_inner_comment(
             inner, max_chars=max_chars - reserved, suffix=""
         )
+        if _REPORT_ARTIFACTS_MARKER in inner:
+            opens, closes = _count_details_tags(bounded_inner)
+            if opens > closes:
+                bounded_inner += "\n> </details>" * (opens - closes)
         return f"{prefix}{bounded_inner.rstrip()}{closing}{suffix}"
     return _bound_inner_comment(body, max_chars=max_chars, suffix=suffix)

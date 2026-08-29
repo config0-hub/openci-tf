@@ -165,7 +165,7 @@ def _artifact_names(action: str) -> tuple[str, ...]:
         return ("init.out", "validate.out", "plan-show.out", "destroy.out")
     names = ("init.out", "validate.out", "tf/plan.out", "drift.json")
     if action in {"plan", "report"}:
-        return (*names, "tfsec.json", "infracost.json")
+        return (*names, "tfsec.json", "tfsec.output", "infracost.json")
     return names
 
 
@@ -377,7 +377,9 @@ def handler(event: dict, _context: object) -> dict:
             "plan-show.out": f"{folder_keys.prefix}plan-show.out",
             "drift.json": folder_keys.drift_json,
             "tfsec.json": folder_keys.tfsec_json,
+            "tfsec.output": folder_keys.tfsec_output,
             "infracost.json": folder_keys.infracost_json,
+            "infracost.output": folder_keys.infracost_output,
         }[artifact]
         secrets[f"ARTIFACT_PUT_URL_{artifact_env_suffix(artifact)}"] = s3.presign_put(
             tmp_bucket, key, expiry

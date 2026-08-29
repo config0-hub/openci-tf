@@ -1056,7 +1056,9 @@ def test_every_presignable_artifact_content_type_matches_engine_uploader():
             names.add(getattr(keys, field).rsplit("/", 1)[-1])
     for name in names:
         base = name.rsplit("/", 1)[-1]
-        if base.endswith((".out", ".sha256")):
+        if base.endswith((".output", ".sha256")) or (
+            base.endswith(".out") and not base.endswith(".output")
+        ):
             expected = "text/plain"
         elif base.endswith(".json"):
             expected = "application/json"

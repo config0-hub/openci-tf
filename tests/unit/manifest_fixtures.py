@@ -97,6 +97,7 @@ def committed_success_plan_manifest(
         {"name": "validate.out", "s3_uri": f"s3://{tmp_bucket}/{keys.validate_out}", "content_type": "text/plain", "size": 1, "checksum": checksum, "expires_at": expires},
         {"name": "tf/plan.out", "s3_uri": f"s3://{tmp_bucket}/{keys.plan_out}", "content_type": "text/plain", "size": 1, "checksum": checksum, "expires_at": expires},
         {"name": "tfsec.json", "s3_uri": f"s3://{tmp_bucket}/{keys.tfsec_json}", "content_type": "application/json", "size": 2, "checksum": checksum, "expires_at": expires},
+        {"name": "tfsec.output", "s3_uri": f"s3://{tmp_bucket}/{keys.tfsec_output}", "content_type": "text/plain", "size": 1, "checksum": checksum, "expires_at": expires},
         {"name": "infracost.json", "s3_uri": f"s3://{tmp_bucket}/{keys.infracost_json}", "content_type": "application/json", "size": 2, "checksum": checksum, "expires_at": expires},
         {"name": "done", "s3_uri": f"s3://{done_bucket}/{execution_id}/done", "content_type": "binary/octet-stream", "size": 1, "checksum": checksum, "expires_at": expires},
         {"name": "package", "s3_uri": f"s3://{package_bucket}/{execution_id}.zip", "content_type": "application/zip", "size": 1, "checksum": checksum, "expires_at": expires},

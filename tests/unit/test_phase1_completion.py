@@ -403,11 +403,15 @@ def test_generated_script_extracts_per_binary_archives_and_executes_them(tmp_pat
   plan) for arg in "$@"; do case "$arg" in -out=*) printf 'binary-plan' > "${arg#-out=}" ;; esac; done; echo plan ;;
 esac'''
         elif binary == "tfsec":
-            body = '''while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--out" ]; then out="$2"; break; fi
-  shift
-done
-printf '%s' '{"results":[]}' > "$out"'''
+            body = '''if echo "$*" | grep -q -- '--out'; then
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--out" ]; then out="$2"; break; fi
+    shift
+  done
+  printf '%s' '{"results":[]}' > "$out"
+else
+  echo "No problems detected!"
+fi'''
         else:
             body = '''while [ "$#" -gt 0 ]; do
   if [ "$1" = "--out-file" ]; then out="$2"; break; fi
@@ -442,7 +446,7 @@ done
     folder.mkdir()
     script_path = tmp_path / "run.sh"
     script_path.write_text(render(ScriptParams("report", "lambda", folder=str(folder))))
-    environment = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "ARTIFACTS_DIR": str(tmp_path / "artifacts"), **{f"ARTIFACT_PUT_URL_{name}": "https://upload" for name in ("INIT_OUT", "VALIDATE_OUT", "TF_PLAN_OUT", "TFSEC_JSON", "INFRACOST_JSON")}, "PLAN_BINARY_PUT_URL": "https://upload-plan", "PLAN_SHA256_PUT_URL": "https://upload-sha", "PLAN_METADATA_PUT_URL": "https://upload-metadata", "OPENCI_TF_PLAN_S3_URI": "s3://tmp/plans/repo/sha/account/folder/execution/attempt/plan.tfplan", "OPENCI_TF_PLAN_SHA256_S3_URI": "s3://tmp/plans/repo/sha/account/folder/execution/attempt/plan.tfplan.sha256", "OPENCI_TF_PLAN_METADATA_S3_URI": "s3://tmp/plans/repo/sha/account/folder/execution/attempt/plan-metadata.json", "OPENCI_TF_PLAN_EXPIRES_AFTER_DAYS": "2", "OPENCI_TF_REPO_NAME": "org/repo", "OPENCI_TF_PINNED_SHA": "a" * 40, "OPENCI_TF_ACCOUNT_ID": "123456789012", "OPENCI_TF_FOLDER": str(folder), "OPENCI_TF_ACTION": "report", "OPENCI_TF_TF_RUNTIME": "tofu:1.8.0", "OPENCI_TF_RUN_ID": "exec", "OPENCI_TF_RUN_ID": "0", "CACHE_GET_URL_TOFU": "https://cache/tofu", "CACHE_PUT_URL_TOFU": "https://cache/tofu", "UPSTREAM_URL_TOFU": "https://upstream/tofu", "CACHE_GET_URL_TFSEC": "https://cache/tfsec", "CACHE_PUT_URL_TFSEC": "https://cache/tfsec", "UPSTREAM_URL_TFSEC": "https://upstream/tfsec", "CACHE_GET_URL_INFRACOST": "https://cache/infracost", "CACHE_PUT_URL_INFRACOST": "https://cache/infracost", "UPSTREAM_URL_INFRACOST": "https://upstream/infracost"}
+    environment = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "ARTIFACTS_DIR": str(tmp_path / "artifacts"), **{f"ARTIFACT_PUT_URL_{name}": "https://upload" for name in ("INIT_OUT", "VALIDATE_OUT", "TF_PLAN_OUT", "TFSEC_JSON", "TFSEC_OUTPUT", "INFRACOST_JSON")}, "PLAN_BINARY_PUT_URL": "https://upload-plan", "PLAN_SHA256_PUT_URL": "https://upload-sha", "PLAN_METADATA_PUT_URL": "https://upload-metadata", "OPENCI_TF_PLAN_S3_URI": "s3://tmp/plans/repo/sha/account/folder/execution/attempt/plan.tfplan", "OPENCI_TF_PLAN_SHA256_S3_URI": "s3://tmp/plans/repo/sha/account/folder/execution/attempt/plan.tfplan.sha256", "OPENCI_TF_PLAN_METADATA_S3_URI": "s3://tmp/plans/repo/sha/account/folder/execution/attempt/plan-metadata.json", "OPENCI_TF_PLAN_EXPIRES_AFTER_DAYS": "2", "OPENCI_TF_REPO_NAME": "org/repo", "OPENCI_TF_PINNED_SHA": "a" * 40, "OPENCI_TF_ACCOUNT_ID": "123456789012", "OPENCI_TF_FOLDER": str(folder), "OPENCI_TF_ACTION": "report", "OPENCI_TF_TF_RUNTIME": "tofu:1.8.0", "OPENCI_TF_RUN_ID": "exec", "OPENCI_TF_RUN_ID": "0", "CACHE_GET_URL_TOFU": "https://cache/tofu", "CACHE_PUT_URL_TOFU": "https://cache/tofu", "UPSTREAM_URL_TOFU": "https://upstream/tofu", "CACHE_GET_URL_TFSEC": "https://cache/tfsec", "CACHE_PUT_URL_TFSEC": "https://cache/tfsec", "UPSTREAM_URL_TFSEC": "https://upstream/tfsec", "CACHE_GET_URL_INFRACOST": "https://cache/infracost", "CACHE_PUT_URL_INFRACOST": "https://cache/infracost", "UPSTREAM_URL_INFRACOST": "https://upstream/infracost"}
     completed = subprocess.run(["bash", str(script_path)], env=environment, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr
     assert "init" in completed.stdout

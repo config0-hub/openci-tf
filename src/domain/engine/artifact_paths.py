@@ -30,7 +30,9 @@ class FolderArtifactKeys:
     plan_out: str
     drift_json: str
     tfsec_json: str
+    tfsec_output: str
     infracost_json: str
+    infracost_output: str
     manifest_json: str
     plan_tfplan: str
     plan_sha256: str
@@ -156,7 +158,9 @@ def build_folder_artifact_keys(
         plan_out=f"{prefix}tf/plan.out",
         drift_json=f"{prefix}drift.json",
         tfsec_json=f"{prefix}tfsec.json",
+        tfsec_output=f"{prefix}tfsec.output",
         infracost_json=f"{prefix}infracost.json",
+        infracost_output=f"{prefix}infracost.output",
         manifest_json=f"{prefix}manifest.json",
         plan_tfplan=f"{prefix}tf/plan.tfplan",
         plan_sha256=f"{prefix}tf/plan.tfplan.sha256",
@@ -410,7 +414,9 @@ def build_folder_artifact_keys_for_run(
         plan_out=f"{prefix}tf/plan.out",
         drift_json=f"{prefix}drift.json",
         tfsec_json=f"{prefix}tfsec.json",
+        tfsec_output=f"{prefix}tfsec.output",
         infracost_json=f"{prefix}infracost.json",
+        infracost_output=f"{prefix}infracost.output",
         manifest_json=f"{prefix}manifest.json",
         plan_tfplan=f"{prefix}tf/plan.tfplan",
         plan_sha256=f"{prefix}tf/plan.tfplan.sha256",

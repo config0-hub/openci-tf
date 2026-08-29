@@ -58,6 +58,7 @@ from src.domain.engine.manifest_schema import (
     _SUCCESS_DRIFT_ENTRIES,
     _SUCCESS_PLAN_DESTROY_ENTRIES,
     _SUCCESS_PLAN_REPORT_ENTRIES,
+    _OPTIONAL_PLAN_REPORT_ENTRIES,
     _TEXT_ARTIFACTS,
 )
 
@@ -165,7 +166,7 @@ def _artifact_names_for_action(action: str) -> tuple[str, ...]:
         return ("init.out", "validate.out", "plan-show.out", "apply.out")
     if action == "destroy":
         return ("init.out", "validate.out", "plan-show.out", "destroy.out")
-    return ("init.out", "validate.out", "tf/plan.out", "tfsec.json", "infracost.json")
+    return ("init.out", "validate.out", "tf/plan.out", "tfsec.json", "tfsec.output", "infracost.json")
 
 
 def _expected_done_uri(done_bucket: str, execution_id: str) -> str:
@@ -311,7 +312,9 @@ def _expected_entry_uri(
         "tf/plan.out": keys.plan_out,
         "drift.json": keys.drift_json,
         "tfsec.json": keys.tfsec_json,
+        "tfsec.output": keys.tfsec_output,
         "infracost.json": keys.infracost_json,
+        "infracost.output": keys.infracost_output,
         "destroy.plan.out": keys.destroy_plan_out,
         "apply.out": f"{keys.prefix}apply.out",
         "plan-show.out": f"{keys.prefix}plan-show.out",
@@ -516,7 +519,7 @@ def _validate_required_entry_set(manifest: dict[str, Any]) -> None:
     missing = sorted(required - names)
     if missing:
         raise ValueError(f"manifest missing required entries for {action}: {', '.join(missing)}")
-    extra = sorted(names - required)
+    extra = sorted(names - required - _OPTIONAL_PLAN_REPORT_ENTRIES)
     if extra:
         raise ValueError(f"manifest has unexpected entries for {action}: {', '.join(extra)}")
 
@@ -593,7 +596,9 @@ def _build_artifact_entries(
         "tf/plan.out": keys.plan_out,
         "drift.json": keys.drift_json,
         "tfsec.json": keys.tfsec_json,
+        "tfsec.output": keys.tfsec_output,
         "infracost.json": keys.infracost_json,
+        "infracost.output": keys.infracost_output,
         "destroy.plan.out": keys.destroy_plan_out,
         "apply.out": f"{keys.prefix}apply.out",
         "plan-show.out": f"{keys.prefix}plan-show.out",
@@ -624,6 +629,29 @@ def _build_artifact_entries(
                 expires_at=_tmp_entry_expiry(meta, key),
             )
         )
+    if action in {"plan", "report"}:
+        optional_name = "infracost.output"
+        optional_key = keys.infracost_output
+        optional_uri = f"s3://{tmp_bucket}/{optional_key}"
+        optional_meta = head_object(tmp_bucket, optional_key)
+        if optional_meta is not None:
+            generated_timestamps.append(_last_modified(optional_meta))
+            entries.append(
+                _entry(
+                    optional_name,
+                    optional_uri,
+                    _head_content_type(optional_meta, _TEXT_ARTIFACTS[optional_name]),
+                    size=int(optional_meta["content_length"]),
+                    checksum=_content_checksum(
+                        optional_meta,
+                        bucket=tmp_bucket,
+                        key=optional_key,
+                        read_object_bytes=read_object_bytes,
+                        max_bytes=MAX_DONE_MARKER_BYTES,
+                    ),
+                    expires_at=_tmp_entry_expiry(optional_meta, optional_key),
+                )
+            )
 
 
 def build_manifest(

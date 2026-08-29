@@ -250,7 +250,7 @@ def _artifact_names(verb: str) -> tuple[str, ...]:
         return ("init.out", "validate.out", "plan-show.out", "destroy.out")
     names = ("init.out", "validate.out", "tf/plan.out", "drift.json")
     if verb in {"plan", "report"}:
-        return (*names, "tfsec.json", "infracost.json")
+        return (*names, "tfsec.json", "tfsec.output", "infracost.json")
     return names
 
 
@@ -298,6 +298,14 @@ if [ "$tfsec_status" -ne 0 ]; then
   exit "$tfsec_status"
 fi
 python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "${ARTIFACTS_DIR:-/tmp}/tfsec.json" || { echo "Error: tfsec produced invalid JSON" >&2; exit 11; }
+set +e
+tfsec . --soft-fail --no-color > "${ARTIFACTS_DIR:-/tmp}/tfsec.output" 2>&1
+tfsec_output_status=$?
+set -e
+if [ "$tfsec_output_status" -ne 0 ]; then
+  echo "Error: tfsec native output failed with exit code ${tfsec_output_status}" >&2
+  exit "$tfsec_output_status"
+fi
 if [ -n "${INFRACOST_API_KEY:-}" ]; then
   set +e
   infracost breakdown --path . --format json --out-file "${ARTIFACTS_DIR:-/tmp}/infracost.json"
@@ -308,6 +316,14 @@ if [ -n "${INFRACOST_API_KEY:-}" ]; then
     exit "$infracost_status"
   fi
   python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "${ARTIFACTS_DIR:-/tmp}/infracost.json" || { echo "Error: infracost produced invalid JSON" >&2; exit 12; }
+  set +e
+  infracost output --path "${ARTIFACTS_DIR:-/tmp}/infracost.json" --format table > "${ARTIFACTS_DIR:-/tmp}/infracost.output" 2>&1
+  infracost_output_status=$?
+  set -e
+  if [ "$infracost_output_status" -ne 0 ]; then
+    echo "Error: infracost native output failed with exit code ${infracost_output_status}" >&2
+    exit "$infracost_output_status"
+  fi
 else
   printf '%s\\n' '{"skipped":true,"reason":"not configured"}' > "${ARTIFACTS_DIR:-/tmp}/infracost.json"
 fi""" if plan_enabled else ""

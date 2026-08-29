@@ -152,3 +152,20 @@ Expected behavior:
 The multi-folder summary table is posted only for `report` and multi-folder runs.
 Single-folder `plan_destroy` posts one folder comment only. Multi-folder destroy
 plans derive their summary counts from `destroy.plan.out`.
+
+## Report presentation
+
+`tf report` posts two managed comment types:
+
+- **Summary (`report-all`)** — `## openci-tf report` with folder counts, a
+  needs-attention table (Drift and Security icon cells only; Cost shows amounts),
+  and a collapsed clean-folder section.
+- **Per-folder (`report`)** — compact outer summary (`<folder> · Drift · Security`),
+  then blockquote-indented child sections in order: Setup, Plan, Security, Cost,
+  Execution, Artifacts.
+
+Security and Cost expanded bodies show native `tfsec.output` and `infracost.output`
+artifacts. The Artifacts section lists only objects that exist for the run, linked
+through authenticated AWS Console shortcuts when Identity Center is configured.
+Execution shows the Step Functions link when present; CodeBuild links appear only
+for apply/destroy comments.

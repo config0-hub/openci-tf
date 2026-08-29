@@ -20,7 +20,9 @@ _ALLOWED_ENTRY_NAMES = frozenset(
         "tf/plan.out",
         "drift.json",
         "tfsec.json",
+        "tfsec.output",
         "infracost.json",
+        "infracost.output",
         "done",
         "package",
         "plan.tfplan",
@@ -67,7 +69,9 @@ _TEXT_ARTIFACTS = {
     "tf/plan.out": "text/plain",
     "drift.json": "application/json",
     "tfsec.json": "application/json",
+    "tfsec.output": "text/plain",
     "infracost.json": "application/json",
+    "infracost.output": "text/plain",
     "destroy.plan.out": "text/plain",
     "apply.out": "text/plain",
     "plan-show.out": "text/plain",
@@ -79,6 +83,7 @@ _SUCCESS_PLAN_REPORT_ENTRIES = frozenset(
         "validate.out",
         "tf/plan.out",
         "tfsec.json",
+        "tfsec.output",
         "infracost.json",
         "done",
         "package",
@@ -87,6 +92,7 @@ _SUCCESS_PLAN_REPORT_ENTRIES = frozenset(
         "plan-metadata.json",
     }
 )
+_OPTIONAL_PLAN_REPORT_ENTRIES = frozenset({"infracost.output"})
 _SUCCESS_DRIFT_ENTRIES = frozenset(
     {
         "init.out",
@@ -135,7 +141,9 @@ _FAILURE_PLAN_REPORT_ALLOWED = frozenset(
         "validate.out",
         "tf/plan.out",
         "tfsec.json",
+        "tfsec.output",
         "infracost.json",
+        "infracost.output",
     }
 )
 _FAILURE_DRIFT_ALLOWED = frozenset(
@@ -178,7 +186,9 @@ _ENTRY_MAX_BYTES: dict[str, int] = {
     "tf/plan.out": MAX_RAW_ARTIFACT_BYTES,
     "drift.json": MAX_RAW_ARTIFACT_BYTES,
     "tfsec.json": MAX_RAW_ARTIFACT_BYTES,
+    "tfsec.output": MAX_RAW_ARTIFACT_BYTES,
     "infracost.json": MAX_RAW_ARTIFACT_BYTES,
+    "infracost.output": MAX_RAW_ARTIFACT_BYTES,
     "done": MAX_DONE_MARKER_BYTES,
     "plan-metadata.json": MAX_PLAN_METADATA_BYTES,
     "plan.tfplan": MAX_BINARY_PLAN_BYTES,
@@ -200,7 +210,9 @@ _ENTRY_MIN_BYTES: dict[str, int] = {
     "tf/plan.out": 0,
     "drift.json": 2,
     "tfsec.json": 2,
+    "tfsec.output": 0,
     "infracost.json": 2,
+    "infracost.output": 0,
     "done": 1,
     "package": 1,
     "plan.tfplan": 1,

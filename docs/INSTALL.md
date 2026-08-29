@@ -262,7 +262,9 @@ openci-tf/<repo_name>/<run_id>/<folder_path>/
   validate.out
   drift.json              # drift verb only
   tfsec.json
+  tfsec.output
   infracost.json
+  infracost.output
   manifest.json           # names, checksums, sizes, action, run_id
 ```
 

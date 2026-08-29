@@ -32,26 +32,37 @@ _INFRACOST_KEY = "/openci-tf/infracost/api_key"
 _PREPARE_BINDING = frozen_account_fields()
 _FULL_SHA = "a" * 40
 
-_TFSEC_WRITE = '''while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--out" ]; then out="$2"; break; fi
-  shift
-done
-printf '%s' '{"results":[{"severity":"CRITICAL"},{"severity":"HIGH"}]}' > "$out"
+_TFSEC_WRITE = '''if echo "$*" | grep -q -- '--out'; then
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--out" ]; then out="$2"; break; fi
+    shift
+  done
+  printf '%s' '{"results":[{"severity":"CRITICAL"},{"severity":"HIGH"}]}' > "$out"
+else
+  echo "CRITICAL finding"
+fi
 exit 0'''
 
-_TFSEC_EMPTY = '''while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--out" ]; then out="$2"; break; fi
-  shift
-done
-printf '%s' '{"results":[]}' > "$out"
+_TFSEC_EMPTY = '''if echo "$*" | grep -q -- '--out'; then
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--out" ]; then out="$2"; break; fi
+    shift
+  done
+  printf '%s' '{"results":[]}' > "$out"
+else
+  echo "No problems detected!"
+fi
 exit 0'''
 
-_INFRACOST_WRITE = '''while [ "$#" -gt 0 ]; do
+_INFRACOST_WRITE = '''if [ "$1" = "output" ]; then
+  echo "Monthly cost $1.00"
+  exit 0
+fi
+while [ "$#" -gt 0 ]; do
   if [ "$1" = "--out-file" ]; then out="$2"; break; fi
   shift
 done
 printf '%s' '{"totalMonthlyCost":"1.00"}' > "$out"
-echo breakdown
 '''
 
 def test_report_script_uses_tfsec_soft_fail_out_and_silent_curl():
@@ -64,6 +75,8 @@ def test_report_script_uses_tfsec_soft_fail_out_and_silent_curl():
     assert put_lines
     assert all("--location" not in line for line in put_lines)
     assert "infracost breakdown" in script
+    assert "tfsec . --soft-fail --no-color" in script
+    assert "infracost output --path" in script
     assert 'printf \'%s\\n\' \'{"skipped":true,"reason":"not configured"}\'' in script
 
 
@@ -488,7 +501,7 @@ done
         **os.environ,
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "ARTIFACTS_DIR": str(artifacts),
-        **{f"ARTIFACT_PUT_URL_{name}": "https://upload" for name in ("INIT_OUT", "VALIDATE_OUT", "TF_PLAN_OUT", "TFSEC_JSON", "INFRACOST_JSON")},
+        **{f"ARTIFACT_PUT_URL_{name}": "https://upload" for name in ("INIT_OUT", "VALIDATE_OUT", "TF_PLAN_OUT", "TFSEC_JSON", "TFSEC_OUTPUT", "INFRACOST_JSON")},
         "PLAN_BINARY_PUT_URL": "https://upload-plan",
         "PLAN_SHA256_PUT_URL": "https://upload-sha",
         "PLAN_METADATA_PUT_URL": "https://upload-metadata",
@@ -517,8 +530,10 @@ def test_report_script_succeeds_with_tfsec_findings_and_writes_clean_json(tmp_pa
     assert completed.returncode == 0, completed.stderr
     payload = json.loads((tmp_path / "artifacts" / "tfsec.json").read_text())
     assert payload["results"]
+    assert (tmp_path / "artifacts" / "tfsec.output").exists()
     skip = json.loads((tmp_path / "artifacts" / "infracost.json").read_text())
     assert skip["skipped"] is True
+    assert not (tmp_path / "artifacts" / "infracost.output").exists()
 
 
 def test_report_script_fails_loudly_on_tfsec_operational_failure(tmp_path):
@@ -544,6 +559,7 @@ def test_report_script_runs_infracost_when_configured(tmp_path):
     completed = _run_report_script(tmp_path, tfsec_body=_TFSEC_EMPTY, infracost=True)
     assert completed.returncode == 0, completed.stderr
     assert json.loads((tmp_path / "artifacts" / "infracost.json").read_text())["totalMonthlyCost"] == "1.00"
+    assert (tmp_path / "artifacts" / "infracost.output").exists()
 
 
 def test_folder_comment_parses_both_report_artifacts(tmp_path):
@@ -554,11 +570,22 @@ def test_folder_comment_parses_both_report_artifacts(tmp_path):
         "tfsec.json": json.dumps({"results": [{"severity": "HIGH"}]}),
         "infracost.json": json.dumps({"skipped": True, "reason": "not configured"}),
     }
-    rendered = folder_comment("infra/a", {"status": "succeeded", "account_id": "123456789012"}, artifacts, action="report")
-    assert 'Report - "infra/a"' in rendered
-    assert "Security ·" in rendered
+    rendered = folder_comment(
+        "infra/a",
+        {"status": "succeeded", "account_id": "123456789012"},
+        artifacts,
+        action="report",
+        existing_names=frozenset(artifacts),
+        tmp_bucket="tmp-bucket",
+        region="us-east-1",
+        hub_account_id="999999999999",
+        identity_center_start_url="https://d-9567aa6b98.awsapps.com/start",
+        identity_center_role_name="AWSAdministratorAccess",
+    )
+    assert "infra/a · Drift" in rendered
+    assert "> <summary>Security" in rendered
     assert "not configured" in rendered
-    assert "TF setup ·" in rendered
+    assert "> <summary>Setup" in rendered
 
 
 def test_render_plan_all_posts_linked_multi_folder_summary(monkeypatch):
@@ -601,6 +628,11 @@ def test_render_plan_all_posts_linked_multi_folder_summary(monkeypatch):
     monkeypatch.setattr(render_handler, "get_github_token", lambda _: "token")
     monkeypatch.setattr(render_handler.boto3, "resource", lambda *_: SimpleNamespace(Table=lambda _: object()))
     monkeypatch.setattr(render_handler, "list_text_prefix", lambda *_args, **_kw: artifacts)
+    monkeypatch.setattr(
+        render_handler,
+        "list_prefix_object_names",
+        lambda *_args, **_kw: frozenset(artifacts),
+    )
     monkeypatch.setattr(render_handler, "_plan_artifact_metadata", lambda *_, **__: None)
     monkeypatch.setattr(render_handler.run_lock, "release", lambda *_, **__: None)
     monkeypatch.setattr(render_handler, "GitHubClient", lambda _: SimpleNamespace(delete_comment=lambda *_a, **_k: None))

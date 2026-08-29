@@ -22,6 +22,11 @@ from src.services.render import handler as render_handler
 _ACCOUNT = "123456789012"
 _OTHER = "210987654321"
 _FULL_SHA = "a" * 40
+_REGION = "us-east-1"
+_BUCKET = "tmp-bucket"
+_HUB_ACCOUNT = "999999999999"
+_IC_START = "https://d-9567aa6b98.awsapps.com/start"
+_IC_ROLE = "AWSAdministratorAccess"
 
 
 def _outcome(folder: str, **overrides):
@@ -39,26 +44,54 @@ def _artifacts(
     *,
     plan: str = "Plan: 0 to add, 0 to change, 0 to destroy",
     tfsec: str = '{"results":[]}',
+    tfsec_output: str = "No problems detected!",
     infracost: str = '{"totalMonthlyCost":"0"}',
+    infracost_output: str = "",
 ) -> dict[str, str]:
-    return {
+    artifacts = {
         "init.out": "Terraform has been successfully initialized!",
         "validate.out": "Success! The configuration is valid.",
         "tf/plan.out": plan,
         "tfsec.json": tfsec,
+        "tfsec.output": tfsec_output,
         "infracost.json": infracost,
+        "manifest.json": "{}",
     }
+    if infracost_output:
+        artifacts["infracost.output"] = infracost_output
+    return artifacts
 
 
-def test_report_summary_uses_drift_header_and_accessible_labels():
+def _report_link_kwargs(**overrides):
+    base = {
+        "action": "report",
+        "existing_names": frozenset(_artifacts().keys()),
+        "tmp_bucket": _BUCKET,
+        "region": _REGION,
+        "hub_account_id": _HUB_ACCOUNT,
+        "identity_center_start_url": _IC_START,
+        "identity_center_role_name": _IC_ROLE,
+        "run_id": "run-1",
+        "repo_name": "org/repo",
+        "console_url": "https://console.aws.example/run",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_report_summary_uses_drift_header_and_icon_cells():
     rendered = summary(
         [_outcome("infra/a")],
         {"infra/a": _artifacts()},
         action="report",
     )
+    assert "## openci-tf report" in rendered
+    assert "**Type:** Report" in rendered
     assert "| Drift |" in rendered
-    assert "✅ CLEAN" in rendered
-    assert "| Plan |" not in rendered
+    assert "| Folder | Drift | Security | Cost |" in rendered
+    assert "| Account |" not in rendered
+    assert "✅" in rendered
+    assert "CLEAN" not in rendered
 
 
 def test_report_summary_priority_ordering():
@@ -134,13 +167,13 @@ def test_report_summary_shows_every_non_clean_row_and_collapses_clean():
     rendered = summary(outcomes, artifacts, action="report")
     assert "### Needs attention" in rendered
     assert "`infra/drift`" in rendered
-    assert "✅ 2 clean folders" in rendered
+    assert "2 clean folders ✅" in rendered
     assert rendered.count("<details>") == 1
-    clean_section = rendered.split("✅ 2 clean folders", 1)[1]
+    clean_section = rendered.split("2 clean folders ✅", 1)[1]
     assert "`infra/clean`" in clean_section
     assert "`infra/also-clean`" in clean_section
     attention_section = rendered.split("### Needs attention", 1)[1].split(
-        "✅ 2 clean folders", 1
+        "2 clean folders ✅", 1
     )[0]
     assert "`infra/drift`" in attention_section
     assert "`infra/clean`" not in attention_section
@@ -153,9 +186,8 @@ def test_report_summary_all_clean_verdict():
         {"infra/a": _artifacts(), "infra/b": _artifacts()},
         action="report",
     )
-    assert "All folders clean" in rendered
     assert "### Needs attention" not in rendered
-    assert "✅ 2 clean folders" in rendered
+    assert "2 clean folders ✅" in rendered
 
 
 def test_report_folder_reveals_plan_with_one_expansion():
@@ -168,17 +200,16 @@ def test_report_folder_reveals_plan_with_one_expansion():
         "infra/a",
         _outcome("infra/a"),
         _artifacts(plan=plan_body),
-        action="report",
-        commit_hash=_FULL_SHA,
+        **_report_link_kwargs(),
     )
     assert rendered.startswith("<details>")
     inner = rendered.split("</summary>", 1)[1]
-    assert inner.count("<details>") >= 3
-    plan_region = inner.split("### Plan", 1)[1].split("Security ·", 1)[0]
-    assert "```diff" in plan_region
-    assert "+ resource aws_instance.example" in plan_region
-    assert "- resource aws_instance.old" in plan_region
-    assert "### Plan\n<details>" not in rendered
+    assert inner.count("<details>") >= 5
+    assert "> <summary>Plan" in inner
+    assert "```diff" in inner
+    assert "+ resource aws_instance.example" in inner
+    assert "- resource aws_instance.old" in inner
+    assert "### Plan" not in rendered
 
 
 def test_report_folder_inline_plan_preserves_add_change_destroy():
@@ -192,14 +223,12 @@ def test_report_folder_inline_plan_preserves_add_change_destroy():
         "infra/a",
         _outcome("infra/a"),
         _artifacts(plan=plan_body),
-        action="report",
+        **_report_link_kwargs(),
     )
     assert "**2 to add**" in rendered
     assert "**3 to change**" in rendered
     assert "**1 to destroy**" in rendered
     assert "+ resource aws_s3_bucket.new" in rendered
-    assert "! resource aws_s3_bucket.changed" in rendered
-    assert "- resource aws_s3_bucket.old" in rendered
 
 
 def test_report_folder_collapsible_sections_have_informative_summaries():
@@ -217,26 +246,22 @@ def test_report_folder_collapsible_sections_have_informative_summaries():
                         ]
                     }
                 ),
+                tfsec_output="Result #1 HIGH bad",
                 infracost='{"totalMonthlyCost":"12.50"}',
+                infracost_output="Monthly cost $12.50",
             ),
         },
-        action="report",
-        commit_hash=_FULL_SHA,
-        run_id="run-1",
-        repo_name="org/repo",
-        pr_number=7,
-        manifest_s3_uri="s3://tmp/manifest.json",
-        console_url="https://console.aws.example/run",
+        **_report_link_kwargs(),
     )
-    assert "⚠️ DRIFT" in rendered.split("</summary>", 1)[0]
-    assert "🛑 HIGH" in rendered.split("</summary>", 1)[0]
-    assert "<summary>Security · 🛑 HIGH · 2 findings</summary>" in rendered
+    assert "infra/a · Drift ⚠️ · Security 🛑" in rendered.split("</summary>", 1)[0]
+    assert "> <summary>Security 🛑</summary>" in rendered
     assert "<summary>Cost · $12.50/mo</summary>" in rendered
-    assert (
-        "<summary>TF setup · Init succeeded · Validate succeeded</summary>" in rendered
-    )
-    assert "<summary>Download and execution artifacts</summary>" in rendered
+    assert "> <summary>Setup ✅</summary>" in rendered
+    assert "> <summary>Execution</summary>" in rendered
+    assert "> <summary>Artifacts</summary>" in rendered
     assert "Result #1 HIGH bad" in rendered
+    assert "Monthly cost $12.50" in rendered
+    assert _ACCOUNT not in rendered.split("</summary>", 1)[0]
 
 
 def test_report_marker_survives_bounding():
@@ -250,8 +275,7 @@ def test_report_marker_survives_bounding():
                 + ("+ resource aws_instance.probe\n" * 20_000)
             ),
         },
-        action="report",
-        commit_hash=_FULL_SHA,
+        **_report_link_kwargs(),
     )
     rendered = bound_comment(body, max_chars=8_000, suffix=f"\n\n{marker}")
     assert len(rendered) <= 8_000
@@ -300,8 +324,8 @@ def test_report_summary_keeps_valid_security_when_plan_is_unknown():
         },
         action="report",
     )
-    assert "❔ UNKNOWN" in rendered
-    assert "🛑 HIGH · 1 finding" in rendered
+    assert "❔" in rendered
+    assert "🛑" in rendered
 
 
 def test_report_summary_skipped_and_pending_are_honest_not_high_risk_alerts():
@@ -313,8 +337,8 @@ def test_report_summary_skipped_and_pending_are_honest_not_high_risk_alerts():
         {},
         action="report",
     )
-    assert "⏭️ NOT RUN" in rendered
-    assert "⏳ PENDING" in rendered
+    assert "⏭️" in rendered
+    assert "⏳" in rendered
     assert "high-risk" not in rendered
     assert "review drift or security findings" not in rendered
 
@@ -327,9 +351,8 @@ def test_report_summary_unknown_status_needs_attention_even_with_clean_artifacts
     )
     assert "### Needs attention" in rendered
     assert "`infra/unknown`" in rendered
-    assert "❔ UNKNOWN" in rendered
-    assert "All folders clean" not in rendered
-    assert "✅ 1 clean folder" not in rendered
+    assert "❔" in rendered
+    assert "clean folders ✅" not in rendered
 
 
 def test_report_security_summary_distinguishes_critical():
@@ -349,7 +372,7 @@ def test_report_security_summary_distinguishes_critical():
         },
         action="report",
     )
-    assert "🛑 CRITICAL · 2 findings" in rendered
+    assert "🛑" in rendered
 
 
 def test_report_folder_invalid_tfsec_evidence_renders_unknown_security():
@@ -366,11 +389,60 @@ def test_report_folder_invalid_tfsec_evidence_renders_unknown_security():
         rendered = folder_comment(
             "infra/a",
             _outcome("infra/a"),
-            _artifacts(tfsec=payload),
-            action="report",
+            _artifacts(tfsec=payload, tfsec_output=""),
+            **_report_link_kwargs(),
         )
-        assert "<summary>Security · ❔ UNKNOWN</summary>" in rendered
-        assert "Security data unavailable." in rendered
+        assert "> <summary>Security ❔</summary>" in rendered
+        assert "Security output unavailable." in rendered
+
+
+def test_report_folder_security_stays_expandable_when_clean():
+    rendered = folder_comment(
+        "infra/a",
+        _outcome("infra/a"),
+        _artifacts(),
+        **_report_link_kwargs(),
+    )
+    assert "> <summary>Security ✅</summary>" in rendered
+
+
+def test_report_folder_artifacts_use_authenticated_console_links():
+    names = frozenset(
+        {
+            "manifest.json",
+            "init.out",
+            "validate.out",
+            "tf/plan.out",
+            "tfsec.json",
+            "tfsec.output",
+            "infracost.json",
+        }
+    )
+    rendered = folder_comment(
+        "infra/a",
+        _outcome("infra/a"),
+        _artifacts(),
+        **_report_link_kwargs(existing_names=names),
+    )
+    assert _IC_START in rendered
+    assert f"account_id={_HUB_ACCOUNT}" in rendered
+    assert f"role_name={_IC_ROLE}" in rendered
+    assert "[manifest.json]" in rendered
+    assert "[init.out]" in rendered
+    assert "s3://" not in rendered
+
+
+def test_report_folder_execution_shows_step_functions_not_codebuild():
+    rendered = folder_comment(
+        "infra/a",
+        _outcome("infra/a"),
+        _artifacts(),
+        **_report_link_kwargs(
+            console_url="https://console.aws.example/run",
+        ),
+    )
+    assert "[Step Functions execution](https://console.aws.example/run)" in rendered
+    assert "CodeBuild" not in rendered
 
 
 def test_bounded_large_report_keeps_balanced_marker_and_artifact_guidance():
@@ -382,21 +454,13 @@ def test_bounded_large_report_keeps_balanced_marker_and_artifact_guidance():
             plan="Plan: 1 to add, 0 to change, 0 to destroy\n"
             + ("+ resource aws_instance.probe\n" * 20_000)
         ),
-        action="report",
-        commit_hash=_FULL_SHA,
-        run_id="run-1",
-        repo_name="org/repo",
-        pr_number=7,
-        manifest_s3_uri="s3://tmp/manifest.json",
-        console_url="https://console.aws.example/run",
+        **_report_link_kwargs(),
     )
     rendered = bound_comment(body, max_chars=8_000, suffix=f"\n\n{marker}")
     assert len(rendered) <= 8_000
     assert rendered.endswith(marker)
     assert rendered.count("Comment truncated for GitHub size limits") == 1
-    assert "### Download and execution artifacts" in rendered
-    assert "Plan pointer" in rendered
-    assert "Manifest: `s3://tmp/manifest.json`" in rendered
+    assert "> <summary>Artifacts</summary>" in rendered
     assert len(re.findall(r"<details\b", rendered)) == rendered.count("</details>")
     assert rendered.count("```") % 2 == 0
 

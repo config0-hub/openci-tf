@@ -63,7 +63,9 @@ def _authorized_entry_uri(
         "tf/plan.out": keys.plan_out,
         "drift.json": keys.drift_json,
         "tfsec.json": keys.tfsec_json,
+        "tfsec.output": keys.tfsec_output,
         "infracost.json": keys.infracost_json,
+        "infracost.output": keys.infracost_output,
     }
     if bucket == tmp_bucket and name in key_by_name and key == key_by_name[name]:
         return True

@@ -403,6 +403,7 @@ def test_render_final_summary_for_multi_folder_plan_and_report(monkeypatch):
     monkeypatch.setattr(render, "get_github_token", lambda _: "token")
     monkeypatch.setattr(render.boto3, "resource", lambda *_: SimpleNamespace(Table=lambda _: object()))
     monkeypatch.setattr(render, "list_text_prefix", lambda *_: {})
+    monkeypatch.setattr(render, "list_prefix_object_names", lambda *_: frozenset())
     monkeypatch.setattr(render, "_plan_artifact_metadata", lambda *_, **__: None)
     monkeypatch.setattr(render.run_lock, "release", lambda *_, **__: None)
     monkeypatch.setattr(render, "GitHubClient", lambda _: _noop_render_client())
@@ -437,7 +438,7 @@ def test_render_final_summary_for_multi_folder_plan_and_report(monkeypatch):
     assert posted[-3:] == ["folder-good", "folder-bad", "summary"]
     assert deleted == []
     assert "Terraform Multi-Folder Summary" in summary_bodies[0]
-    assert "openci-tf Report Summary" in summary_bodies[1]
+    assert "openci-tf report" in summary_bodies[1]
     for body in summary_bodies:
         assert "[`good`]" in body
         assert "[`bad`]" in body
@@ -771,7 +772,7 @@ def _assert_render_placeholder_for_action(monkeypatch, action: str, needle: str)
     summary_body = comments[-1][0]
     assert "| `infra/a` | `123456789012` | in progress |" in summary_body
     if action == "report":
-        assert "## openci-tf Report Summary" in summary_body
+        assert "## openci-tf report" in summary_body
         assert "| Drift |" in summary_body
     else:
         assert "Terraform Multi-Folder Summary" in summary_body

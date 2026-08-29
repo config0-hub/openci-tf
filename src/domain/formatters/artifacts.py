@@ -13,10 +13,12 @@ from typing import Any
 
 from src.core.terminal_evidence import redact_and_bound_terminal_evidence
 from src.domain.engine.artifact_paths import (
+    build_folder_artifact_keys,
     latest_plan_pointer,
     pr_pointer_key,
     run_scoped_plan_pointer,
 )
+from src.domain.formatters.console_urls import s3_object_console_url
 from src.domain.formatters.comment_bounds import (  # noqa: F401  (re-exported)
     _MAX_COMMENT_CHARS,
     bound_comment,
@@ -528,6 +530,37 @@ class _ReportRow:
             return _REPORT_SECURITY_LABELS["unknown"]
         return _report_security_label(self.security, count=self.finding_count)
 
+    def drift_icon(self) -> str:
+        if self.failed:
+            return "❌"
+        if self.pending:
+            return "⏳"
+        if self.skipped:
+            return "⏭️"
+        if self.status == "unknown" or self.plan_counts is None:
+            return "❔"
+        add, change, destroy = self.plan_counts
+        if add == 0 and change == 0 and destroy == 0:
+            return "✅"
+        return "⚠️"
+
+    def security_icon(self) -> str:
+        if self.failed:
+            return "⏭️"
+        if self.pending:
+            return "⏳"
+        if self.skipped:
+            return "⏭️"
+        if self.status == "unknown" or self.security == "unknown":
+            return "❔"
+        if self.security == "clean":
+            return "✅"
+        if self.security in {"critical", "high"}:
+            return "🛑"
+        if self.security in {"medium", "low"}:
+            return "⚠️"
+        return "❔"
+
 
 def _plan_cell(plan_text: str) -> str:
     summary = extract_plan_summary(plan_text)
@@ -621,18 +654,69 @@ def _report_highest_alert(rows: list[_ReportRow]) -> str | None:
 
 def _report_folder_summary_line(
     folder: str,
-    account_id: str,
-    commit_hash: str,
     outcome: dict[str, Any],
     artifacts: dict[str, str],
 ) -> str:
-    row = _report_row(
-        {**outcome, "folder": folder, "account_id": account_id}, artifacts
-    )
+    row = _report_row({**outcome, "folder": folder}, artifacts)
+    return f"{folder} · Drift {row.drift_icon()} · Security {row.security_icon()}"
+
+
+def _indent_blockquote(text: str) -> str:
+    return "\n".join(">" if not line else f"> {line}" for line in text.splitlines())
+
+
+def _report_child_collapsible(summary: str, body: str) -> str:
+    return _indent_blockquote(_wrap_collapsed(summary, body))
+
+
+def _init_status_icon(text: str) -> str:
+    if not text:
+        return "❔"
     return (
-        f"`{folder}` · {account_id} · {_short_hash(commit_hash)} · "
-        f"{row.drift_cell()} · {row.security_cell()}"
+        "✅"
+        if "successfully initialized" in _strip_ansi(text).lower()
+        else "❌"
     )
+
+
+def _validate_status_icon(text: str) -> str:
+    if not text:
+        return "❔"
+    clean = _strip_ansi(text).lower()
+    return (
+        "✅"
+        if "success!" in clean or "configuration is valid" in clean
+        else "❌"
+    )
+
+
+def _setup_status_icon(init_text: str, validate_text: str) -> str:
+    icons = {_init_status_icon(init_text), _validate_status_icon(validate_text)}
+    if "❌" in icons:
+        return "❌"
+    if "❔" in icons:
+        return "❔"
+    return "✅"
+
+
+def _plan_status_icon(plan_text: str) -> str:
+    counts = _plan_counts(plan_text)
+    if counts is None:
+        return "❔"
+    if counts == (0, 0, 0):
+        return "✅"
+    return "⚠️"
+
+
+def _security_status_icon(tfsec_json: str) -> str:
+    security, _ = tfsec_summary_line(tfsec_json)
+    if security == "clean":
+        return "✅"
+    if security in {"critical", "high"}:
+        return "🛑"
+    if security in {"medium", "low"}:
+        return "⚠️"
+    return "❔"
 
 
 def _init_status(text: str) -> str:
@@ -669,19 +753,16 @@ def _highlight_plan(text: str) -> str:
     )
 
 
-def _report_plan_inline(text: str) -> str:
+def _report_plan_collapsible(text: str) -> str:
     clean = _neutralize_comment_identity_lines(_strip_ansi(text))
     counts = _plan_counts(clean)
-    parts: list[str] = ["### Plan"]
+    parts: list[str] = []
     if counts is None:
-        parts.extend(
-            ["", "❔ UNKNOWN - plan output was unavailable or unparseable.", ""]
-        )
+        parts.append("Plan output was unavailable or unparseable.")
     else:
         add, change, destroy = counts
         parts.extend(
             [
-                "",
                 "**Plan summary:**",
                 f"- **{add} to add**",
                 f"- **{change} to change**",
@@ -690,64 +771,101 @@ def _report_plan_inline(text: str) -> str:
             ]
         )
     parts.append(_fenced_block(_highlight_plan(clean), "diff"))
-    return "\n".join(parts)
-
-
-def _report_tfsec_collapsible(text: str) -> str:
-    if text and _artifact_skipped(text, "not run"):
-        return ""
-    security, finding_count = tfsec_summary_line(text)
-    readable = _tfsec_text_from_json(text) if text else "Security data unavailable."
-    if not readable.strip():
-        readable = "Security data unavailable."
-    body = "\n **Security Scan Results**\n\n" + _fenced_block(readable)
-    return _wrap_collapsed(
-        f"Security · {_report_security_label(security, count=finding_count)}", body
+    return _report_child_collapsible(
+        f"Plan {_plan_status_icon(text)}",
+        "\n".join(parts),
     )
 
 
-def _report_infracost_collapsible(text: str) -> str:
-    if text and _artifact_skipped(text, "not run"):
+def _report_tfsec_collapsible(tfsec_json: str, tfsec_output: str) -> str:
+    if tfsec_json and _artifact_skipped(tfsec_json, "not run"):
         return ""
-    monthly = extract_infracost_monthly(text)
+    readable = _strip_ansi(tfsec_output) if tfsec_output else ""
+    if not readable.strip():
+        readable = "Security output unavailable."
+    body = _fenced_block(readable)
+    return _report_child_collapsible(
+        f"Security {_security_status_icon(tfsec_json)}",
+        body,
+    )
+
+
+def _report_infracost_collapsible(infracost_json: str, infracost_output: str) -> str:
+    if infracost_json and _artifact_skipped(infracost_json, "not run"):
+        return ""
+    monthly = extract_infracost_monthly(infracost_json)
     summary = {
         "not configured": "Cost · not configured",
         "N/A": "Cost · unavailable",
     }.get(monthly, f"Cost · {monthly}/mo")
-    body = "\n **Cost Analysis**\n\n"
-    if not text:
-        body += "Cost data unavailable.\n"
-        return _wrap_collapsed(summary, body)
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        body += "Cost data unavailable (invalid JSON).\n"
-        return _wrap_collapsed(summary, body)
-    if data.get("skipped"):
-        body += "**Summary:**\n- Cost analysis: not configured\n\n"
-    elif monthly not in {"N/A", "not configured"}:
-        body += f"**Summary:**\n- Monthly cost {monthly}\n\n"
-    body += _fenced_block(render_infracost_table(text))
-    return _wrap_collapsed(summary, body)
-
-
-def _report_tf_setup_collapsible(init_text: str, validate_text: str) -> str:
-    validate_clean = _neutralize_comment_identity_lines(_strip_ansi(validate_text))
-    validate_body = (
-        "\n **Configuration is valid**\n"
-        if _validate_status(validate_text) == "Validate succeeded"
-        else f"\n **Validation failed**\n\n{_fenced_block(validate_clean)}"
-    )
     body = (
-        "#### Initialize\n\n"
-        f"{_fenced_block(_decorate_init(init_text) if init_text else 'No artifact was produced.')}\n\n"
-        "#### Validate\n"
-        f"{validate_body}"
+        "Cost output unavailable."
+        if not infracost_output.strip()
+        else _fenced_block(_strip_ansi(infracost_output))
     )
-    return _wrap_collapsed(
-        f"TF setup · {_init_status(init_text)} · {_validate_status(validate_text)}",
+    return _report_child_collapsible(summary, body)
+
+
+def _report_setup_collapsible(init_text: str, validate_text: str) -> str:
+    body = "\n".join(
+        [
+            f"terraform init {_init_status_icon(init_text)}",
+            f"terraform validate {_validate_status_icon(validate_text)}",
+        ]
+    )
+    return _report_child_collapsible(
+        f"Setup {_setup_status_icon(init_text, validate_text)}",
         body,
     )
+
+
+_REPORT_ARTIFACT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    ("Run", (("manifest.json", "manifest.json"),)),
+    ("Setup", (("init.out", "init.out"), ("validate.out", "validate.out"))),
+    (
+        "Plan",
+        (
+            ("plan.out", "tf/plan.out"),
+            ("plan.tfplan", "tf/plan.tfplan"),
+            ("plan.tfplan.sha256", "tf/plan.tfplan.sha256"),
+            ("plan-metadata.json", "tf/plan-metadata.json"),
+        ),
+    ),
+    (
+        "Security",
+        (("tfsec.output", "tfsec.output"), ("tfsec.json", "tfsec.json")),
+    ),
+    (
+        "Cost",
+        (("infracost.output", "infracost.output"), ("infracost.json", "infracost.json")),
+    ),
+)
+
+
+def _report_artifact_key(
+    *,
+    repo_name: str,
+    run_id: str,
+    folder: str,
+    storage_name: str,
+) -> str:
+    keys = build_folder_artifact_keys(
+        repo_name=repo_name, run_id=run_id, folder_path=folder
+    )
+    by_name = {
+        "manifest.json": keys.manifest_json,
+        "init.out": keys.init_out,
+        "validate.out": keys.validate_out,
+        "tf/plan.out": keys.plan_out,
+        "tf/plan.tfplan": keys.plan_tfplan,
+        "tf/plan.tfplan.sha256": keys.plan_sha256,
+        "tf/plan-metadata.json": keys.plan_metadata,
+        "tfsec.output": keys.tfsec_output,
+        "tfsec.json": keys.tfsec_json,
+        "infracost.output": keys.infracost_output,
+        "infracost.json": keys.infracost_json,
+    }
+    return by_name[storage_name]
 
 
 def _report_artifacts_collapsible(
@@ -755,33 +873,57 @@ def _report_artifacts_collapsible(
     repo_name: str,
     run_id: str,
     folder: str,
-    pr_number: int | None,
-    manifest_s3_uri: str | None,
-    commit_hash: str,
-    console_url: str | None,
-    succeeded: bool,
+    existing_names: frozenset[str],
+    tmp_bucket: str,
+    region: str,
+    hub_account_id: str | None,
+    identity_center_start_url: str | None,
+    identity_center_role_name: str | None,
 ) -> str:
-    parts: list[str] = []
-    if run_id and repo_name:
-        parts.append(
-            plan_artifact_pointer(
+    if not repo_name or not run_id or not tmp_bucket or not region:
+        return ""
+    lines: list[str] = []
+    for group_name, members in _REPORT_ARTIFACT_GROUPS:
+        group_lines: list[str] = []
+        for display_name, storage_name in members:
+            if storage_name not in existing_names:
+                continue
+            key = _report_artifact_key(
                 repo_name=repo_name,
                 run_id=run_id,
                 folder=folder,
-                pr_number=pr_number,
+                storage_name=storage_name,
             )
-        )
-    if manifest_s3_uri and run_id:
-        parts.append(execution_artifacts_section(run_id, manifest_s3_uri))
-    if console_url and commit_hash:
-        parts.append(
-            ci_details(commit_hash, console_url, "succeeded" if succeeded else "failed")
-        )
-    if not parts:
+            url = s3_object_console_url(
+                tmp_bucket,
+                key,
+                region=region,
+                account_id=hub_account_id,
+                identity_center_start_url=identity_center_start_url,
+                identity_center_role_name=identity_center_role_name,
+            )
+            group_lines.append(f"  [{display_name}]({url})")
+        if group_lines:
+            lines.append(group_name)
+            lines.extend(group_lines)
+    if not lines:
         return ""
-    return "### Download and execution artifacts\n" + _wrap_collapsed(
-        "Download and execution artifacts", "\n\n".join(parts)
-    )
+    return _report_child_collapsible("Artifacts", "\n".join(lines))
+
+
+def _report_execution_collapsible(
+    *,
+    console_url: str | None,
+    codebuild_url: str | None = None,
+) -> str:
+    lines: list[str] = []
+    if console_url:
+        lines.append(f"[Step Functions execution]({console_url})")
+    if codebuild_url:
+        lines.append(f"[CodeBuild job]({codebuild_url})")
+    if not lines:
+        return ""
+    return _report_child_collapsible("Execution", "\n".join(lines))
 
 
 def _report_folder_comment(
@@ -789,39 +931,64 @@ def _report_folder_comment(
     outcome: dict[str, Any],
     artifacts: dict[str, str],
     *,
-    commit_hash: str = "",
     console_url: str | None = None,
-    manifest_s3_uri: str | None = None,
     run_id: str | None = None,
     repo_name: str = "",
-    pr_number: int | None = None,
+    existing_names: frozenset[str] | None = None,
+    tmp_bucket: str = "",
+    region: str = "",
+    hub_account_id: str | None = None,
+    identity_center_start_url: str | None = None,
+    identity_center_role_name: str | None = None,
 ) -> str:
-    account_id = _require_account_id(outcome, folder)
+    _require_account_id(outcome, folder)
+    names = existing_names or frozenset(artifacts)
     parts = [
-        _folder_heading(folder, account_id, action="report").rstrip(),
-        _report_plan_inline(artifacts.get("tf/plan.out", "")),
-        _report_tfsec_collapsible(artifacts.get("tfsec.json", "")),
-        _report_infracost_collapsible(artifacts.get("infracost.json", "")),
-        _report_tf_setup_collapsible(
+        _report_setup_collapsible(
             artifacts.get("init.out", ""), artifacts.get("validate.out", "")
         ),
+        _report_plan_collapsible(artifacts.get("tf/plan.out", "")),
+        _report_tfsec_collapsible(
+            artifacts.get("tfsec.json", ""),
+            artifacts.get("tfsec.output", ""),
+        ),
+        _report_infracost_collapsible(
+            artifacts.get("infracost.json", ""),
+            artifacts.get("infracost.output", ""),
+        ),
+        _report_execution_collapsible(console_url=console_url),
         _report_artifacts_collapsible(
             repo_name=repo_name,
             run_id=str(run_id or ""),
             folder=folder,
-            pr_number=pr_number,
-            manifest_s3_uri=manifest_s3_uri,
-            commit_hash=commit_hash,
-            console_url=console_url,
-            succeeded=outcome.get("succeeded", True),
+            existing_names=names,
+            tmp_bucket=tmp_bucket,
+            region=region,
+            hub_account_id=hub_account_id,
+            identity_center_start_url=identity_center_start_url,
+            identity_center_role_name=identity_center_role_name,
         ),
     ]
     return _wrap_collapsed(
-        _report_folder_summary_line(
-            folder, account_id, commit_hash, outcome, artifacts
-        ),
+        _report_folder_summary_line(folder, outcome, artifacts),
         "\n\n".join(part for part in parts if part),
     )
+
+
+def _report_summary_row(
+    folder: str,
+    drift_icon: str,
+    security_icon: str,
+    cost: str,
+    *,
+    folder_urls: dict[str, str] | None = None,
+) -> str:
+    folder_cell = (
+        f"[`{folder}`]({folder_urls[folder]})"
+        if folder_urls and folder in folder_urls
+        else f"`{folder}`"
+    )
+    return f"| {folder_cell} | {drift_icon} | {security_icon} | {cost} |"
 
 
 def _report_summary(
@@ -829,8 +996,6 @@ def _report_summary(
     artifacts_by_folder: dict[str, dict[str, str]] | None = None,
     *,
     folder_urls: dict[str, str] | None = None,
-    commit_hash: str = "",
-    console_url: str | None = None,
     steps: list[list[str]] | None = None,
 ) -> str:
     artifacts = artifacts_by_folder or {}
@@ -842,69 +1007,60 @@ def _report_summary(
     clean = sorted(
         (row for row in report_rows if row.clean), key=lambda row: row.folder
     )
-    lines: list[str] = ["## openci-tf Report Summary", ""]
+    lines: list[str] = ["## openci-tf report", "", "**Type:** Report", ""]
     if steps is not None and len(steps) > 1:
         lines.extend(_pipeline_step_rows(steps, outcomes))
         lines.append("")
     lines.extend(
         [
-            f"**{len(report_rows)}** folder{'s' if len(report_rows) != 1 else ''} · "
-            f"**{len(attention)}** need attention · **{len(clean)}** clean",
+            f"**{len(report_rows)} folders** · "
+            f"**{len(attention)} need attention** · "
+            f"**{len(clean)} clean**",
             "",
         ]
     )
-    alert = _report_highest_alert(report_rows)
-    if alert:
-        lines.extend([alert, ""])
     if attention:
         lines.extend(
             [
                 "### Needs attention",
                 "",
-                "| Folder | Account | Drift | Security | Cost |",
-                "|--------|---------|-------|----------|------|",
+                "| Folder | Drift | Security | Cost |",
+                "|--------|-------|----------|------|",
             ]
         )
         for row in attention:
             lines.append(
-                _summary_row(
+                _report_summary_row(
                     row.folder,
-                    row.account_id,
-                    row.drift_cell(),
-                    row.security_cell(),
+                    row.drift_icon(),
+                    row.security_icon(),
                     row.cost,
                     folder_urls=folder_urls,
                 )
             )
         lines.append("")
-    elif report_rows:
-        lines.extend(["✅ **All folders clean** - no drift or security findings.", ""])
     if clean:
         clean_table = [
-            "| Folder | Account | Drift | Security | Cost |",
-            "|--------|---------|-------|----------|------|",
+            "| Folder | Drift | Security | Cost |",
+            "|--------|-------|----------|------|",
         ]
         for row in clean:
             clean_table.append(
-                _summary_row(
+                _report_summary_row(
                     row.folder,
-                    row.account_id,
-                    row.drift_cell(),
-                    row.security_cell(),
+                    row.drift_icon(),
+                    row.security_icon(),
                     row.cost,
                     folder_urls=folder_urls,
                 )
             )
         lines.append(
             _wrap_collapsed(
-                f"✅ {len(clean)} clean folder{'s' if len(clean) != 1 else ''}",
+                f"{len(clean)} clean folder{'s' if len(clean) != 1 else ''} ✅",
                 "\n".join(clean_table),
             )
         )
-    body = "\n".join(lines)
-    if console_url and commit_hash:
-        body += ci_details(commit_hash, console_url, _terminal_status(outcomes))
-    return body
+    return "\n".join(lines)
 
 
 def _summary_delta_cell(action: str, plan_text: str) -> str:
@@ -1237,7 +1393,7 @@ def pending_summary_all(commit_hash: str, action: str) -> str:
     short = commit_hash[:7]
     verb = _running_label(action)
     if action == "report":
-        return f"## openci-tf Report Summary\n\n{verb} all folders at `{short}`…"
+        return f"## openci-tf report\n\n{verb} all folders at `{short}`…"
     return f"## Terraform Multi-Folder Summary\n\n {verb} all folders at `{short}`…"
 
 
@@ -1266,7 +1422,7 @@ def pending_summary(
 ) -> str:
     delta_header = _summary_delta_header(action)
     heading = (
-        "## openci-tf Report Summary"
+        "## openci-tf report"
         if action == "report"
         else "## Terraform Multi-Folder Summary"
     )
@@ -1308,6 +1464,12 @@ def folder_comment(
     run_id: str | None = None,
     repo_name: str = "",
     pr_number: int | None = None,
+    existing_names: frozenset[str] | None = None,
+    tmp_bucket: str = "",
+    region: str = "",
+    hub_account_id: str | None = None,
+    identity_center_start_url: str | None = None,
+    identity_center_role_name: str | None = None,
 ) -> str:
     if folder == "config" and outcome.get("status") == "infrastructure_error":
         status_label = _terminal_label(action, outcome, folder=folder)
@@ -1355,12 +1517,15 @@ def folder_comment(
             folder,
             outcome,
             artifacts,
-            commit_hash=commit_hash,
             console_url=console_url,
-            manifest_s3_uri=manifest_s3_uri,
             run_id=run_id,
             repo_name=repo_name,
-            pr_number=pr_number,
+            existing_names=existing_names,
+            tmp_bucket=tmp_bucket,
+            region=region,
+            hub_account_id=hub_account_id,
+            identity_center_start_url=identity_center_start_url,
+            identity_center_role_name=identity_center_role_name,
         )
 
     sections = [
@@ -1451,8 +1616,6 @@ def summary(
             outcomes,
             artifacts_by_folder,
             folder_urls=folder_urls,
-            commit_hash=commit_hash,
-            console_url=console_url,
             steps=steps,
         )
     delta_header = _summary_delta_header(action)

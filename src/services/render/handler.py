@@ -37,7 +37,7 @@ from src.domain.engine.summary import (
     validate_outer_map_outcome,
 )
 from src.platform.aws.intent_registry import get_intent_record
-from src.platform.aws.s3 import get_bounded_json, list_text_prefix
+from src.platform.aws.s3 import get_bounded_json, list_prefix_object_names, list_text_prefix
 from src.platform.aws.ssm import get_github_token
 from src.platform.github.client import GitHubClient, comment_url
 from src.platform.github.command_comment_cleanup import (
@@ -89,15 +89,18 @@ def _summary_uses_report_all(action: str) -> bool:
     return action == "report"
 
 
-def _console_url(execution_arn: str | None) -> str | None:
-    if not isinstance(execution_arn, str) or not execution_arn:
-        return None
-    region = (
+def _aws_region() -> str:
+    return (
         os.environ.get("AWS_REGION")
         or os.environ.get("AWS_DEFAULT_REGION")
         or "us-east-1"
     )
-    return step_functions_execution_url(execution_arn, region=region)
+
+
+def _console_url(execution_arn: str | None) -> str | None:
+    if not isinstance(execution_arn, str) or not execution_arn:
+        return None
+    return step_functions_execution_url(execution_arn, region=_aws_region())
 
 
 def _should_list_execution_artifacts(outcome: dict[str, Any]) -> bool:
@@ -279,6 +282,7 @@ def _render_folder_body(
     render_items: list[dict[str, Any]],
     manifest_s3_uri: str | None,
     pr_number: int | None = None,
+    existing_names: frozenset[str] | None = None,
 ) -> str:
     if action in {"apply", "destroy"}:
         return _mutation_folder_comment(
@@ -299,11 +303,17 @@ def _render_folder_body(
         action=action,
         commit_hash=commit_hash,
         console_url=console_url,
-        include_ci_details=len(render_items) == 1,
+        include_ci_details=action != "report" and len(render_items) == 1,
         manifest_s3_uri=manifest_s3_uri,
         run_id=run_id,
         repo_name=repo,
         pr_number=pr_number,
+        existing_names=existing_names,
+        tmp_bucket=os.environ.get("TMP_BUCKET_NAME", ""),
+        region=_aws_region(),
+        hub_account_id=os.environ.get("ENGINE_CODEBUILD_ACCOUNT_ID") or None,
+        identity_center_start_url=os.environ.get("AWS_CONSOLE_START_URL") or None,
+        identity_center_role_name=os.environ.get("AWS_CONSOLE_ROLE_NAME") or None,
     )
 
 
@@ -899,8 +909,16 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                     MAX_ARTIFACT_BYTES,
                     ALLOWED_ARTIFACT_CONTENT_TYPES,
                 )
+                existing_names = (
+                    list_prefix_object_names(
+                        os.environ["TMP_BUCKET_NAME"], prefix
+                    )
+                    if action == "report"
+                    else frozenset()
+                )
             else:
                 artifacts = {}
+                existing_names = frozenset()
             artifacts_by_folder[folder] = artifacts
             _plan_artifact_metadata(
                 outcome, action, webhook, run_id, pr_number=scoped_pr
@@ -928,6 +946,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                             if isinstance(outcome.get("pointers"), dict)
                             else None,
                             pr_number=scoped_pr,
+                            existing_names=existing_names,
                         ),
                         run_id=run_id,
                         comments_removed=True,
