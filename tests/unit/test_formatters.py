@@ -43,6 +43,23 @@ def test_recorded_artifact_section_matches_golden(formatter, artifact, golden):
     assert formatter(_fixture_text(artifact)) == (FIXTURES / golden).read_text().rstrip("\n")
 
 
+def test_summary_plan_destroy_uses_destroy_output_and_security():
+    account = "123456789012"
+    rendered = summary(
+        [{"folder": "infra/vpc", "succeeded": True, "account_id": account}],
+        {
+            "infra/vpc": {
+                "destroy.plan.out": "Plan: 0 to add, 0 to change, 2 to destroy",
+                "tfsec.json": '{"results":[]}',
+                "infracost.json": '{"totalMonthlyCost":"0"}',
+            }
+        },
+        action="plan_destroy",
+    )
+    assert "| Folder | Account | Plan | Security | Cost |" in rendered
+    assert f"| `infra/vpc` | `{account}` | +0 ~0 -2 | clean | $0 |" in rendered
+
+
 def test_summary_plan_run_with_adds_only_shows_plan_counts():
     account = "123456789012"
     rendered = summary(

@@ -383,6 +383,18 @@ def closed_pr_rejection_comment(
 
 
 _PLAN_SUMMARY_ACTIONS = frozenset({"plan", "plan_destroy"})
+
+
+def _human_plan_output_key(action: str) -> str:
+    if action == "plan_destroy":
+        return "destroy.plan.out"
+    return "tf/plan.out"
+
+
+def _human_plan_text(action: str, artifacts: dict[str, str]) -> str:
+    return artifacts.get(_human_plan_output_key(action), "")
+
+
 _REPORT_DRIFT_LABELS = {
     "clean": "✅ CLEAN",
     "drift": "⚠️ DRIFT",
@@ -1641,8 +1653,7 @@ def folder_comment(
         initialize(artifacts.get("init.out", "")),
         validate(artifacts.get("validate.out", "")),
     ]
-    plan_output_key = "destroy.plan.out" if action == "plan_destroy" else "tf/plan.out"
-    sections.append(plan(artifacts.get(plan_output_key, "")))
+    sections.append(plan(_human_plan_text(action, artifacts)))
     if action in {"plan", "report", "plan_destroy"}:
         pointer_type = "destroy" if action == "plan_destroy" else "plan"
         sections.extend(
@@ -1754,7 +1765,7 @@ def summary(
             drift, security, cost = "failed", "not run", "n/a"
         else:
             artifacts = (artifacts_by_folder or {}).get(folder, {})
-            drift = _summary_delta_cell(action, artifacts.get("tf/plan.out", ""))
+            drift = _summary_delta_cell(action, _human_plan_text(action, artifacts))
             security = _security_cell(artifacts.get("tfsec.json", ""))
             cost = _cost_cell(artifacts.get("infracost.json", "{}"))
         rows.append(

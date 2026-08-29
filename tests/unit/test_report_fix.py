@@ -757,3 +757,79 @@ def test_render_plan_all_posts_linked_multi_folder_summary(monkeypatch):
     assert "| no changes | clean | $0 |" in summary_body
     assert "Legend" not in summary_body
     assert "Drift:" not in summary_body
+
+
+def test_render_plan_destroy_posts_linked_multi_folder_summary(monkeypatch):
+    """Production-shaped: tf plan --destroy all final render posts destroy counts."""
+    from types import SimpleNamespace
+
+    from src.platform.github.client import comment_url
+
+    webhook = {
+        "repo_name": "org/repo",
+        "pr_number": 9,
+        "commit_hash": _FULL_SHA,
+        "trigger_id": "trigger",
+        "event_type": "issue_comment",
+        "comment_id": 42,
+    }
+    artifacts = {
+        "destroy.plan.out": "Plan: 0 to add, 0 to change, 1 to destroy",
+        "tfsec.json": '{"results":[]}',
+        "infracost.json": '{"totalMonthlyCost":"0"}',
+    }
+    posted_bodies: dict[str, str] = {}
+    comment_ids = {"infra/a": 101, "infra/b": 102}
+
+    def upsert(_client, repo, pr, body, action, folder, **kwargs):
+        if folder == "infra/a":
+            cid = comment_ids["infra/a"]
+            slot = "folder-infra/a"
+        elif folder == "infra/b":
+            cid = comment_ids["infra/b"]
+            slot = "folder-infra/b"
+        else:
+            cid = 999
+            slot = "summary"
+        posted_bodies[slot] = body
+        return cid
+
+    monkeypatch.setenv("LOCKS_TABLE_NAME", "locks")
+    monkeypatch.setenv("TMP_BUCKET_NAME", "tmp")
+    monkeypatch.setattr(render_handler, "get_github_token", lambda _: "token")
+    monkeypatch.setattr(render_handler.boto3, "resource", lambda *_: SimpleNamespace(Table=lambda _: object()))
+    monkeypatch.setattr(render_handler, "list_text_prefix", lambda *_args, **_kw: artifacts)
+    monkeypatch.setattr(
+        render_handler,
+        "list_prefix_object_names",
+        lambda *_args, **_kw: frozenset(artifacts),
+    )
+    monkeypatch.setattr(render_handler, "_plan_artifact_metadata", lambda *_, **__: None)
+    monkeypatch.setattr(render_handler.run_lock, "release", lambda *_, **__: None)
+    monkeypatch.setattr(render_handler, "GitHubClient", lambda _: SimpleNamespace(delete_comment=lambda *_a, **_k: None))
+    monkeypatch.setattr(render_handler, "_delete_and_repost", upsert)
+    monkeypatch.setattr(render_handler, "_delete_generated_comment", lambda *_, **__: None)
+    monkeypatch.setattr(render_handler, "_delete_transient_status_comment", lambda *_, **__: [])
+
+    render_handler.handler(
+        {
+            "action": "plan_destroy",
+            "webhook_info": webhook,
+            "settings": {"ssm_openci_tf_github_token": _CLONE_TOKEN},
+            "outcomes": [
+                {"folder": "infra/a", "account_id": "123456789012", "execution_id": "run.a.0", "succeeded": True},
+                {"folder": "infra/b", "account_id": "210987654321", "execution_id": "run.b.0", "succeeded": True},
+            ],
+            "skipped": [],
+        },
+        None,
+    )
+
+    summary_body = posted_bodies["summary"]
+    assert "## Terraform Multi-Folder Summary" in summary_body
+    assert f"[`infra/a`]({comment_url('org/repo', 9, comment_ids['infra/a'])})" in summary_body
+    assert f"[`infra/b`]({comment_url('org/repo', 9, comment_ids['infra/b'])})" in summary_body
+    assert "| +0 ~0 -1 | clean | $0 |" in summary_body
+    assert "unknown" not in summary_body
+    folder_body = posted_bodies["folder-infra/a"]
+    assert "1 to destroy" in folder_body
