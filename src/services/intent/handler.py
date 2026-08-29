@@ -27,7 +27,7 @@ from src.domain.intent.models import (
 )
 from src.platform.aws.intent_registry import IntentRegistryError
 from src.platform.aws.audit_lock import AuditLockVersionError, locks_table
-from src.platform.aws.run_registry import set_run_pipeline_metadata
+from src.platform.aws.run_registry import set_run_pipeline_metadata, update_run_status
 from src.platform.aws.ssm import get_github_token
 from src.platform.github.client import GitHubClient, PullRequestState, comment_url
 from src.platform.github.command_audit import update_command_audit_status
@@ -43,7 +43,6 @@ from src.services.intent.registry import (
     get_intent,
     store_intent_comment_metadata,
 )
-from src.services.intent.run_terminal import terminalize_intent_create_run
 
 logger = get_logger(__name__)
 
@@ -273,7 +272,7 @@ def _closed_pr_intent_failure(
         )
         audit_marked = False
     if not audit_marked:
-        terminalize_intent_create_run(event, "failed")
+        _terminalize_intent_create_run(event, "failed")
         return {
             **event,
             "confirm_token": None,
@@ -286,7 +285,7 @@ def _closed_pr_intent_failure(
             settings,
             [comment_id if isinstance(comment_id, int) else None],
         )
-    terminalize_intent_create_run(event, "failed")
+    _terminalize_intent_create_run(event, "failed")
     return {
         **event,
         "confirm_token": None,
@@ -297,6 +296,16 @@ def _closed_pr_intent_failure(
 
 def _intent_is_not_ready(failures: list[IntentGateFailure]) -> bool:
     return any(failure.message.startswith("intent not ready") for failure in failures)
+
+
+def _terminalize_intent_create_run(event: dict[str, Any], status: str) -> None:
+    """Mark one intent-creation run terminal without indexing a pipeline apply step."""
+    if status not in {"succeeded", "failed"}:
+        raise ValueError(f"unsupported intent-create terminal status: {status}")
+    run_id = event.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        raise ValueError("intent-create run terminalization requires run_id")
+    update_run_status(run_id, status)
 
 
 def _record_confirmed_pipeline_metadata(
@@ -382,7 +391,7 @@ def create_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 settings,
                 requested_comment_id if isinstance(requested_comment_id, int) else None,
             )
-        terminalize_intent_create_run(event, "failed")
+        _terminalize_intent_create_run(event, "failed")
         return {
             **event,
             "intent_failed": True,
@@ -403,7 +412,7 @@ def create_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 settings,
                 requested_comment_id if isinstance(requested_comment_id, int) else None,
             )
-        terminalize_intent_create_run(event, "failed")
+        _terminalize_intent_create_run(event, "failed")
         return {
             **event,
             "intent_failed": True,
@@ -470,7 +479,7 @@ def create_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 intent_comment_id=intent_comment_id,
             )
             raise
-        terminalize_intent_create_run(event, "succeeded")
+        _terminalize_intent_create_run(event, "succeeded")
     # The user's request comment stays until the terminal apply/destroy
     # render deletes it (render/handler.py); only the intent comment replaces
     # it here.
@@ -534,7 +543,7 @@ def confirm_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                         action=action,
                     )
                 )
-                if record_matches_current_request:
+                if record_matches_current_request and record is not None:
                     related_ids.extend(
                         [record.intent_comment_id, record.requested_comment_id]
                     )

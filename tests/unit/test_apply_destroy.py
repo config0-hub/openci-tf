@@ -1221,7 +1221,7 @@ def test_create_handler_success_terminalizes_run_after_comment_metadata(monkeypa
     )
     terminalized: list[tuple[dict[str, object], str]] = []
     monkeypatch.setattr(
-        "src.services.intent.handler.terminalize_intent_create_run",
+        "src.services.intent.handler._terminalize_intent_create_run",
         lambda event, status: terminalized.append((event, status)),
     )
 
@@ -1283,7 +1283,7 @@ def test_create_handler_pipeline_success_terminalizes_run_after_comment_metadata
     )
     terminalized: list[str] = []
     monkeypatch.setattr(
-        "src.services.intent.handler.terminalize_intent_create_run",
+        "src.services.intent.handler._terminalize_intent_create_run",
         lambda _event, status: terminalized.append(status),
     )
 
@@ -1309,14 +1309,14 @@ def test_create_handler_pipeline_success_terminalizes_run_after_comment_metadata
     assert terminalized == ["succeeded"]
 
 
-@patch("src.services.intent.run_terminal.update_run_status")
+@patch("src.services.intent.handler.update_run_status")
 def test_terminalize_intent_create_run_does_not_index_pipeline_apply_step(
     mock_update_run_status, monkeypatch
 ):
     monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")
-    from src.services.intent.run_terminal import terminalize_intent_create_run
+    from src.services.intent.handler import _terminalize_intent_create_run
 
-    terminalize_intent_create_run({"run_id": "intent-run-1"}, "succeeded")
+    _terminalize_intent_create_run({"run_id": "intent-run-1"}, "succeeded")
 
     mock_update_run_status.assert_called_once_with("intent-run-1", "succeeded")
 
@@ -1344,7 +1344,7 @@ def test_create_handler_gate_refusal_terminalizes_run_failed(monkeypatch):
     )
     terminalized: list[str] = []
     monkeypatch.setattr(
-        "src.services.intent.handler.terminalize_intent_create_run",
+        "src.services.intent.handler._terminalize_intent_create_run",
         lambda _event, status: terminalized.append(status),
     )
 
@@ -1410,7 +1410,7 @@ def test_create_handler_metadata_failure_does_not_terminalize_succeeded(monkeypa
     )
     terminalized: list[str] = []
     monkeypatch.setattr(
-        "src.services.intent.handler.terminalize_intent_create_run",
+        "src.services.intent.handler._terminalize_intent_create_run",
         lambda _event, status: terminalized.append(status),
     )
 
@@ -1454,7 +1454,7 @@ def test_confirm_handler_does_not_terminalize_intent_create_run(monkeypatch):
     )
     terminalized: list[str] = []
     monkeypatch.setattr(
-        "src.services.intent.handler.terminalize_intent_create_run",
+        "src.services.intent.handler._terminalize_intent_create_run",
         lambda _event, status: terminalized.append(status),
     )
 
