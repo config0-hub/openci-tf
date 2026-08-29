@@ -505,6 +505,49 @@ def test_report_folder_execution_shows_step_functions_not_codebuild():
     assert "CodeBuild" not in rendered
 
 
+def test_readonly_plan_below_budget_preserves_tail():
+    tail_marker = "TAIL_MARKER_UNIQUE_12345"
+    plan_body = (
+        "Plan: 1 to add, 0 to change, 0 to destroy\n"
+        + ("+ resource aws_instance.probe\n" * 500)
+        + tail_marker
+    )
+    assert len(plan_body) < 32_000
+    rendered = folder_comment(
+        "infra/a",
+        _outcome("infra/a"),
+        _artifacts(plan=plan_body),
+        **_report_link_kwargs(action="plan"),
+    )
+    assert "Output truncated" not in rendered
+    assert tail_marker in rendered
+
+
+def test_readonly_plan_over_budget_truncates_once_with_neutral_note():
+    plan_body = (
+        "Plan: 1 to add, 0 to change, 0 to destroy\n"
+        + ("+ resource aws_instance.probe\n" * 20_000)
+    )
+    assert len(plan_body) > 32_000
+    rendered = folder_comment(
+        "infra/a",
+        _outcome("infra/a"),
+        _artifacts(plan=plan_body),
+        **_report_link_kwargs(action="plan"),
+    )
+    assert (
+        rendered.count(
+            "Output truncated. See S3 artifacts for full plan output."
+        )
+        == 1
+    )
+    assert "> <summary>Security" in rendered
+    assert "> <summary>Cost" in rendered
+    assert "> <summary>Artifacts</summary>" in rendered
+    assert len(re.findall(r"<details\b", rendered)) == rendered.count("</details>")
+    assert rendered.count("```") % 2 == 0
+
+
 def test_bounded_large_report_keeps_balanced_marker_and_artifact_guidance():
     marker = format_comment_object_marker("org/repo", 7, "report", "infra/a")
     body = folder_comment(
@@ -519,10 +562,7 @@ def test_bounded_large_report_keeps_balanced_marker_and_artifact_guidance():
     rendered = bound_comment(body, max_chars=8_000, suffix=f"\n\n{marker}")
     assert len(rendered) <= 8_000
     assert rendered.endswith(marker)
-    assert (
-        "Comment truncated for GitHub size limits" in rendered
-        or "Output truncated. See S3 artifacts for full plan show" in rendered
-    )
+    assert "Comment truncated for GitHub size limits" in rendered
     assert "> <summary>Artifacts</summary>" in rendered
     assert len(re.findall(r"<details\b", rendered)) == rendered.count("</details>")
     assert rendered.count("```") % 2 == 0

@@ -17,8 +17,6 @@ from src.domain.engine.artifact_paths import (
     build_folder_artifact_keys,
     build_folder_artifact_keys_for_run,
     pointer_type_for_action,
-    pr_pointer_key,
-    run_scoped_plan_pointer,
 )
 from src.domain.engine.outer_execution_id import validate_outer_run_id
 from src.domain.formatters.console_urls import s3_object_console_url
@@ -30,13 +28,9 @@ from src.domain.formatters.command_text import (
     normalized_command_context_line,
     redact_confirm_token,
 )
-from src.domain.formatters.infracost_table import render_infracost_table
-from src.domain.formatters.tfsec_findings import (  # noqa: F401  (re-exported)
-    _analyze_tfsec_severity,
+from src.domain.formatters.tfsec_findings import (
     _artifact_skipped,
     _strip_ansi,
-    _tfsec_text_from_json,
-    tfsec,
     tfsec_summary_line,
 )
 
@@ -109,49 +103,8 @@ def _running_label(action: str) -> str:
     }.get(action, f"{action.title()} running")
 
 
-def _terminal_label(action: str, outcome: dict[str, Any], *, folder: str) -> str:
-    status = outcome.get("status")
-    if status == "in_progress":
-        return "In progress"
-    if status == "skipped":
-        return "Not run"
-    if outcome.get("credential_expired"):
-        return "Credentials expired"
-    if folder == "config" and status == "infrastructure_error":
-        return "Configuration error"
-    if status == "infrastructure_error":
-        return "Infrastructure error"
-    if outcome.get("succeeded") is False or status == "failed":
-        return "Failed"
-    return {
-        "plan": "Plan succeeded",
-        "drift": "Drift check succeeded",
-        "report": "Report succeeded",
-        "apply": "Apply succeeded",
-        "destroy": "Destroy succeeded",
-    }.get(action, f"{action.title()} succeeded")
-
-
-def _summary_line(
-    folder: str, account_id: str, commit_hash: str, status_label: str
-) -> str:
-    account = account_id if account_id else "—"
-    return f"`{folder}` · {account} · {_short_hash(commit_hash)} · {status_label}"
-
-
 def _wrap_collapsed(summary_line: str, body: str) -> str:
     return f"<details>\n<summary>{_html_escape(summary_line)}</summary>\n\n{body.rstrip()}\n\n</details>"
-
-
-def _folder_heading(folder: str, account_id: str, *, action: str = "plan") -> str:
-    if action == "report":
-        return f'## Report - "{folder}" ({account_id})\n\n'
-    return f"## Terraform: `{folder}` ({account_id})\n\n"
-
-
-def section(title: str, text: str, language: str = "") -> str:
-    body = _fenced_block(text, language) if text else "No artifact was produced."
-    return f"### {title}\n<details>\n<summary>show details</summary>\n\n{body}\n\n</details>"
 
 
 def extract_plan_summary(plan_output: str) -> dict[str, str] | None:
@@ -278,61 +231,6 @@ def command_context_block(
     )
     if trigger_line:
         lines.append(trigger_line)
-    if run_id:
-        lines.append(f"- run id: `{run_id}`")
-    if commit_hash:
-        lines.append(f"- commit: `{_short_hash(commit_hash)}`")
-    return "\n".join(lines)
-
-
-def mutation_command_context_block(
-    *,
-    action: str,
-    requested_comment_body: str | None,
-    requested_comment_id: int | None = None,
-    requested_comment_link: str | None = None,
-    confirmation_comment_body: str | None = None,
-    confirmation_comment_id: int | None = None,
-    confirmation_comment_link: str | None = None,
-    run_id: str | None = None,
-    commit_hash: str | None = None,
-    comments_removed: bool = False,
-) -> str:
-    """Command header for terminal apply/destroy comments with both request and confirm."""
-    requested_line = _describe_command_line(
-        action,
-        folders=None,
-        comment_body=requested_comment_body,
-    )
-    confirmation_line = (
-        normalized_command_context_line(confirmation_comment_body)
-        if confirmation_comment_body and confirmation_comment_body.strip()
-        else f"tf {action} confirm <redacted>"
-    )
-    lines = [
-        "### openci-tf command",
-        "",
-        f"- requested command: `{requested_line}`",
-        f"- confirmation command: `{confirmation_line}`",
-    ]
-    if requested_comment_id is not None:
-        if comments_removed or not requested_comment_link:
-            lines.append(
-                f"- requested comment id: `{requested_comment_id}` (removed after acknowledgement)"
-            )
-        else:
-            lines.append(
-                f"- requested comment: [{requested_comment_id}]({requested_comment_link})"
-            )
-    if confirmation_comment_id is not None:
-        if comments_removed or not confirmation_comment_link:
-            lines.append(
-                f"- confirmation comment id: `{confirmation_comment_id}` (removed after acknowledgement)"
-            )
-        else:
-            lines.append(
-                f"- confirmation comment: [{confirmation_comment_id}]({confirmation_comment_link})"
-            )
     if run_id:
         lines.append(f"- run id: `{run_id}`")
     if commit_hash:
@@ -515,12 +413,10 @@ def closed_pr_rejection_comment(
     )
 
 
-_PLAN_SUMMARY_ACTIONS = frozenset({"plan", "plan_destroy"})
-
 _BOUND_PLAN_CHARS = 8000
-_REPORT_PLAN_CHARS = 2500
+_REPORT_PLAN_CHARS = 32_000
 _BOUND_PLAN_TRUNCATION_NOTE = (
-    "\n\n> Output truncated. See S3 artifacts for full plan show."
+    "\n\n> Output truncated. See S3 artifacts for full plan output."
 )
 
 
@@ -722,33 +618,6 @@ class _ReportRow:
         if self.security in {"medium", "low"}:
             return "⚠️"
         return "❔"
-
-
-def _plan_cell(plan_text: str) -> str:
-    summary = extract_plan_summary(plan_text)
-    if not summary:
-        return "unknown"
-    add = int(summary["add"])
-    change = int(summary["change"])
-    destroy = int(summary["destroy"])
-    if add == 0 and change == 0 and destroy == 0:
-        return "no changes"
-    return f"+{add} ~{change} -{destroy}"
-
-
-def _drift_cell(plan_text: str) -> str:
-    summary = extract_plan_summary(plan_text)
-    if not summary:
-        return "unknown"
-    if all(int(summary[key]) == 0 for key in ("add", "change", "destroy")):
-        return "clean"
-    return "changes"
-
-
-def _summary_delta_header(action: str) -> str:
-    if action == "report":
-        return "Drift"
-    return "Plan" if action in _PLAN_SUMMARY_ACTIONS else "Drift Check"
 
 
 def _plan_counts(plan_text: str) -> tuple[int, int, int] | None:
@@ -1362,22 +1231,6 @@ def _report_summary(
     return "\n".join(lines)
 
 
-def _summary_delta_cell(action: str, plan_text: str) -> str:
-    if action in _PLAN_SUMMARY_ACTIONS:
-        return _plan_cell(plan_text)
-    return _drift_cell(plan_text)
-
-
-def _security_cell(tfsec_text: str) -> str:
-    severity = _analyze_tfsec_severity(tfsec_text)
-    return {
-        "success": "clean",
-        "high": "high",
-        "medium": "medium",
-        "low": "low",
-    }.get(severity, "unknown")
-
-
 def _cost_cell(infracost_text: str) -> str:
     monthly = extract_infracost_monthly(infracost_text)
     return monthly if monthly != "N/A" else " "
@@ -1557,149 +1410,6 @@ def mutation_terminal_comment(
         _mutation_summary_line(folder, action, succeeded=succeeded),
         "\n\n".join(body_parts),
     )
-
-
-def ci_details(commit_hash: str, console_url: str | None, status: str) -> str:
-    short = commit_hash[:7] if commit_hash else "unknown"
-    icon = " SUCCESS" if status == "succeeded" else " FAILED"
-    lines = ["\n## CI Details", f"+ `{short}`"]
-    if console_url:
-        lines.append(f"+ [ci pipeline]({console_url})")
-    lines.append(f"+ {icon}")
-    return "\n".join(lines)
-
-
-def initialize(text: str) -> str:
-    return section("1️⃣ Initialize", _decorate_init(text))
-
-
-def validate(text: str) -> str:
-    clean = _neutralize_comment_identity_lines(_strip_ansi(text))
-    if "success!" in clean.lower() or "configuration is valid" in clean.lower():
-        body = "\n **Configuration is valid**\n"
-    else:
-        body = f"\n **Validation failed**\n\n{_fenced_block(clean)}"
-    return f"### Validate\n<details>\n<summary>show details</summary>\n{body}\n\n</details>"
-
-
-def _decorate_init(text: str) -> str:
-    result = []
-    for line in _strip_ansi(text).splitlines():
-        if "Initializing the backend" in line:
-            result.append("🔧 " + line)
-        elif "Initializing provider plugins" in line:
-            result.append("🔌 " + line)
-        elif "- Installing" in line or "- Using" in line:
-            result.append("   " + line.strip("- "))
-        elif "successfully initialized" in line.lower():
-            result.append("\n " + line)
-        elif "warning" in line.lower() or "error" in line.lower():
-            result.append(" " + line)
-        else:
-            result.append(line)
-    return "\n".join(result)
-
-
-def plan(text: str) -> str:
-    text = _neutralize_comment_identity_lines(_strip_ansi(text))
-    summary = extract_plan_summary(text)
-    parts: list[str] = []
-    if summary:
-        parts.extend(
-            [
-                "\n** Plan Summary:**",
-                f"- **{summary['add']} to add**",
-                f"- **{summary['change']} to change**",
-                f"- **{summary['destroy']} to destroy**",
-                "",
-            ]
-        )
-    highlighted = "\n".join(
-        "+ " + line
-        if line.strip().startswith("+ resource")
-        else "- " + line
-        if line.strip().startswith("- resource")
-        else "! " + line
-        if line.strip().startswith(("~ resource", "# resource"))
-        else line
-        for line in text.splitlines()
-    )
-    parts.append(_fenced_block(highlighted, "diff"))
-    body = "\n".join(parts)
-    return f"### Plan\n<details>\n<summary>show details</summary>\n{body}\n\n</details>"
-
-
-def plan_artifact_pointer(
-    *,
-    repo_name: str,
-    run_id: str,
-    folder: str,
-    pr_number: int | None = None,
-    pointer_type: str = "plan",
-) -> str:
-    if pr_number is not None:
-        plan_env = pr_pointer_key(
-            repo_name=repo_name,
-            pr_number=pr_number,
-            folder_path=folder,
-            pointer_type=pointer_type,
-        )
-        pointer_label = (
-            "Destroy plan pointer" if pointer_type == "destroy" else "Plan pointer"
-        )
-        return (
-            "### Plan Artifact\n"
-            f"- Execution ID: `{run_id}`\n"
-            f"- {pointer_label}: `{plan_env}`\n\n"
-            "> Checksums and expiry live in manifest.json."
-        )
-    run_scoped = run_scoped_plan_pointer(
-        repo_name=repo_name, run_id=run_id, folder_path=folder
-    )
-    return (
-        "### Plan Artifact\n"
-        f"- Execution ID: `{run_id}`\n"
-        f"- Run-scoped plan: `{run_scoped}`\n\n"
-        "> Checksums and expiry live in manifest.json."
-    )
-
-
-def execution_artifacts_section(
-    run_id: str,
-    manifest_s3_uri: str,
-) -> str:
-    """Copyable execution-artifact pointers for PR comments and registry consumers."""
-    return (
-        "### Execution Artifacts\n"
-        f"- Execution ID: `{run_id}`\n"
-        f"- Manifest: `{manifest_s3_uri}`\n"
-    )
-
-
-def infracost(text: str) -> str:
-    if _artifact_skipped(text, "not run"):
-        return ""
-    body = "\n **Cost Analysis**\n\n"
-    try:
-        data = json.loads(text)
-        skipped = data.get("skipped")
-    except json.JSONDecodeError:
-        # Unparseable artifact: render the explicit unavailable message
-        # instead of an empty summary plus a garbage table.
-        body += "Cost data unavailable (invalid JSON).\n"
-        return (
-            "### Cost Analysis\n<details>\n<summary>show details</summary>\n"
-            f"{body}\n</details>"
-        )
-    if skipped:
-        body += "**Summary:**\n- Cost analysis: not configured\n\n"
-    else:
-        monthly = extract_infracost_monthly(text)
-        if monthly not in {"N/A", "not configured"}:
-            body += f"**Summary:**\n- Monthly cost {monthly}\n\n"
-    table = render_infracost_table(text)
-    body += _fenced_block(table)
-    return f"### Cost Analysis\n<details>\n<summary>show details</summary>\n{body}\n\n</details>"
 
 
 def _format_error(outcome: dict[str, Any]) -> str:

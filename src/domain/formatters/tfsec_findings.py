@@ -183,13 +183,3 @@ def tfsec_summary_line(text: str) -> tuple[str, int | None]:
     if "LOW" in severities:
         return "low", len(validated)
     return "unknown", None
-
-
-def tfsec(text: str) -> str:
-    if _artifact_skipped(text, "not run"):
-        return ""
-    readable = _tfsec_text_from_json(text)
-    if not readable.strip():
-        return ""
-    body = "\n **Security Scan Results**\n\n```\n" + readable + "\n```"
-    return f"### Security Scan\n<details>\n<summary>show details</summary>\n{body}\n\n</details>"

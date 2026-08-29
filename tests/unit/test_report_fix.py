@@ -17,10 +17,8 @@ from src.domain.cmd_builder.script_generator import ScriptParams, render
 from src.domain.engine.result import derive_error_from_steps
 from src.domain.formatters.artifacts import (
     folder_comment,
-    infracost,
     status_comment_in_progress,
     summary,
-    tfsec,
 )
 from src.platform.aws.infracost_key import validate_infracost_key_path
 from src.services.render import handler as render_handler
@@ -212,13 +210,6 @@ def test_derive_error_prefers_actionable_not_set_over_noise():
     assert derived == "API key not set"
 
 
-def test_infracost_skip_marker_renders_not_configured():
-    payload = '{"skipped":true,"reason":"not configured"}'
-    rendered = infracost(payload)
-    assert "not configured" in rendered
-    assert "None" not in rendered
-
-
 def test_status_comment_in_progress_matches_original_shape():
     execution_arn = "arn:aws:states:us-east-1:123456789012:execution:openci-tf:abc"
     console_url = f"https://console.aws.amazon.com/states/home?region=us-east-1#/executions/details/{execution_arn}"
@@ -324,34 +315,6 @@ def test_summary_tfsec_security_unknown_unless_valid_empty(
     else:
         assert "<summary>1 clean folder ✅</summary>" in rendered
         assert "### Needs attention" not in rendered
-
-
-def test_tfsec_formatter_omits_not_run_marker():
-    assert tfsec('{"skipped":true,"reason":"not run"}') == ""
-
-
-def test_tfsec_formatter_renders_json_findings_as_human_text():
-    payload = json.dumps({
-        "results": [
-            {
-                "severity": "HIGH",
-                "rule_description": "S3 bucket should block public access",
-                "location": {"filename": "main.tf", "start_line": 12, "end_line": 18},
-                "resource": "aws_s3_bucket.logs",
-            }
-        ]
-    })
-    rendered = tfsec(payload)
-    assert "Result #1 HIGH S3 bucket should block public access" in rendered
-    assert "main.tf:12-18" in rendered
-    assert "aws_s3_bucket.logs" in rendered
-    assert '{"results"' not in rendered
-
-
-def test_tfsec_formatter_handles_empty_and_malformed_json():
-    assert "No problems detected" in tfsec('{"results":[]}')
-    rendered = tfsec("not-json but readable output")
-    assert "not-json but readable output" in rendered
 
 
 def test_bound_comment_truncates_large_bodies():

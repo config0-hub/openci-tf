@@ -270,17 +270,6 @@ def get_bounded_text(bucket: str, key: str, max_bytes: int, allowed_content_type
         raise
 
 
-def list_prefix_object_names(bucket: str, prefix: str) -> frozenset[str]:
-    """Return relative object names beneath one prefix without reading bodies."""
-    client = boto3.client("s3")
-    response = client.list_objects_v2(Bucket=bucket, Prefix=prefix)
-    return frozenset(
-        item["Key"].removeprefix(prefix)
-        for item in response.get("Contents", [])
-        if item.get("Key", "").startswith(prefix)
-    )
-
-
 def list_text_prefix(bucket: str, prefix: str, max_bytes: int, allowed_content_types: frozenset[str]) -> dict[str, str]:
     """Read approved, bounded text artifacts beneath one execution prefix.
 

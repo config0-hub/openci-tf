@@ -8,14 +8,8 @@ import pytest
 from src.domain.formatters.artifacts import (
     closed_pr_rejection_comment,
     command_context_block,
-    mutation_command_context_block,
     folder_comment,
-    infracost,
-    initialize,
-    plan,
     summary,
-    tfsec,
-    validate,
 )
 
 FIXTURES = Path("tests/fixtures/artifacts")
@@ -31,16 +25,6 @@ _FIXTURE_FILES = {
 def _fixture_text(name: str) -> str:
     return (FIXTURES / _FIXTURE_FILES[name]).read_text()
 
-
-@pytest.mark.parametrize(("formatter", "artifact", "golden"), [
-    (initialize, "init.out", "init.md"),
-    (validate, "validate.out", "validate.md"),
-    (plan, "tf/plan.out", "plan.md"),
-    (tfsec, "tfsec.json", "tfsec.md"),
-    (infracost, "infracost.json", "infracost.md"),
-])
-def test_recorded_artifact_section_matches_golden(formatter, artifact, golden):
-    assert formatter(_fixture_text(artifact)) == (FIXTURES / golden).read_text().rstrip("\n")
 
 
 def test_summary_plan_destroy_uses_destroy_output_and_security():
@@ -303,21 +287,3 @@ def test_closed_pr_rejection_comment_does_not_echo_confirm_token():
     assert body.startswith("openci-tf ignored")
     assert "abcdef123456" not in body
     assert "confirm <redacted>" in body
-
-
-def test_mutation_command_context_block_redacts_and_lists_both_commands():
-    block = mutation_command_context_block(
-        action="apply",
-        requested_comment_body="tf apply terraform/eu-west-1/02-ec2",
-        requested_comment_id=10,
-        confirmation_comment_body="tf apply confirm secret-token",
-        confirmation_comment_id=11,
-        run_id="run-apply",
-        commit_hash="a" * 40,
-        comments_removed=True,
-    )
-    assert "- requested command: `tf apply terraform/eu-west-1/02-ec2`" in block
-    assert "- confirmation command: `tf apply confirm <redacted>`" in block
-    assert "secret-token" not in block
-    assert "requested comment id: `10` (removed after acknowledgement)" in block
-    assert "confirmation comment id: `11` (removed after acknowledgement)" in block

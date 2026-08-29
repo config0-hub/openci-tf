@@ -11,7 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from src.domain.engine.manifest import BucketSet, ManifestBinding, build_manifest, validate_manifest_schema
-from src.domain.formatters.artifacts import execution_artifacts_section, folder_comment
+from src.domain.formatters.artifacts import folder_comment
 from src.domain.run.api_authorization import (
     ApiAuthorizationError,
     resolve_caller_policy,
@@ -836,15 +836,6 @@ def test_api_gateway_routes_use_aws_iam_authorizer():
     ):
         block = source.split(f'route_key          = "{route}"', 1)[1].split("}", 1)[0]
         assert 'authorization_type = "AWS_IAM"' in block
-
-
-def test_execution_artifacts_section_is_copyable():
-    section = execution_artifacts_section(
-        "run.abc.0",
-        "s3://tmp/openci-tf/org/repo/run.abc.0/infra/a/manifest.json",
-    )
-    assert "Execution ID: `run.abc.0`" in section
-    assert "Manifest: `s3://tmp/openci-tf/org/repo/run.abc.0/infra/a/manifest.json`" in section
 
 
 def test_folder_comment_includes_execution_artifacts_when_provided():

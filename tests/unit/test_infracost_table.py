@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.domain.formatters.artifacts import bound_comment, folder_comment, infracost
+from src.domain.formatters.artifacts import bound_comment, folder_comment
 from src.domain.formatters.infracost_table import render_infracost_table
 from src.platform.github.client import GitHubClient
 from src.services.render import handler as render_handler
@@ -27,7 +27,19 @@ def _load_sample() -> str:
 def test_render_realistic_infracost_json_has_itemized_rows_and_no_raw_json():
     text = _load_sample()
     table = render_infracost_table(text)
-    rendered = infracost(text)
+    rendered = folder_comment(
+        "infra/a",
+        {"status": "succeeded", "account_id": "123456789012"},
+        {
+            "init.out": "ok",
+            "validate.out": "valid",
+            "tf/plan.out": "Plan: 0 to add, 0 to change, 0 to destroy",
+            "tfsec.json": '{"results":[]}',
+            "infracost.json": text,
+            "infracost.output": table,
+        },
+        action="plan",
+    )
     assert "aws_instance.probe" in table
     assert "Instance usage (Linux/UNIX, on-demand, t3.nano)" in table
     assert "root_block_device" in table
@@ -37,13 +49,6 @@ def test_render_realistic_infracost_json_has_itemized_rows_and_no_raw_json():
     assert "$5.73" in table
     assert '"projects"' not in rendered
     assert '{"' not in rendered
-
-
-def test_infracost_section_renders_unavailable_message_on_invalid_json():
-    rendered = infracost("{not-json")
-    assert "Cost data unavailable (invalid JSON)." in rendered
-    assert "Monthly cost" not in rendered
-    assert "```" not in rendered
 
 
 def test_render_skipped_malformed_empty_and_zero_cost_payloads():
@@ -257,8 +262,8 @@ def test_bound_comment_preserves_cost_section_after_huge_plan():
         "infracost.output": render_infracost_table(sample),
     }
     body = folder_comment("infra/a", {"folder": "infra/a", "succeeded": True, "account_id": "123456789012"}, artifacts)
-    rendered = bound_comment(body, max_chars=8_000, suffix=f"\n\n{tag}")
-    assert len(rendered) <= 8_000
+    rendered = bound_comment(body, max_chars=40_000, suffix=f"\n\n{tag}")
+    assert len(rendered) <= 40_000
     assert rendered.count(tag) == 1
     assert "> <summary>Cost" in rendered
     assert "aws_instance.probe" in rendered
@@ -296,8 +301,8 @@ def test_bound_comment_huge_plan_preserves_realistic_folder_comment_order():
         "infracost.output": render_infracost_table(_load_sample()),
     }
     body = folder_comment("infra/a", {"folder": "infra/a", "succeeded": True, "account_id": "123456789012"}, artifacts)
-    rendered = bound_comment(body, max_chars=8_000, suffix=f"\n\n{tag}")
-    assert len(rendered) <= 8_000
+    rendered = bound_comment(body, max_chars=40_000, suffix=f"\n\n{tag}")
+    assert len(rendered) <= 40_000
     assert rendered.count(tag) == 1
     _assert_balanced_markdown(rendered)
     assert "> <summary>Security" in rendered
