@@ -906,7 +906,7 @@ def test_pipeline_apply_footer_renders_next_step_and_completion():
 
     assert (
         _pipeline_apply_footer(event, "apply", outcomes, [])
-        == "next: tf apply pipeline data/primary step 2"
+        == "> [!NOTE]\n> Next step: `tf apply pipeline data/primary step 2`"
     )
 
     complete_event = {
@@ -918,7 +918,7 @@ def test_pipeline_apply_footer_renders_next_step_and_completion():
     }
     assert (
         _pipeline_apply_footer(complete_event, "apply", outcomes, [])
-        == "pipeline data/primary complete (2 steps)"
+        == "> [!NOTE]\n> Pipeline `data/primary` complete (2 steps)."
     )
     assert _pipeline_apply_footer(event, "apply", [{"status": "failed"}], []) is None
 

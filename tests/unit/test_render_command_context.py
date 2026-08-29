@@ -51,11 +51,12 @@ def _plan_event(**overrides) -> dict:
     return event
 
 
-def test_with_command_context_prefixes_body_for_github_pr():
+def test_with_command_context_appends_metadata_for_github_pr():
     body = _with_command_context(_plan_event(), "## status", run_id="run-1")
-    assert body.startswith("### openci-tf command")
-    assert "---" in body
-    assert "## status" in body
+    assert body.startswith("## status")
+    assert "<summary>Metadata</summary>" in body
+    assert "### openci-tf command" not in body
+    assert "- command: `tf plan infra/a`" in body
 
 
 def _report_event(**overrides) -> dict:
@@ -170,12 +171,13 @@ def test_report_placeholder_omits_command_metadata(monkeypatch):
     assert "## openci-tf report" in posted[1]
 
 
-def test_plan_render_still_prefixes_command_metadata(monkeypatch):
+def test_plan_render_appends_metadata(monkeypatch):
     monkeypatch.setenv("LOCKS_TABLE_NAME", "locks")
     monkeypatch.setenv("TMP_BUCKET_NAME", "tmp")
     monkeypatch.setattr(render, "get_github_token", lambda _: "token")
     monkeypatch.setattr(render.boto3, "resource", lambda *_: SimpleNamespace(Table=lambda _: object()))
     monkeypatch.setattr(render, "list_text_prefix", lambda *_: {})
+    monkeypatch.setattr(render, "list_prefix_object_names", lambda *_: frozenset())
     monkeypatch.setattr(render, "_plan_artifact_metadata", lambda *_, **__: None)
     monkeypatch.setattr(render.run_lock, "release", lambda *_, **__: None)
     monkeypatch.setattr(render, "GitHubClient", lambda _: _noop_github_client())
@@ -191,8 +193,9 @@ def test_plan_render_still_prefixes_command_metadata(monkeypatch):
     render.handler(_plan_event(), None)
 
     assert posted
-    assert any("### openci-tf command" in body for body in posted)
+    assert any("<summary>Metadata</summary>" in body for body in posted)
     assert any("- command: `tf plan infra/a`" in body for body in posted)
+    assert all("### openci-tf command" not in body for body in posted)
 
 
 def test_generated_marker_cleanup_deletes_only_bot_comments():
@@ -275,6 +278,7 @@ def test_terminal_apply_recovers_metadata_and_deletes_request_intent_and_confirm
     )
     monkeypatch.setattr(render.boto3, "resource", lambda *_: SimpleNamespace(Table=lambda _: object()))
     monkeypatch.setattr(render, "list_text_prefix", lambda *_: {})
+    monkeypatch.setattr(render, "list_prefix_object_names", lambda *_: frozenset())
     monkeypatch.setattr(render, "_plan_artifact_metadata", lambda *_, **__: None)
     monkeypatch.setattr(render.run_lock, "release", lambda *_, **__: None)
     monkeypatch.setattr(render, "_delete_and_repost", lambda *_args, **_kwargs: 1)
@@ -459,6 +463,7 @@ def test_render_cleanup_failure_raises(monkeypatch):
     monkeypatch.setattr(render, "get_github_token", lambda _: "token")
     monkeypatch.setattr(render.boto3, "resource", lambda *_: SimpleNamespace(Table=lambda _: object()))
     monkeypatch.setattr(render, "list_text_prefix", lambda *_: {})
+    monkeypatch.setattr(render, "list_prefix_object_names", lambda *_: frozenset())
     monkeypatch.setattr(render, "_plan_artifact_metadata", lambda *_, **__: None)
     monkeypatch.setattr(render.run_lock, "release", lambda *_, **__: None)
     monkeypatch.setattr(render, "_delete_and_repost", lambda *_args, **_kwargs: 1)
@@ -579,7 +584,7 @@ def test_pipeline_failure_deletes_mutation_command_comments_and_sweeps_token(mon
     assert result["pipeline_failure_rendered"] is True
     assert deleted_batches == [[55, 10, 11]]
     assert swept == [("deadbeef", {55, 10, 11})]
-    assert posted[0].startswith("### openci-tf command")
+    assert posted[0].endswith("</details>") or "<summary>Metadata</summary>" in posted[0]
     assert "requested command: `tf apply infra/a`" in posted[0]
 
 
@@ -717,6 +722,7 @@ def test_render_cleanup_404_is_not_an_error(monkeypatch):
     monkeypatch.setattr(render, "get_github_token", lambda _: "token")
     monkeypatch.setattr(render.boto3, "resource", lambda *_: SimpleNamespace(Table=lambda _: object()))
     monkeypatch.setattr(render, "list_text_prefix", lambda *_: {})
+    monkeypatch.setattr(render, "list_prefix_object_names", lambda *_: frozenset())
     monkeypatch.setattr(render, "_plan_artifact_metadata", lambda *_, **__: None)
     monkeypatch.setattr(render.run_lock, "release", lambda *_, **__: None)
     monkeypatch.setattr(render, "_delete_and_repost", lambda *_args, **_kwargs: 1)
@@ -767,6 +773,7 @@ def test_render_paths_prefix_command_context(flag, monkeypatch):
     monkeypatch.setattr(render, "_delete_transient_status_comment", lambda *_args: [])
     monkeypatch.setattr(render.boto3, "resource", lambda *_: SimpleNamespace(Table=lambda _: object()))
     monkeypatch.setattr(render, "list_text_prefix", lambda *_: {})
+    monkeypatch.setattr(render, "list_prefix_object_names", lambda *_: frozenset())
     monkeypatch.setattr(render, "_plan_artifact_metadata", lambda *_, **__: None)
     monkeypatch.setattr(render.run_lock, "release", lambda *_, **__: None)
 
@@ -800,4 +807,4 @@ def test_render_paths_prefix_command_context(flag, monkeypatch):
         )
 
     assert captured
-    assert any("### openci-tf command" in body for body in captured)
+    assert any("<summary>Metadata</summary>" in body for body in captured)

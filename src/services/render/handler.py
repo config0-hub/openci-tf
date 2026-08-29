@@ -181,7 +181,7 @@ def _pipeline_apply_footer(
     outcomes: list[dict[str, Any]],
     skipped: list[dict[str, Any]],
 ) -> str | None:
-    if action != "apply":
+    if action not in {"apply", "destroy"}:
         return None
     webhook = event.get("webhook_info")
     if not isinstance(webhook, dict):
@@ -200,8 +200,11 @@ def _pipeline_apply_footer(
     if _terminal_status(outcomes, skipped) != "succeeded":
         return None
     if step_index < step_count:
-        return f"next: tf apply pipeline {pipeline} step {step_index + 1}"
-    return f"pipeline {pipeline} complete ({step_count} steps)"
+        return (
+            f"> [!NOTE]\n"
+            f"> Next step: `tf {action} pipeline {pipeline} step {step_index + 1}`"
+        )
+    return f"> [!NOTE]\n> Pipeline `{pipeline}` complete ({step_count} steps)."
 
 
 def _append_footer(body: str, footer: str | None) -> str:
@@ -221,8 +224,8 @@ def _mutation_folder_comment(
     run_id: str,
     repo_name: str,
     pr_number: int | None,
+    existing_names: frozenset[str] | None = None,
 ) -> str:
-    account_id = str(outcome.get("account_id") or "")
     status = str(outcome.get("status") or "")
     succeeded = outcome.get("succeeded") is True and status not in {
         "failed",
@@ -255,7 +258,7 @@ def _mutation_folder_comment(
     return mutation_terminal_comment(
         action=action,
         folder=folder,
-        account_id=account_id,
+        account_id=str(outcome.get("account_id") or ""),
         commit_hash=commit_hash,
         succeeded=succeeded,
         pinned_plan_artifact=plan_artifact,
@@ -266,6 +269,15 @@ def _mutation_folder_comment(
         plan_show_pointer=plan_pointer,
         source_plan_run_id=source_run_id,
         error=terminal_error,
+        run_id=run_id,
+        repo_name=repo_name,
+        pr_number=pr_number,
+        existing_names=existing_names,
+        tmp_bucket=os.environ.get("TMP_BUCKET_NAME", ""),
+        region=_aws_region(),
+        hub_account_id=os.environ.get("ENGINE_CODEBUILD_ACCOUNT_ID") or None,
+        identity_center_start_url=os.environ.get("AWS_CONSOLE_START_URL") or None,
+        identity_center_role_name=os.environ.get("AWS_CONSOLE_ROLE_NAME") or None,
     )
 
 
@@ -280,7 +292,6 @@ def _render_folder_body(
     run_id: str,
     repo: str,
     render_items: list[dict[str, Any]],
-    manifest_s3_uri: str | None,
     pr_number: int | None = None,
     existing_names: frozenset[str] | None = None,
 ) -> str:
@@ -295,6 +306,7 @@ def _render_folder_body(
             run_id=run_id,
             repo_name=repo,
             pr_number=pr_number,
+            existing_names=existing_names,
         )
     return folder_comment(
         folder,
@@ -303,8 +315,6 @@ def _render_folder_body(
         action=action,
         commit_hash=commit_hash,
         console_url=console_url,
-        include_ci_details=action != "report" and len(render_items) == 1,
-        manifest_s3_uri=manifest_s3_uri,
         run_id=run_id,
         repo_name=repo,
         pr_number=pr_number,
@@ -413,7 +423,14 @@ def _render_placeholder(event: dict[str, Any]) -> dict[str, Any]:
             client,
             repo,
             pr,
-            _with_command_context(event, body, run_id=run_id),
+            _with_command_context(
+                event,
+                body,
+                run_id=run_id,
+                account_id=item.get("account_id")
+                if isinstance(item.get("account_id"), str)
+                else None,
+            ),
             action,
             folder,
         )
@@ -422,7 +439,11 @@ def _render_placeholder(event: dict[str, Any]) -> dict[str, Any]:
         repo,
         pr,
         _with_command_context(
-            event, pending_summary(folders, skipped, action=action), run_id=run_id
+            event,
+            pending_summary(folders, skipped, action=action),
+            run_id=run_id,
+            include_account=False,
+            include_source_plan_run_id=False,
         ),
         action,
         "all",
@@ -913,7 +934,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                     list_prefix_object_names(
                         os.environ["TMP_BUCKET_NAME"], prefix
                     )
-                    if action == "report"
+                    if _should_list_execution_artifacts(outcome)
                     else frozenset()
                 )
             else:
@@ -922,6 +943,11 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             artifacts_by_folder[folder] = artifacts
             _plan_artifact_metadata(
                 outcome, action, webhook, run_id, pr_number=scoped_pr
+            )
+            source_plan_run_id = (
+                _source_plan_run_id(outcome)
+                if action in {"apply", "destroy"}
+                else None
             )
             comment_id = _delete_and_repost(
                 client,
@@ -940,16 +966,15 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                             run_id=run_id,
                             repo=repo,
                             render_items=render_items,
-                            manifest_s3_uri=outcome.get("manifest_s3_uri")
-                            if isinstance(outcome.get("manifest_s3_uri"), str)
-                            else (outcome.get("pointers") or {}).get("manifest")
-                            if isinstance(outcome.get("pointers"), dict)
-                            else None,
                             pr_number=scoped_pr,
                             existing_names=existing_names,
                         ),
                         run_id=run_id,
                         comments_removed=True,
+                        account_id=str(outcome.get("account_id") or "")
+                        if isinstance(outcome.get("account_id"), str)
+                        else None,
+                        source_plan_run_id=source_plan_run_id,
                     ),
                     pipeline_footer,
                 ),
@@ -980,6 +1005,8 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                     ),
                     run_id=run_id,
                     comments_removed=True,
+                    include_account=False,
+                    include_source_plan_run_id=False,
                 ),
                 pipeline_footer,
             ),

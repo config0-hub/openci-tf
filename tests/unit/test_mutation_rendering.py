@@ -34,10 +34,9 @@ def _mutation_terminal_body(
 
 
 def _assert_plan_in_collapsed_details(body: str) -> None:
-    assert "## Apply succeeded" in body or "## Destroy succeeded" in body
-    assert "### Pinned plan" not in body
     assert "<details>" in body
-    assert "<summary>Pinned plan (tofu show)</summary>" in body
+    assert "> <summary>Plan " in body
+    assert "<summary>Pinned plan (tofu show)</summary>" not in body
     assert body.index("<details>") < body.index("```")
 
 
@@ -77,15 +76,13 @@ def _stub_render_mutation_dependencies(monkeypatch):
     monkeypatch.setenv("TMP_BUCKET_NAME", "tmp")
     monkeypatch.setattr(render, "get_github_token", lambda _: "token")
     monkeypatch.setattr(render.boto3, "resource", lambda *_: SimpleNamespace(Table=lambda _: object()))
-    monkeypatch.setattr(
-        render,
-        "list_text_prefix",
-        lambda *_args, **_kw: {
+    monkeypatch.setattr(render, "list_text_prefix", lambda *_args, **_kw: {
             "plan-show.out": "Plan: 0 to add, 0 to change, 1 to destroy",
             "apply.out": "Apply complete! Resources: 1 added.",
             "destroy.out": "Destroy complete! Resources: 1 destroyed.",
         },
     )
+    monkeypatch.setattr(render, "list_prefix_object_names", lambda *_: frozenset())
     monkeypatch.setattr(render, "_plan_artifact_metadata", lambda *_, **__: None)
     monkeypatch.setattr(render.run_lock, "release", lambda *_, **__: None)
     monkeypatch.setattr(render, "_delete_generated_comment", lambda *_, **__: None)
@@ -195,6 +192,7 @@ def test_render_mutation_terminal_comment_includes_source_plan_run_id(
 
     assert len(comments) == 1
     body = comments[0]
-    assert f"+ {source_label}: `{source_run_id}`" in body
+    assert f"- {source_label}: `{source_run_id}`" in body
     assert "deadbee" not in body
     assert f"tf {action} confirm <redacted>" in body
+    assert "<summary>Metadata</summary>" in body

@@ -29,7 +29,10 @@ blocked by default and require the explicit gated flow documented in
 
 GitHub PR comments are the primary result view. They summarize folder status,
 drift, security findings, and cost, with detailed output kept behind collapsed
-sections. The web console is an optional operator view for run history, folder
+sections. Plan, drift, destroy-plan, apply, and destroy terminal comments share
+one visual system: a folder summary line, blockquoted Setup/Plan/Security/Cost/
+Execution/Artifacts children for read-only work, and collapsed Metadata at the
+bottom of non-report comments. The web console is an optional operator view for run history, folder
 status, manifests, artifacts, registered repositories/accounts, locks, and gate
 visibility.
 

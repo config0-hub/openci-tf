@@ -56,11 +56,12 @@ def test_summary_plan_destroy_uses_destroy_output_and_security():
         },
         action="plan_destroy",
     )
-    assert "| Folder | Account | Plan | Security | Cost |" in rendered
-    assert f"| `infra/vpc` | `{account}` | +0 ~0 -2 | clean | $0 |" in rendered
+    assert "## openci-tf plan --destroy" in rendered
+    assert "| Folder | Drift | Security | Cost |" in rendered
+    assert "| `infra/vpc` | ⚠️ | ✅ | $0 |" in rendered
 
 
-def test_summary_plan_run_with_adds_only_shows_plan_counts():
+def test_summary_plan_run_with_adds_only_shows_icon_cells():
     account = "123456789012"
     rendered = summary(
         [{"folder": "infra/vpc", "succeeded": True, "account_id": account}],
@@ -73,11 +74,11 @@ def test_summary_plan_run_with_adds_only_shows_plan_counts():
         },
         action="plan",
     )
-    assert "| Folder | Account | Plan | Security | Cost |" in rendered
-    assert f"| `infra/vpc` | `{account}` | +3 ~0 -0 | clean | $0 |" in rendered
+    assert "| Folder | Drift | Security | Cost |" in rendered
+    assert "| `infra/vpc` | ⚠️ | ✅ | $0 |" in rendered
 
 
-def test_summary_plan_run_with_zero_delta_shows_no_changes():
+def test_summary_plan_run_with_zero_delta_shows_clean_icons():
     account = "123456789012"
     rendered = summary(
         [{"folder": "infra/vpc", "succeeded": True, "account_id": account}],
@@ -90,10 +91,10 @@ def test_summary_plan_run_with_zero_delta_shows_no_changes():
         },
         action="plan",
     )
-    assert f"| `infra/vpc` | `{account}` | no changes | clean | $0 |" in rendered
+    assert "| `infra/vpc` | ✅ | ✅ | $0 |" in rendered
 
 
-def test_summary_drift_run_keeps_drift_check_column():
+def test_summary_drift_run_uses_report_columns():
     account = "123456789012"
     rendered = summary(
         [{"folder": "infra/vpc", "succeeded": True, "account_id": account}],
@@ -106,18 +107,25 @@ def test_summary_drift_run_keeps_drift_check_column():
         },
         action="drift",
     )
-    assert "| Folder | Account | Drift Check | Security | Cost |" in rendered
-    assert f"| `infra/vpc` | `{account}` | changes | clean | $0 |" in rendered
+    assert "## openci-tf drift" in rendered
+    assert "| Folder | Drift | Security | Cost |" in rendered
+    assert "| `infra/vpc` | ⚠️ | ✅ | $0 |" in rendered
 
 
 def test_summary_drift_run_clean_when_no_delta():
     account = "123456789012"
     rendered = summary(
         [{"folder": "infra/vpc", "succeeded": True, "account_id": account}],
-        {"infra/vpc": {"tf/plan.out": "Plan: 0 to add, 0 to change, 0 to destroy"}},
+        {
+            "infra/vpc": {
+                "tf/plan.out": "Plan: 0 to add, 0 to change, 0 to destroy",
+                "tfsec.json": '{"results":[]}',
+                "infracost.json": '{"totalMonthlyCost":"0"}',
+            }
+        },
         action="drift",
     )
-    assert f"| `infra/vpc` | `{account}` | clean |" in rendered
+    assert "| `infra/vpc` | ✅ | ✅ |" in rendered
 
 
 def test_summary_table_uses_real_artifact_producer_shapes():
@@ -127,17 +135,28 @@ def test_summary_table_uses_real_artifact_producer_shapes():
         {"folder": "drift", "account_id": account, "succeeded": True},
         {"folder": "failed", "account_id": account, "status": "failed"},
         {"folder": "broken", "account_id": account, "status": "infrastructure_error"},
-    ], {"drift": {"tf/plan.out": "Plan: 0 to add, 1 to change, 0 to destroy", "tfsec.json": '{"results":[{"severity":"MEDIUM"}]}', "infracost.json": '{"totalMonthlyCost":"12.50"}'}}, action="plan")
-    assert "| Folder | Account | Plan | Security | Cost |" in rendered
-    assert f"| `drift` | `{account}` | +0 ~1 -0 | medium | $12.50 |" in rendered
-    assert f"| `broken` | `{account}` | failed | not run | n/a |" in rendered
+    ], {
+        "good": {
+            "tf/plan.out": "not a plan",
+            "tfsec.json": '{"results":[]}',
+            "infracost.json": '{"totalMonthlyCost":"0"}',
+        },
+        "drift": {
+            "tf/plan.out": "Plan: 0 to add, 1 to change, 0 to destroy",
+            "tfsec.json": '{"results":[{"severity":"MEDIUM"}]}',
+            "infracost.json": '{"totalMonthlyCost":"12.50"}',
+        },
+    }, action="plan")
+    assert "| Folder | Drift | Security | Cost |" in rendered
+    assert "| `drift` | ⚠️ | ⚠️ | $12.50 |" in rendered
+    assert "| `broken` | ❌ | ⏭️ |" in rendered
 
 
-def test_folder_comment_uses_terraform_heading_for_plan():
+def test_folder_comment_uses_report_layout_for_plan():
     artifacts = {name: _fixture_text(name) for name in ("init.out", "validate.out", "tf/plan.out", "tfsec.json", "infracost.json")}
     rendered = folder_comment("infra/good", {"status": "succeeded", "account_id": "123456789012"}, artifacts, action="plan")
-    assert "## Terraform: `infra/good` (123456789012)" in rendered
-    for heading in ("Initialize", "Validate", "Plan", "Security Scan", "Cost Analysis"):
+    assert "infra/good · Drift" in rendered
+    for heading in ("> <summary>Setup", "> <summary>Plan", "> <summary>Security", "> <summary>Cost"):
         assert heading in rendered
 
 
@@ -174,7 +193,7 @@ def test_folder_comment_redacts_confirm_token_in_terminal_error():
     assert "confirm <redacted>" in rendered
 
 
-def test_folder_comment_plan_destroy_uses_destroy_output_and_pointer():
+def test_folder_comment_plan_destroy_uses_destroy_output():
     rendered = folder_comment(
         "infra/good",
         {"status": "succeeded", "account_id": "123456789012"},
@@ -182,25 +201,25 @@ def test_folder_comment_plan_destroy_uses_destroy_output_and_pointer():
             "init.out": "init ok",
             "validate.out": "valid",
             "destroy.plan.out": "Plan: 0 to add, 0 to change, 1 to destroy",
+            "tfsec.json": '{"results":[]}',
+            "infracost.json": '{"totalMonthlyCost":"0"}',
         },
         action="plan_destroy",
         run_id="1700000000000.deadbeef",
         repo_name="org/repo",
         pr_number=5,
     )
-    assert "Plan_Destroy succeeded" in rendered
+    assert "infra/good · Drift" in rendered
     assert "1 to destroy" in rendered
-    assert "Destroy plan pointer" in rendered
-    assert "openci-tf/org/repo/pr-5/infra/good/destroy.env" in rendered
-    assert "plan.env" not in rendered
+    assert "> <summary>Plan" in rendered
 
 
 @pytest.mark.parametrize("action", ["plan"])
-def test_folder_comment_plan_includes_scan_and_cost_sections(action):
+def test_folder_comment_plan_includes_security_and_cost_children(action):
     artifacts = {name: _fixture_text(name) for name in ("init.out", "validate.out", "tf/plan.out", "tfsec.json", "infracost.json")}
     rendered = folder_comment("infra/good", {"status": "succeeded", "account_id": "123456789012"}, artifacts, action=action)
 
-    for heading in ("Initialize", "Validate", "Plan", "Security Scan", "Cost Analysis"):
+    for heading in ("> <summary>Setup", "> <summary>Plan", "> <summary>Security", "> <summary>Cost"):
         assert heading in rendered
 
 
@@ -235,16 +254,13 @@ def test_folder_comment_report_uses_report_layout():
 
 
 @pytest.mark.parametrize("artifacts", [
-    {name: _fixture_text(name) for name in ("init.out", "validate.out", "tf/plan.out")},
     {name: _fixture_text(name) for name in ("init.out", "validate.out", "tf/plan.out", "tfsec.json", "infracost.json")},
 ])
-def test_folder_comment_drift_omits_scan_and_cost_sections(artifacts):
+def test_folder_comment_drift_uses_report_layout(artifacts):
     rendered = folder_comment("infra/good", {"status": "succeeded", "account_id": "123456789012"}, artifacts, action="drift")
 
-    for heading in ("Initialize", "Validate", "Plan"):
+    for heading in ("> <summary>Setup", "> <summary>Plan", "> <summary>Security", "> <summary>Cost"):
         assert heading in rendered
-    assert "Security Scan" not in rendered
-    assert "Cost Analysis" not in rendered
 
 
 def test_folder_comment_null_error_renders_unknown_error():

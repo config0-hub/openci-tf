@@ -340,6 +340,137 @@ def mutation_command_context_block(
     return "\n".join(lines)
 
 
+def _metadata_comment_line(
+    comment_id: int | None,
+    *,
+    label: str,
+    comment_link: str | None = None,
+    comments_removed: bool = False,
+) -> str | None:
+    if comment_id is None:
+        return None
+    if comments_removed or not comment_link:
+        return f"- {label} comment id: `{comment_id}`"
+    return f"- {label} comment: [{comment_id}]({comment_link})"
+
+
+def metadata_section(
+    *,
+    action: str,
+    folders: list[str] | None = None,
+    all_flag: bool = False,
+    affected_flag: bool = False,
+    comment_body: str | None = None,
+    comment_id: int | None = None,
+    comment_link: str | None = None,
+    run_id: str | None = None,
+    commit_hash: str | None = None,
+    comments_removed: bool = False,
+    pipeline: str | None = None,
+    pipeline_step: int | None = None,
+    requested_comment_body: str | None = None,
+    requested_comment_id: int | None = None,
+    requested_comment_link: str | None = None,
+    confirmation_comment_body: str | None = None,
+    confirmation_comment_id: int | None = None,
+    confirmation_comment_link: str | None = None,
+    account_id: str | None = None,
+    source_plan_run_id: str | None = None,
+    include_account: bool = True,
+    include_source_plan_run_id: bool = True,
+) -> str:
+    """Collapsed Metadata footer for terminal non-report PR comments."""
+    if action == "report":
+        return ""
+    lines: list[str] = []
+    if action in {"apply", "destroy"}:
+        if requested_comment_body and requested_comment_body.strip():
+            requested_line = normalized_command_context_line(requested_comment_body)
+            lines.append(f"- requested command: `{requested_line}`")
+        confirmation_line = (
+            normalized_command_context_line(confirmation_comment_body)
+            if confirmation_comment_body and confirmation_comment_body.strip()
+            else f"tf {action} confirm <redacted>"
+        )
+        lines.append(f"- confirmation command: `{confirmation_line}`")
+        requested_line = _metadata_comment_line(
+            requested_comment_id,
+            label="requested",
+            comment_link=requested_comment_link,
+            comments_removed=comments_removed,
+        )
+        if requested_line:
+            lines.append(requested_line)
+        confirmation_line_item = _metadata_comment_line(
+            confirmation_comment_id,
+            label="confirmation",
+            comment_link=confirmation_comment_link,
+            comments_removed=comments_removed,
+        )
+        if confirmation_line_item:
+            lines.append(confirmation_line_item)
+    else:
+        command_line = _describe_command_line(
+            action,
+            folders=folders,
+            all_flag=all_flag,
+            affected_flag=affected_flag,
+            comment_body=comment_body,
+            pipeline=pipeline,
+            pipeline_step=pipeline_step,
+        )
+        lines.append(f"- command: `{command_line}`")
+    if commit_hash:
+        lines.append(f"- commit: `{_short_hash(commit_hash)}`")
+    if run_id:
+        lines.append(f"- run id: `{run_id}`")
+    if action not in {"apply", "destroy"}:
+        trigger_line = _metadata_comment_line(
+            comment_id,
+            label="triggering",
+            comment_link=comment_link,
+            comments_removed=comments_removed,
+        )
+        if trigger_line:
+            lines.append(trigger_line)
+    if include_source_plan_run_id and source_plan_run_id:
+        source_label = (
+            "source destroy-plan run id"
+            if action == "destroy"
+            else "source plan run id"
+        )
+        lines.append(f"- {source_label}: `{source_plan_run_id}`")
+    if include_account and account_id:
+        lines.append(f"- account: `{account_id}`")
+    if not lines:
+        return ""
+    return _wrap_collapsed("Metadata", "\n".join(lines))
+
+
+def _action_heading(action: str) -> str:
+    if action == "plan_destroy":
+        return "## openci-tf plan --destroy"
+    if action == "report":
+        return "## openci-tf report"
+    return f"## openci-tf {action}"
+
+
+def _action_type_line(action: str) -> str:
+    return {
+        "plan": "**Type:** Plan",
+        "plan_destroy": "**Type:** Destroy plan",
+        "drift": "**Type:** Drift check",
+        "report": "**Type:** Report",
+    }[action]
+
+
+def _mutation_summary_line(folder: str, action: str, *, succeeded: bool) -> str:
+    verb = "Apply" if action == "apply" else "Destroy"
+    icon = "✅" if succeeded else "❌"
+    status = "succeeded" if succeeded else "failed"
+    return f"{folder} · {verb} {icon} {status}"
+
+
 def invalid_command_rejection_comment(
     *,
     parse_error: str,
@@ -619,7 +750,9 @@ def _report_security_label(security: str, *, count: int | None = None) -> str:
     return f"{base} · {count} {noun}"
 
 
-def _report_row(outcome: dict[str, Any], artifacts: dict[str, str]) -> _ReportRow:
+def _report_row(
+    outcome: dict[str, Any], artifacts: dict[str, str], *, action: str = "report"
+) -> _ReportRow:
     folder = str(outcome.get("folder", "unknown"))
     status = str(
         outcome.get("status", "succeeded" if outcome.get("succeeded") else "unknown")
@@ -631,7 +764,7 @@ def _report_row(outcome: dict[str, Any], artifacts: dict[str, str]) -> _ReportRo
         account_id=account_id,
         status=status,
         succeeded=outcome.get("succeeded"),
-        plan_counts=_plan_counts(artifacts.get("tf/plan.out", "")),
+        plan_counts=_plan_counts(_human_plan_text(action, artifacts)),
         security=security,
         finding_count=finding_count,
         cost=_cost_cell(artifacts.get("infracost.json", "{}")),
@@ -639,11 +772,16 @@ def _report_row(outcome: dict[str, Any], artifacts: dict[str, str]) -> _ReportRo
 
 
 def _report_rows(
-    outcomes: list[dict[str, Any]], artifacts_by_folder: dict[str, dict[str, str]]
+    outcomes: list[dict[str, Any]],
+    artifacts_by_folder: dict[str, dict[str, str]],
+    *,
+    action: str = "report",
 ) -> list[_ReportRow]:
     return [
         _report_row(
-            outcome, artifacts_by_folder.get(str(outcome.get("folder", "")), {})
+            outcome,
+            artifacts_by_folder.get(str(outcome.get("folder", "")), {}),
+            action=action,
         )
         for outcome in outcomes
     ]
@@ -671,8 +809,10 @@ def _report_folder_summary_line(
     folder: str,
     outcome: dict[str, Any],
     artifacts: dict[str, str],
+    *,
+    action: str = "report",
 ) -> str:
-    row = _report_row({**outcome, "folder": folder}, artifacts)
+    row = _report_row({**outcome, "folder": folder}, artifacts, action=action)
     return f"{folder} · Drift {row.drift_icon()} · Security {row.security_icon()}"
 
 
@@ -857,12 +997,37 @@ _REPORT_ARTIFACT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
 )
 
 
+_REPORT_DESTROY_PLAN_ARTIFACT_MEMBERS: tuple[tuple[str, str], ...] = (
+    ("destroy.plan.out", "destroy.plan.out"),
+    ("destroy.plan.tfplan", "tf/destroy.plan.tfplan"),
+    ("destroy.plan.tfplan.sha256", "tf/destroy.plan.tfplan.sha256"),
+    ("destroy-plan-metadata.json", "tf/destroy-plan-metadata.json"),
+)
+
+
+def _report_artifact_groups(
+    action: str,
+) -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
+    plan_members = (
+        _REPORT_DESTROY_PLAN_ARTIFACT_MEMBERS
+        if action == "plan_destroy"
+        else _REPORT_ARTIFACT_GROUPS[2][1]
+    )
+    return (
+        _REPORT_ARTIFACT_GROUPS[0],
+        _REPORT_ARTIFACT_GROUPS[1],
+        ("Plan", plan_members),
+        *_REPORT_ARTIFACT_GROUPS[3:],
+    )
+
+
 def _report_artifact_layout_keys(
     *,
     repo_name: str,
     run_id: str,
     folder: str,
     pr_number: int | None,
+    action: str = "report",
 ) -> FolderArtifactKeys:
     scoped_pr: int | None = None
     pointer_type: str | None = None
@@ -873,7 +1038,7 @@ def _report_artifact_layout_keys(
             pass
         else:
             scoped_pr = pr_number
-            pointer_type = pointer_type_for_action("report")
+            pointer_type = pointer_type_for_action(action)
     if scoped_pr is not None and pointer_type is not None:
         return build_folder_artifact_keys_for_run(
             repo_name=repo_name,
@@ -894,12 +1059,14 @@ def _report_artifact_key(
     folder: str,
     storage_name: str,
     pr_number: int | None = None,
+    action: str = "report",
 ) -> str:
     keys = _report_artifact_layout_keys(
         repo_name=repo_name,
         run_id=run_id,
         folder=folder,
         pr_number=pr_number,
+        action=action,
     )
     by_name = {
         "manifest.json": keys.manifest_json,
@@ -909,12 +1076,61 @@ def _report_artifact_key(
         "tf/plan.tfplan": keys.plan_tfplan,
         "tf/plan.tfplan.sha256": keys.plan_sha256,
         "tf/plan-metadata.json": keys.plan_metadata,
+        "destroy.plan.out": keys.destroy_plan_out,
+        "tf/destroy.plan.tfplan": keys.destroy_plan_tfplan,
+        "tf/destroy.plan.tfplan.sha256": keys.destroy_plan_sha256,
+        "tf/destroy-plan-metadata.json": keys.destroy_plan_metadata,
         "tfsec.output": keys.tfsec_output,
         "tfsec.json": keys.tfsec_json,
         "infracost.output": keys.infracost_output,
         "infracost.json": keys.infracost_json,
     }
     return by_name[storage_name]
+
+
+def _report_artifact_link_lines(
+    *,
+    repo_name: str,
+    run_id: str,
+    folder: str,
+    existing_names: frozenset[str],
+    tmp_bucket: str,
+    region: str,
+    hub_account_id: str | None,
+    identity_center_start_url: str | None,
+    identity_center_role_name: str | None,
+    pr_number: int | None = None,
+    action: str = "report",
+) -> list[str]:
+    if not repo_name or not run_id or not tmp_bucket or not region:
+        return []
+    lines: list[str] = []
+    for group_name, members in _report_artifact_groups(action):
+        group_lines: list[str] = []
+        for display_name, storage_name in members:
+            if storage_name not in existing_names:
+                continue
+            key = _report_artifact_key(
+                repo_name=repo_name,
+                run_id=run_id,
+                folder=folder,
+                storage_name=storage_name,
+                pr_number=pr_number,
+                action=action,
+            )
+            url = s3_object_console_url(
+                tmp_bucket,
+                key,
+                region=region,
+                account_id=hub_account_id,
+                identity_center_start_url=identity_center_start_url,
+                identity_center_role_name=identity_center_role_name,
+            )
+            group_lines.append(f"  [{display_name}]({url})")
+        if group_lines:
+            lines.append(group_name)
+            lines.extend(group_lines)
+    return lines
 
 
 def _report_artifacts_collapsible(
@@ -929,34 +1145,21 @@ def _report_artifacts_collapsible(
     identity_center_start_url: str | None,
     identity_center_role_name: str | None,
     pr_number: int | None = None,
+    action: str = "report",
 ) -> str:
-    if not repo_name or not run_id or not tmp_bucket or not region:
-        return ""
-    lines: list[str] = []
-    for group_name, members in _REPORT_ARTIFACT_GROUPS:
-        group_lines: list[str] = []
-        for display_name, storage_name in members:
-            if storage_name not in existing_names:
-                continue
-            key = _report_artifact_key(
-                repo_name=repo_name,
-                run_id=run_id,
-                folder=folder,
-                storage_name=storage_name,
-                pr_number=pr_number,
-            )
-            url = s3_object_console_url(
-                tmp_bucket,
-                key,
-                region=region,
-                account_id=hub_account_id,
-                identity_center_start_url=identity_center_start_url,
-                identity_center_role_name=identity_center_role_name,
-            )
-            group_lines.append(f"  [{display_name}]({url})")
-        if group_lines:
-            lines.append(group_name)
-            lines.extend(group_lines)
+    lines = _report_artifact_link_lines(
+        repo_name=repo_name,
+        run_id=run_id,
+        folder=folder,
+        existing_names=existing_names,
+        tmp_bucket=tmp_bucket,
+        region=region,
+        hub_account_id=hub_account_id,
+        identity_center_start_url=identity_center_start_url,
+        identity_center_role_name=identity_center_role_name,
+        pr_number=pr_number,
+        action=action,
+    )
     if not lines:
         return ""
     return _report_child_collapsible("Artifacts", "\n".join(lines))
@@ -966,12 +1169,18 @@ def _report_execution_collapsible(
     *,
     console_url: str | None,
     codebuild_url: str | None = None,
+    codebuild_account_id: str | None = None,
 ) -> str:
     lines: list[str] = []
     if console_url:
         lines.append(f"[Step Functions execution]({console_url})")
     if codebuild_url:
-        lines.append(f"[CodeBuild job]({codebuild_url})")
+        account_note = (
+            f" — hub account `{codebuild_account_id}`; switch the AWS console to this account first"
+            if codebuild_account_id
+            else ""
+        )
+        lines.append(f"[CodeBuild job]({codebuild_url}){account_note}")
     if not lines:
         return ""
     return _report_child_collapsible("Execution", "\n".join(lines))
@@ -982,6 +1191,7 @@ def _report_folder_comment(
     outcome: dict[str, Any],
     artifacts: dict[str, str],
     *,
+    action: str = "report",
     console_url: str | None = None,
     run_id: str | None = None,
     repo_name: str = "",
@@ -993,13 +1203,15 @@ def _report_folder_comment(
     identity_center_start_url: str | None = None,
     identity_center_role_name: str | None = None,
 ) -> str:
-    _require_account_id(outcome, folder)
+    if folder != "config":
+        _require_account_id(outcome, folder)
     names = existing_names or frozenset(artifacts)
+    plan_text = _human_plan_text(action, artifacts)
     parts = [
         _report_setup_collapsible(
             artifacts.get("init.out", ""), artifacts.get("validate.out", "")
         ),
-        _report_plan_collapsible(artifacts.get("tf/plan.out", "")),
+        _report_plan_collapsible(plan_text),
         _report_tfsec_collapsible(
             artifacts.get("tfsec.json", ""),
             artifacts.get("tfsec.output", ""),
@@ -1020,10 +1232,11 @@ def _report_folder_comment(
             identity_center_start_url=identity_center_start_url,
             identity_center_role_name=identity_center_role_name,
             pr_number=pr_number,
+            action=action,
         ),
     ]
     return _wrap_collapsed(
-        _report_folder_summary_line(folder, outcome, artifacts),
+        _report_folder_summary_line(folder, outcome, artifacts, action=action),
         "\n\n".join(part for part in parts if part),
     )
 
@@ -1048,11 +1261,12 @@ def _report_summary(
     outcomes: list[dict[str, Any]],
     artifacts_by_folder: dict[str, dict[str, str]] | None = None,
     *,
+    action: str = "report",
     folder_urls: dict[str, str] | None = None,
     steps: list[list[str]] | None = None,
 ) -> str:
     artifacts = artifacts_by_folder or {}
-    report_rows = _report_rows(outcomes, artifacts)
+    report_rows = _report_rows(outcomes, artifacts, action=action)
     attention = sorted(
         (row for row in report_rows if row.needs_attention),
         key=lambda row: row.sort_key,
@@ -1060,7 +1274,7 @@ def _report_summary(
     clean = sorted(
         (row for row in report_rows if row.clean), key=lambda row: row.folder
     )
-    lines: list[str] = ["## openci-tf report", "", "**Type:** Report", ""]
+    lines: list[str] = [_action_heading(action), "", _action_type_line(action), ""]
     if steps is not None and len(steps) > 1:
         lines.extend(_pipeline_step_rows(steps, outcomes))
         lines.append("")
@@ -1195,24 +1409,61 @@ def mutation_status_comment_in_progress(
     return "\n".join(lines)
 
 
-def _mutation_pinned_plan_section(
+def _mutation_plan_collapsible(
     plan_show_text: str | None,
     *,
     plan_show_pointer: str | None = None,
-) -> str | None:
-    """Render bounded pinned-plan output inside a collapsed details block."""
+) -> str:
+    """Render bounded pinned-plan output inside a collapsed Plan child."""
     if plan_show_pointer and not plan_show_text:
-        body = f"+ plan show output: `{plan_show_pointer}`"
-        return _wrap_collapsed("Pinned plan (tofu show)", body)
+        return _report_child_collapsible(
+            "Plan ❔", f"plan show output: `{plan_show_pointer}`"
+        )
     if not plan_show_text:
-        return None
+        return ""
     bounded = plan_show_text[:8000]
     if len(plan_show_text) > 8000:
         bounded += "\n\n> Output truncated. See S3 artifacts for full plan show."
-    body = _fenced_block(bounded)
+    counts = _plan_counts(_strip_ansi(plan_show_text))
+    icon = "❔" if counts is None else "✅" if counts == (0, 0, 0) else "⚠️"
+    body = _fenced_block(_highlight_plan(_strip_ansi(bounded)), "diff")
     if plan_show_pointer:
-        body += f"\n\n+ plan show output: `{plan_show_pointer}`"
-    return _wrap_collapsed("Pinned plan (tofu show)", body)
+        body += f"\n\nplan show output: `{plan_show_pointer}`"
+    return _report_child_collapsible(f"Plan {icon}", body)
+
+
+def _mutation_artifacts_collapsible(
+    pinned_plan_artifact: str,
+    *,
+    repo_name: str,
+    run_id: str,
+    folder: str,
+    existing_names: frozenset[str],
+    tmp_bucket: str,
+    region: str,
+    hub_account_id: str | None,
+    identity_center_start_url: str | None,
+    identity_center_role_name: str | None,
+    pr_number: int | None = None,
+    action: str,
+) -> str:
+    lines = [f"pinned plan: `{pinned_plan_artifact}`"]
+    lines.extend(
+        _report_artifact_link_lines(
+            repo_name=repo_name,
+            run_id=run_id,
+            folder=folder,
+            existing_names=existing_names,
+            tmp_bucket=tmp_bucket,
+            region=region,
+            hub_account_id=hub_account_id,
+            identity_center_start_url=identity_center_start_url,
+            identity_center_role_name=identity_center_role_name,
+            pr_number=pr_number,
+            action=action,
+        )
+    )
+    return _report_child_collapsible("Artifacts", "\n".join(lines))
 
 
 def mutation_terminal_comment(
@@ -1230,42 +1481,52 @@ def mutation_terminal_comment(
     plan_show_pointer: str | None,
     source_plan_run_id: str | None = None,
     error: str | None = None,
+    run_id: str = "",
+    repo_name: str = "",
+    pr_number: int | None = None,
+    existing_names: frozenset[str] | None = None,
+    tmp_bucket: str = "",
+    region: str = "",
+    hub_account_id: str | None = None,
+    identity_center_start_url: str | None = None,
+    identity_center_role_name: str | None = None,
 ) -> str:
     """Terminal apply/destroy folder comment with bounded plan show output."""
-    verb = action.title()
-    status = "succeeded" if succeeded else "failed"
-    lines = [
-        f"## {verb} {status} — `{folder}` ({account_id})",
-        f"+ pinned plan: `{pinned_plan_artifact}`",
-    ]
-    if source_plan_run_id:
-        source_label = (
-            "source destroy-plan run id"
-            if action == "destroy"
-            else "source plan run id"
-        )
-        lines.append(f"+ {source_label}: `{source_plan_run_id}`")
-    lines.append(f"+ commit: `{commit_hash[:7] if commit_hash else 'unknown'}`")
-    if console_url:
-        lines.append(f"+ [Step Functions execution]({console_url})")
-    if codebuild_url:
-        account_note = (
-            f" — hub account `{codebuild_account_id}`; switch the AWS console to this account first"
-            if codebuild_account_id
-            else ""
-        )
-        lines.append(f"+ [CodeBuild job]({codebuild_url}){account_note}")
+    body_parts: list[str] = []
     if error:
         bounded_error = redact_and_bound_terminal_evidence(error)
         if not isinstance(bounded_error, str):
             raise TypeError("mutation terminal error must be a string")
-        lines.append(_error_block("+ error", bounded_error))
-    plan_section = _mutation_pinned_plan_section(
-        plan_show_text, plan_show_pointer=plan_show_pointer
+        body_parts.append(_error_block("error", bounded_error))
+    child_parts = [
+        _mutation_plan_collapsible(
+            plan_show_text, plan_show_pointer=plan_show_pointer
+        ),
+        _report_execution_collapsible(
+            console_url=console_url,
+            codebuild_url=codebuild_url,
+            codebuild_account_id=codebuild_account_id,
+        ),
+        _mutation_artifacts_collapsible(
+            pinned_plan_artifact,
+            repo_name=repo_name,
+            run_id=run_id,
+            folder=folder,
+            existing_names=existing_names or frozenset(),
+            tmp_bucket=tmp_bucket,
+            region=region,
+            hub_account_id=hub_account_id,
+            identity_center_start_url=identity_center_start_url,
+            identity_center_role_name=identity_center_role_name,
+            pr_number=pr_number,
+            action=action,
+        ),
+    ]
+    body_parts.extend(part for part in child_parts if part)
+    return _wrap_collapsed(
+        _mutation_summary_line(folder, action, succeeded=succeeded),
+        "\n\n".join(body_parts),
     )
-    if plan_section:
-        lines.append(plan_section)
-    return "\n".join(lines)
 
 
 def ci_details(commit_hash: str, console_url: str | None, status: str) -> str:
@@ -1433,36 +1694,18 @@ def _terminal_status(outcomes: list[dict[str, Any]]) -> str:
 def pending_plan_comment(
     folder: str, account_id: str, commit_hash: str, action: str
 ) -> str:
-    status_label = _running_label(action)
-    body = f"{_folder_heading(folder, account_id, action=action)} {status_label} at `{_short_hash(commit_hash)}`…"
-    return _wrap_collapsed(
-        _summary_line(folder, account_id, commit_hash, status_label), body
+    body = (
+        f"{_action_heading(action)}\n\n"
+        f"{_running_label(action)} at `{_short_hash(commit_hash)}`…"
     )
+    return _wrap_collapsed(f"{folder} · Drift ⏳ · Security ⏳", body)
 
 
 def pending_summary_all(commit_hash: str, action: str) -> str:
     short = commit_hash[:7]
     verb = _running_label(action)
-    if action == "report":
-        return f"## openci-tf report\n\n{verb} all folders at `{short}`…"
-    return f"## Terraform Multi-Folder Summary\n\n {verb} all folders at `{short}`…"
-
-
-def _summary_row(
-    folder: str,
-    account_id: str,
-    drift: str,
-    security: str,
-    cost: str,
-    *,
-    folder_urls: dict[str, str] | None = None,
-) -> str:
-    folder_cell = (
-        f"[`{folder}`]({folder_urls[folder]})"
-        if folder_urls and folder in folder_urls
-        else f"`{folder}`"
-    )
-    return f"| {folder_cell} | `{account_id}` | {drift} | {security} | {cost} |"
+    lines = [_action_heading(action), "", _action_type_line(action), ""]
+    return f"{'\n'.join(lines)}\n{verb} all folders at `{short}`…"
 
 
 def pending_summary(
@@ -1471,81 +1714,43 @@ def pending_summary(
     *,
     action: str = "plan",
 ) -> str:
-    delta_header = _summary_delta_header(action)
-    heading = (
-        "## openci-tf report"
-        if action == "report"
-        else "## Terraform Multi-Folder Summary"
-    )
     rows = [
-        heading,
+        _action_heading(action),
         "",
-        f"| Folder | Account | {delta_header} | Security | Cost |",
-        "|--------|---------|------------|----------|------|",
+        _action_type_line(action),
+        "",
+        "| Folder | Drift | Security | Cost |",
+        "|--------|-------|----------|------|",
     ]
     for item in folders:
         folder = str(item.get("folder", "unknown"))
-        account_id = _require_account_id(item, folder)
         rows.append(
-            _summary_row(
-                folder, account_id, "in progress", "in progress", "in progress"
-            )
+            _report_summary_row(folder, "⏳", "⏳", "—")
         )
     for item in skipped or []:
         folder = str(item.get("folder", "unknown"))
-        account_id = _require_account_id(item, folder)
         rows.append(
-            _summary_row(
-                folder, account_id, "in progress", "in progress", "in progress"
-            )
+            _report_summary_row(folder, "⏳", "⏳", "—")
         )
     return "\n".join(rows)
-
-
-def _terminal_failure_execution_section(
-    *,
-    action: str,
-    console_url: str | None,
-    commit_hash: str,
-    include_ci_details: bool,
-) -> str:
-    """Deterministic execution-link section for terminal failure bodies.
-
-    Report comments keep the finalized report surface: the Step Functions link
-    is a separate Execution child and CodeBuild never appears. Plan and drift
-    keep the CI Details convention used by terminal single-folder comments.
-    """
-    if not console_url:
-        return ""
-    if action == "report":
-        return _report_execution_collapsible(console_url=console_url)
-    if include_ci_details and commit_hash:
-        return ci_details(commit_hash, console_url, "failed")
-    return ""
 
 
 def _terminal_failure_comment(
     *,
     folder: str,
-    account_id: str,
-    commit_hash: str,
-    status_label: str,
+    outcome: dict[str, Any],
+    artifacts: dict[str, str],
     body: str,
     action: str,
     console_url: str | None,
-    include_ci_details: bool,
 ) -> str:
     """Assemble one terminal failure comment with its execution link attached."""
-    execution = _terminal_failure_execution_section(
-        action=action,
-        console_url=console_url,
-        commit_hash=commit_hash,
-        include_ci_details=include_ci_details,
-    )
+    execution = _report_execution_collapsible(console_url=console_url)
     if execution:
         body = f"{body}\n\n{execution}"
     return _wrap_collapsed(
-        _summary_line(folder, account_id, commit_hash, status_label), body
+        _report_folder_summary_line(folder, outcome, artifacts, action=action),
+        body,
     )
 
 
@@ -1557,8 +1762,6 @@ def folder_comment(
     action: str = "plan",
     commit_hash: str = "",
     console_url: str | None = None,
-    include_ci_details: bool = True,
-    manifest_s3_uri: str | None = None,
     run_id: str | None = None,
     repo_name: str = "",
     pr_number: int | None = None,
@@ -1570,121 +1773,73 @@ def folder_comment(
     identity_center_role_name: str | None = None,
 ) -> str:
     if folder == "config" and outcome.get("status") == "infrastructure_error":
-        status_label = _terminal_label(action, outcome, folder=folder)
         error = _format_error(outcome)[:_MAX_CONFIGURATION_ERROR_CHARS]
         body = (
             "## openci-tf configuration error\n\n openci-tf did not start.\n\n"
             f"{_fenced_block(error)}"
         )
-        return _wrap_collapsed(
-            _summary_line(folder, "", commit_hash, status_label), body
+        config_outcome = {**outcome, "folder": folder, "status": "infrastructure_error"}
+        return _terminal_failure_comment(
+            folder=folder,
+            outcome=config_outcome,
+            artifacts=artifacts,
+            body=body,
+            action=action,
+            console_url=console_url,
         )
 
-    account_id = _require_account_id(outcome, folder)
-    status_label = _terminal_label(action, outcome, folder=folder)
+    if folder != "config":
+        _require_account_id(outcome, folder)
 
     if outcome.get("status") == "in_progress":
-        body = f"{_folder_heading(folder, account_id, action=action)} {outcome.get('reply', 'Run already in progress.')}"
+        body = f"{_action_heading(action)}\n\n{outcome.get('reply', 'Run already in progress.')}"
         return _wrap_collapsed(
-            _summary_line(folder, account_id, commit_hash, status_label), body
+            _report_folder_summary_line(folder, outcome, artifacts, action=action),
+            body,
         )
     if outcome.get("status") == "infrastructure_error":
         return _terminal_failure_comment(
             folder=folder,
-            account_id=account_id,
-            commit_hash=commit_hash,
-            status_label=status_label,
-            body=(
-                f"{_folder_heading(folder, account_id, action=action)}"
-                f"{_error_block('Infrastructure error', _format_error(outcome))}"
-            ),
+            outcome=outcome,
+            artifacts=artifacts,
+            body=_error_block("Infrastructure error", _format_error(outcome)),
             action=action,
             console_url=console_url,
-            include_ci_details=include_ci_details,
         )
     if outcome.get("credential_expired"):
         return _terminal_failure_comment(
             folder=folder,
-            account_id=account_id,
-            commit_hash=commit_hash,
-            status_label=status_label,
-            body=(
-                f"{_folder_heading(folder, account_id, action=action)}"
-                " Credentials expired while the folder run was executing."
-            ),
+            outcome={**outcome, "status": "failed", "succeeded": False},
+            artifacts=artifacts,
+            body="Credentials expired while the folder run was executing.",
             action=action,
             console_url=console_url,
-            include_ci_details=include_ci_details,
         )
     if outcome.get("succeeded") is False or outcome.get("status") == "failed":
         return _terminal_failure_comment(
             folder=folder,
-            account_id=account_id,
-            commit_hash=commit_hash,
-            status_label=status_label,
-            body=(
-                f"{_folder_heading(folder, account_id, action=action)}"
-                f"{_error_block('Folder execution failed', _format_error(outcome))}"
-            ),
+            outcome=outcome,
+            artifacts=artifacts,
+            body=_error_block("Folder execution failed", _format_error(outcome)),
             action=action,
             console_url=console_url,
-            include_ci_details=include_ci_details,
         )
 
-    if action == "report":
-        return _report_folder_comment(
-            folder,
-            outcome,
-            artifacts,
-            console_url=console_url,
-            run_id=run_id,
-            repo_name=repo_name,
-            pr_number=pr_number,
-            existing_names=existing_names,
-            tmp_bucket=tmp_bucket,
-            region=region,
-            hub_account_id=hub_account_id,
-            identity_center_start_url=identity_center_start_url,
-            identity_center_role_name=identity_center_role_name,
-        )
-
-    sections = [
-        _folder_heading(folder, account_id, action=action).rstrip(),
-        initialize(artifacts.get("init.out", "")),
-        validate(artifacts.get("validate.out", "")),
-    ]
-    sections.append(plan(_human_plan_text(action, artifacts)))
-    if action in {"plan", "report", "plan_destroy"}:
-        pointer_type = "destroy" if action == "plan_destroy" else "plan"
-        sections.extend(
-            [
-                plan_artifact_pointer(
-                    repo_name=repo_name,
-                    run_id=str(run_id or ""),
-                    folder=folder,
-                    pr_number=pr_number,
-                    pointer_type=pointer_type,
-                )
-                if run_id and repo_name
-                else "",
-                tfsec(artifacts.get("tfsec.json", "")),
-                infracost(artifacts.get("infracost.json", "")),
-            ]
-        )
-    parts = [part for part in sections if part]
-    if include_ci_details and console_url and commit_hash:
-        parts.append(
-            ci_details(
-                commit_hash,
-                console_url,
-                "succeeded" if outcome.get("succeeded", True) else "failed",
-            )
-        )
-    if manifest_s3_uri and run_id:
-        parts.append(execution_artifacts_section(run_id, manifest_s3_uri))
-    body = "\n\n".join(parts)
-    return _wrap_collapsed(
-        _summary_line(folder, account_id, commit_hash, status_label), body
+    return _report_folder_comment(
+        folder,
+        outcome,
+        artifacts,
+        action=action,
+        console_url=console_url,
+        run_id=run_id,
+        repo_name=repo_name,
+        pr_number=pr_number,
+        existing_names=existing_names,
+        tmp_bucket=tmp_bucket,
+        region=region,
+        hub_account_id=hub_account_id,
+        identity_center_start_url=identity_center_start_url,
+        identity_center_role_name=identity_center_role_name,
     )
 
 
@@ -1730,50 +1885,12 @@ def summary(
     console_url: str | None = None,
     steps: list[list[str]] | None = None,
 ) -> str:
-    if action == "report":
+    if action in {"plan", "plan_destroy", "drift", "report"}:
         return _report_summary(
             outcomes,
             artifacts_by_folder,
+            action=action,
             folder_urls=folder_urls,
             steps=steps,
         )
-    delta_header = _summary_delta_header(action)
-    rows = ["## Terraform Multi-Folder Summary", ""]
-    if steps is not None and len(steps) > 1:
-        rows.extend(_pipeline_step_rows(steps, outcomes))
-        rows.append("")
-    rows.extend(
-        [
-            f"| Folder | Account | {delta_header} | Security | Cost |",
-            "|--------|---------|------------|----------|------|",
-        ]
-    )
-    for outcome in outcomes:
-        folder = str(outcome.get("folder", "unknown"))
-        account_id = "—" if folder == "config" else _account_cell(outcome, folder)
-        status = outcome.get(
-            "status", "succeeded" if outcome.get("succeeded") else "unknown"
-        )
-        if status == "in_progress":
-            drift, security, cost = "in progress", "in progress", "in progress"
-        elif status == "skipped":
-            drift, security, cost = "not run", "not run", "n/a"
-        elif (
-            status in {"failed", "infrastructure_error"}
-            or outcome.get("succeeded") is False
-        ):
-            drift, security, cost = "failed", "not run", "n/a"
-        else:
-            artifacts = (artifacts_by_folder or {}).get(folder, {})
-            drift = _summary_delta_cell(action, _human_plan_text(action, artifacts))
-            security = _security_cell(artifacts.get("tfsec.json", ""))
-            cost = _cost_cell(artifacts.get("infracost.json", "{}"))
-        rows.append(
-            _summary_row(
-                folder, account_id, drift, security, cost, folder_urls=folder_urls
-            )
-        )
-    body = "\n".join(rows)
-    if console_url and commit_hash:
-        body += ci_details(commit_hash, console_url, _terminal_status(outcomes))
-    return body
+    raise ValueError(f"unsupported summary action: {action}")

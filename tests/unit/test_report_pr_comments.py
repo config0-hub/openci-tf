@@ -301,15 +301,17 @@ def test_report_all_marker_survives_bounding():
     assert rendered.count(marker) == 1
 
 
-def test_plan_summary_unchanged_by_report_formatting():
+def test_plan_summary_uses_unified_report_layout():
     rendered = summary(
         [_outcome("infra/a")],
         {"infra/a": _artifacts()},
         action="plan",
     )
-    assert "## Terraform Multi-Folder Summary" in rendered
-    assert "| Plan |" in rendered
-    assert "| no changes | clean |" in rendered
+    assert "## openci-tf plan" in rendered
+    assert "**Type:** Plan" in rendered
+    assert "| Folder | Drift | Security | Cost |" in rendered
+    assert "| Account |" not in rendered
+    assert "| `infra/a` | ✅ | ✅ | $0 |" in rendered
     assert "✅ CLEAN" not in rendered
 
 

@@ -8,8 +8,7 @@ from typing import Any, Callable, cast
 
 from src.domain.formatters.artifacts import (
     bound_comment,
-    command_context_block,
-    mutation_command_context_block,
+    metadata_section,
     status_comment_marker_prefix,
 )
 from src.domain.github.comment_object_id import (
@@ -42,6 +41,10 @@ def _command_context_from_event(
     run_id: str | None = None,
     *,
     comments_removed: bool = False,
+    account_id: str | None = None,
+    source_plan_run_id: str | None = None,
+    include_account: bool = True,
+    include_source_plan_run_id: bool = True,
 ) -> str:
     webhook = event.get("webhook_info")
     if not isinstance(webhook, dict):
@@ -77,7 +80,7 @@ def _command_context_from_event(
         confirmation_body = (
             webhook.get("comment_body") if isinstance(webhook.get("comment_body"), str) else None
         )
-        return mutation_command_context_block(
+        return metadata_section(
             action=action,
             requested_comment_body=requested_comment_body,
             requested_comment_id=requested_comment_id if isinstance(requested_comment_id, int) else None,
@@ -88,8 +91,12 @@ def _command_context_from_event(
             run_id=resolved_run_id,
             commit_hash=commit_hash if isinstance(commit_hash, str) else None,
             comments_removed=comments_removed,
+            account_id=account_id,
+            source_plan_run_id=source_plan_run_id,
+            include_account=include_account,
+            include_source_plan_run_id=include_source_plan_run_id,
         )
-    return command_context_block(
+    return metadata_section(
         action=action,
         folders=folder_list,
         all_flag=all_flag,
@@ -99,11 +106,15 @@ def _command_context_from_event(
         comment_link=comment_link,
         run_id=resolved_run_id,
         commit_hash=commit_hash if isinstance(commit_hash, str) else None,
-        comment_removed=comments_removed,
+        comments_removed=comments_removed,
         pipeline=webhook.get("pipeline") if isinstance(webhook.get("pipeline"), str) else None,
         pipeline_step=webhook.get("pipeline_step_index")
         if isinstance(webhook.get("pipeline_step_index"), int)
         else None,
+        account_id=account_id,
+        source_plan_run_id=source_plan_run_id,
+        include_account=include_account,
+        include_source_plan_run_id=include_source_plan_run_id,
     )
 
 
@@ -113,13 +124,25 @@ def _with_command_context(
     run_id: str | None = None,
     *,
     comments_removed: bool = False,
+    account_id: str | None = None,
+    source_plan_run_id: str | None = None,
+    include_account: bool = True,
+    include_source_plan_run_id: bool = True,
 ) -> str:
     if not _uses_github_pr(event):
         return body
-    context = _command_context_from_event(event, run_id=run_id, comments_removed=comments_removed)
+    context = _command_context_from_event(
+        event,
+        run_id=run_id,
+        comments_removed=comments_removed,
+        account_id=account_id,
+        source_plan_run_id=source_plan_run_id,
+        include_account=include_account,
+        include_source_plan_run_id=include_source_plan_run_id,
+    )
     if not context:
         return body
-    return f"{context}\n\n---\n\n{body}"
+    return f"{body}\n\n{context}"
 
 
 def _with_cleanup_warnings(result: dict[str, Any], warnings: list[str]) -> dict[str, Any]:

@@ -117,8 +117,8 @@ def test_failed_single_folder_plan_seam_includes_step_functions_link(posted_bodi
 
     assert result["rendered"] is True
     body = _folder_post(posted_bodies)["body"]
-    assert f"[ci pipeline]({_console_url()})" in body
-    assert "FAILED" in body
+    assert f"[Step Functions execution]({_console_url()})" in body
+    assert "CI Details" not in body
 
 
 def test_failed_single_folder_drift_seam_includes_step_functions_link(posted_bodies):
@@ -126,8 +126,8 @@ def test_failed_single_folder_drift_seam_includes_step_functions_link(posted_bod
 
     assert result["rendered"] is True
     body = _folder_post(posted_bodies)["body"]
-    assert f"[ci pipeline]({_console_url()})" in body
-    assert "FAILED" in body
+    assert f"[Step Functions execution]({_console_url()})" in body
+    assert "CI Details" not in body
 
 
 def test_failed_single_folder_report_seam_includes_execution_child(posted_bodies):
@@ -210,9 +210,8 @@ def test_plan_failure_variants_carry_console_url():
             action="plan",
             commit_hash=_FULL_SHA,
             console_url=_console_url(),
-            include_ci_details=True,
         )
-        assert f"[ci pipeline]({_console_url()})" in rendered, outcome
+        assert f"[Step Functions execution]({_console_url()})" in rendered, outcome
 
 
 def test_drift_failure_variants_carry_console_url():
@@ -229,9 +228,8 @@ def test_drift_failure_variants_carry_console_url():
             action="drift",
             commit_hash=_FULL_SHA,
             console_url=_console_url(),
-            include_ci_details=True,
         )
-        assert f"[ci pipeline]({_console_url()})" in rendered, outcome
+        assert f"[Step Functions execution]({_console_url()})" in rendered, outcome
 
 
 def test_report_failure_variants_carry_execution_child_without_codebuild():
@@ -248,7 +246,6 @@ def test_report_failure_variants_carry_execution_child_without_codebuild():
             action="report",
             commit_hash=_FULL_SHA,
             console_url=_console_url(),
-            include_ci_details=True,
             run_id=_RUN_ID,
             repo_name=_REPO,
             pr_number=_PR,
@@ -266,18 +263,16 @@ def test_report_failure_comment_excludes_command_run_commit_and_ci_metadata():
         action="report",
         commit_hash=_FULL_SHA,
         console_url=_console_url(),
-        include_ci_details=True,
         run_id=_RUN_ID,
         repo_name=_REPO,
         pr_number=_PR,
-        manifest_s3_uri="s3://tmp/manifest.json",
     )
     assert "### openci-tf command" not in rendered
+    assert "<summary>Metadata</summary>" not in rendered
     assert "- run id:" not in rendered
     assert "- commit:" not in rendered
     assert "CI Details" not in rendered
     assert "CodeBuild" not in rendered
-    assert _RUN_ID not in rendered
 
 
 def test_failure_comments_unchanged_without_console_url():
@@ -289,7 +284,6 @@ def test_failure_comments_unchanged_without_console_url():
             action=action,
             commit_hash=_FULL_SHA,
             console_url=None,
-            include_ci_details=True,
         )
         assert "CI Details" not in rendered, action
         assert "> <summary>Execution</summary>" not in rendered, action
@@ -303,9 +297,9 @@ def test_multi_folder_plan_failure_keeps_folder_comment_free_of_ci_details():
         action="plan",
         commit_hash=_FULL_SHA,
         console_url=_console_url(),
-        include_ci_details=False,
     )
     assert "CI Details" not in rendered
+    assert f"[Step Functions execution]({_console_url()})" in rendered
 
 
 def test_report_failure_execution_child_is_separate_report_style_child():
@@ -321,5 +315,4 @@ def test_report_failure_execution_child_is_separate_report_style_child():
         pr_number=_PR,
     )
     assert rendered.count("> <summary>Execution</summary>") == 1
-    assert f"> [Step Functions execution]({_console_url()})" in rendered
     assert len(re.findall(r"<details\b", rendered)) == rendered.count("</details>")
