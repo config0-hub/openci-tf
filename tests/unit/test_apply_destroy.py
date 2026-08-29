@@ -923,6 +923,18 @@ def test_pipeline_apply_footer_renders_next_step_and_completion():
     assert _pipeline_apply_footer(event, "apply", [{"status": "failed"}], []) is None
 
 
+def test_pipeline_apply_footer_destroy_emits_no_footer():
+    event = {
+        "webhook_info": {
+            "pipeline": "data/primary",
+            "pipeline_step_index": 1,
+            "pipeline_step_count": 2,
+        }
+    }
+    outcomes = [{"folder": "infra/vpc", "status": "succeeded", "succeeded": True}]
+    assert _pipeline_apply_footer(event, "destroy", outcomes, []) is None
+
+
 @patch("src.domain.accounts.aliases.get_account_alias")
 def test_intent_gate_unknown_account_alias_refusal(get_account_alias):
     get_account_alias.side_effect = ValueError("Unknown account alias: 'missing'")

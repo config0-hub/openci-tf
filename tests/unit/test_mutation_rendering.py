@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -40,6 +41,22 @@ def _assert_plan_in_collapsed_details(body: str) -> None:
     assert body.index("<details>") < body.index("```")
 
 
+_PLAN_TRUNCATION_NOTE = "Output truncated. See S3 artifacts for full plan output."
+
+
+def _assert_plan_truncation_note_outside_fence(body: str) -> None:
+    assert body.count(_PLAN_TRUNCATION_NOTE) == 1
+    before_note, _, _after_note = body.partition(_PLAN_TRUNCATION_NOTE)
+    plan_start = before_note.index("> <summary>Plan ")
+    plan_section = before_note[plan_start:]
+    fence_start = plan_section.index("```diff")
+    fence_end = plan_section.index("```", fence_start + len("```diff"))
+    fenced_body = plan_section[fence_start : fence_end + 3]
+    assert _PLAN_TRUNCATION_NOTE not in fenced_body
+    after_fence = plan_section[fence_end + 3 :]
+    assert re.fullmatch(r"[\s>]*", after_fence), after_fence
+
+
 @pytest.mark.parametrize("action", ["apply", "destroy"])
 def test_terminal_mutation_success_includes_plan_in_collapsed_details(action):
     body = _mutation_terminal_body(action=action)
@@ -53,6 +70,16 @@ def test_terminal_mutation_does_not_inline_apply_or_destroy_logs():
     assert "apply.out" not in body
     assert "destroy.out" not in body
     assert "```" in body
+
+
+def test_mutation_plan_over_budget_truncates_with_note_outside_fence():
+    plan_body = (
+        "Plan: 1 to add, 0 to change, 0 to destroy\n"
+        + ("+ resource aws_instance.probe\n" * 5_000)
+    )
+    assert len(plan_body) > 8_000
+    body = _mutation_terminal_body(plan_show_text=plan_body)
+    _assert_plan_truncation_note_outside_fence(body)
 
 
 def test_summary_does_not_render_icon_legend():

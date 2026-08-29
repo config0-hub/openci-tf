@@ -28,6 +28,21 @@ _HUB_ACCOUNT = "999999999999"
 _IC_START = "https://d-9567aa6b98.awsapps.com/start"
 _IC_ROLE = "AWSAdministratorAccess"
 
+_PLAN_TRUNCATION_NOTE = "Output truncated. See S3 artifacts for full plan output."
+
+
+def _assert_plan_truncation_note_outside_fence(body: str) -> None:
+    assert body.count(_PLAN_TRUNCATION_NOTE) == 1
+    before_note, _, _after_note = body.partition(_PLAN_TRUNCATION_NOTE)
+    plan_start = before_note.index("> <summary>Plan ")
+    plan_section = before_note[plan_start:]
+    fence_start = plan_section.index("```diff")
+    fence_end = plan_section.index("```", fence_start + len("```diff"))
+    fenced_body = plan_section[fence_start : fence_end + 3]
+    assert _PLAN_TRUNCATION_NOTE not in fenced_body
+    after_fence = plan_section[fence_end + 3 :]
+    assert re.fullmatch(r"[\s>]*", after_fence), after_fence
+
 
 def _outcome(folder: str, **overrides):
     base = {
@@ -541,6 +556,7 @@ def test_readonly_plan_over_budget_truncates_once_with_neutral_note():
         )
         == 1
     )
+    _assert_plan_truncation_note_outside_fence(rendered)
     assert "> <summary>Security" in rendered
     assert "> <summary>Cost" in rendered
     assert "> <summary>Artifacts</summary>" in rendered

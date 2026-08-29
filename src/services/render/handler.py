@@ -182,7 +182,7 @@ def _pipeline_apply_footer(
     outcomes: list[dict[str, Any]],
     skipped: list[dict[str, Any]],
 ) -> str | None:
-    if action not in {"apply", "destroy"}:
+    if action != "apply":
         return None
     webhook = event.get("webhook_info")
     if not isinstance(webhook, dict):

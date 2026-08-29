@@ -415,17 +415,28 @@ def closed_pr_rejection_comment(
 
 _BOUND_PLAN_CHARS = 8000
 _REPORT_PLAN_CHARS = 32_000
-_BOUND_PLAN_TRUNCATION_NOTE = (
-    "\n\n> Output truncated. See S3 artifacts for full plan output."
+_PLAN_TRUNCATION_NOTE = (
+    "> Output truncated. See S3 artifacts for full plan output."
 )
 
 
-def _bound_plan_display_text(text: str, *, max_chars: int = _BOUND_PLAN_CHARS) -> str:
+@dataclass(frozen=True)
+class _BoundedPlanText:
+    text: str
+    truncated: bool
+
+
+def _bound_plan_display_text(
+    text: str, *, max_chars: int = _BOUND_PLAN_CHARS
+) -> _BoundedPlanText:
     """Bound human-readable plan output before composing folder comments."""
-    bounded = text[:max_chars]
-    if len(text) > max_chars:
-        bounded += _BOUND_PLAN_TRUNCATION_NOTE
-    return bounded
+    return _BoundedPlanText(text=text[:max_chars], truncated=len(text) > max_chars)
+
+
+def _append_plan_truncation_note(body: str, *, truncated: bool) -> str:
+    if not truncated:
+        return body
+    return f"{body}\n\n{_PLAN_TRUNCATION_NOTE}"
 
 
 def _human_plan_output_key(action: str) -> str:
@@ -811,7 +822,12 @@ def _report_plan_collapsible(text: str) -> str:
                 "",
             ]
         )
-    parts.append(_fenced_block(_highlight_plan(bounded), "diff"))
+    parts.append(
+        _append_plan_truncation_note(
+            _fenced_block(_highlight_plan(bounded.text), "diff"),
+            truncated=bounded.truncated,
+        )
+    )
     return _report_child_collapsible(
         f"Plan {_plan_status_icon(text)}",
         "\n".join(parts),
@@ -1306,10 +1322,14 @@ def _mutation_plan_collapsible(
         )
     if not plan_show_text:
         return ""
-    bounded = _bound_plan_display_text(_strip_ansi(plan_show_text))
-    counts = _plan_counts(_strip_ansi(plan_show_text))
+    stripped = _strip_ansi(plan_show_text)
+    bounded = _bound_plan_display_text(stripped)
+    counts = _plan_counts(stripped)
     icon = "❔" if counts is None else "✅" if counts == (0, 0, 0) else "⚠️"
-    body = _fenced_block(_highlight_plan(_strip_ansi(bounded)), "diff")
+    body = _append_plan_truncation_note(
+        _fenced_block(_highlight_plan(bounded.text), "diff"),
+        truncated=bounded.truncated,
+    )
     if plan_show_pointer:
         body += f"\n\nplan show output: `{plan_show_pointer}`"
     return _report_child_collapsible(f"Plan {icon}", body)
