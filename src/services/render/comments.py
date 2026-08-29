@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable, cast
 
 from src.domain.formatters.artifacts import (
     bound_comment,
@@ -128,18 +128,24 @@ def _with_cleanup_warnings(result: dict[str, Any], warnings: list[str]) -> dict[
     return result
 
 
+_CommentDetailSearch = Callable[[str, int, str], list[dict[str, str | int]]]
+_BodySubstringSearch = Callable[[str, int, str], list[tuple[int, str]]]
+
+
 def _candidate_comment_details(
     client: GitHubClient, repo: str, pr: int, needle: str
 ) -> list[dict[str, str | int]]:
     detail_search = getattr(client, "find_comment_details_by_body_substring", None)
     if callable(detail_search):
-        return list(detail_search(repo, pr, needle))
+        return list(cast(_CommentDetailSearch, detail_search)(repo, pr, needle))
     body_search = getattr(client, "find_comments_by_body_substring", None)
     get_body = getattr(client, "get_comment_body", None)
     if not callable(body_search) or not callable(get_body):
         return []
     details: list[dict[str, str | int]] = []
-    for comment_id, author_login in body_search(repo, pr, needle):
+    for comment_id, author_login in cast(_BodySubstringSearch, body_search)(
+        repo, pr, needle
+    ):
         if type(comment_id) is not int:
             raise ValueError("GitHub comment search returned no integer id")
         body = get_body(repo, comment_id)
