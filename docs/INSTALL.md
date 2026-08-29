@@ -268,12 +268,14 @@ openci-tf/<repo_name>/<run_id>/<folder_path>/
   manifest.json           # names, checksums, sizes, action, run_id
 ```
 
-Successful `plan` runs (only) also copy the folder's artifacts to
-`openci-tf/<repo_name>/latest/<folder_path>/…` for the API/UI to read. The whole
-`openci-tf/` prefix expires after `plan_retention_days` (default **1 day**) —
-stale plans intentionally disappear; re-run the plan. Repo and folder names
-are used literally; the path builder rejects traversal segments and the
-reserved name `latest`.
+Each run writes artifacts only under its immutable run-scoped prefix above. The
+API and UI resolve plans through PR-scoped pointers, exact run-scoped keys, or
+newest-first run-registry queries — not a mutable alias prefix. Each manifest
+records checksums and `expires_at`; the API rejects expired artifacts. The
+`openci-tf/` prefix is deleted asynchronously by S3 lifecycle after
+`plan_retention_days` (default **1 day**); stale plans disappear — re-run the
+plan. Repo and folder names are used literally; the path builder rejects
+traversal segments.
 
 ## Uninstall
 

@@ -16,7 +16,6 @@ from src.domain.engine.invocation_id import assert_execution_id_bounds
 
 OPENCI_TF_PREFIX = "openci-tf"
 MANIFEST_KEY_SUFFIX = "manifest.json"
-_LATEST_ALIAS = "latest"
 _RUN_ID = re.compile(r"^[\w+=,.@-]+$")
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 _S3_URI = re.compile(r"^s3://([^/]+)/(.+)$")
@@ -63,10 +62,6 @@ def validate_run_id(run_id: str) -> str:
         raise ValueError("run_id is required")
     text = run_id.strip()
     assert_execution_id_bounds(text)
-    if text == _LATEST_ALIAS:
-        raise ValueError(
-            "run_id must not be the literal 'latest' (collides with latest/ alias)"
-        )
     if not _RUN_ID.fullmatch(text):
         raise ValueError("run_id contains disallowed characters")
     return text
@@ -86,10 +81,6 @@ def _validate_literal_segment(value: str, *, label: str) -> str:
         raise ValueError(f"{label} must not contain empty path segments")
     if ".." in parts:
         raise ValueError(f"{label} must not contain .. segments")
-    if parts[0] == _LATEST_ALIAS:
-        raise ValueError(
-            f"{label} must not use 'latest' as the first path segment (collides with latest/ alias)"
-        )
     return value
 
 
@@ -99,13 +90,6 @@ def folder_artifact_prefix(*, repo_name: str, run_id: str, folder_path: str) -> 
     run = validate_run_id(run_id)
     folder = _validate_literal_segment(folder_path, label="folder_path")
     return f"{OPENCI_TF_PREFIX}/{repo}/{run}/{folder}/"
-
-
-def latest_folder_prefix(*, repo_name: str, folder_path: str) -> str:
-    """Return the latest pointer prefix ending with /."""
-    repo = _validate_literal_segment(repo_name, label="repo_name")
-    folder = _validate_literal_segment(folder_path, label="folder_path")
-    return f"{OPENCI_TF_PREFIX}/{repo}/latest/{folder}/"
 
 
 def artifact_key(
@@ -274,10 +258,6 @@ def run_scoped_plan_pointer(*, repo_name: str, run_id: str, folder_path: str) ->
         folder_path=folder_path,
         relative_name="tf/plan.tfplan",
     )
-
-
-def latest_plan_pointer(*, repo_name: str, folder_path: str) -> str:
-    return f"{latest_folder_prefix(repo_name=repo_name, folder_path=folder_path)}tf/plan.tfplan"
 
 
 _MANAGED_POINTER_TYPES = frozenset(

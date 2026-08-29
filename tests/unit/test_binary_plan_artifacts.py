@@ -47,12 +47,6 @@ def test_plan_out_path_cannot_be_overridden_by_extra_flags() -> None:
 def test_artifact_path_builder_rejects_traversal_and_uses_run_scoped_prefix() -> None:
     with pytest.raises(ValueError, match="\\.\\."):
         folder_artifact_prefix(repo_name="org/repo", run_id=_RUN_ID, folder_path="../infra/app")
-    with pytest.raises(ValueError, match="latest/ alias"):
-        folder_artifact_prefix(repo_name="org/repo", run_id="latest", folder_path="infra/app")
-    with pytest.raises(ValueError, match="latest/ alias"):
-        folder_artifact_prefix(repo_name="latest/org", run_id=_RUN_ID, folder_path="infra/app")
-    with pytest.raises(ValueError, match="latest/ alias"):
-        folder_artifact_prefix(repo_name="org/repo", run_id=_RUN_ID, folder_path="latest/app")
     keys = build_plan_artifact_keys(repo_name="org/repo", run_id=_RUN_ID, folder_path="infra/app")
     assert keys.plan == f"openci-tf/org/repo/{_RUN_ID}/infra/app/tf/plan.tfplan"
     assert keys.checksum.endswith("tf/plan.tfplan.sha256")
@@ -183,7 +177,6 @@ def test_comment_shows_run_id_and_plan_pointers_only() -> None:
     )
     assert "Plan Artifact" in rendered
     assert _RUN_ID in rendered
-    assert "openci-tf/org/repo/latest/infra/app/tf/plan.tfplan" in rendered
     assert f"openci-tf/org/repo/{_RUN_ID}/infra/app/tf/plan.tfplan" in rendered
     assert "SHA-256" not in rendered
     assert "Expires" not in rendered

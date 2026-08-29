@@ -16,7 +16,6 @@ from src.domain.engine.artifact_paths import (
     FolderArtifactKeys,
     build_folder_artifact_keys,
     build_folder_artifact_keys_for_run,
-    latest_plan_pointer,
     pointer_type_for_action,
     pr_pointer_key,
     run_scoped_plan_pointer,
@@ -1351,14 +1350,12 @@ def plan_artifact_pointer(
             f"- {pointer_label}: `{plan_env}`\n\n"
             "> Checksums and expiry live in manifest.json."
         )
-    latest = latest_plan_pointer(repo_name=repo_name, folder_path=folder)
     run_scoped = run_scoped_plan_pointer(
         repo_name=repo_name, run_id=run_id, folder_path=folder
     )
     return (
         "### Plan Artifact\n"
         f"- Execution ID: `{run_id}`\n"
-        f"- Latest plan: `{latest}`\n"
         f"- Run-scoped plan: `{run_scoped}`\n\n"
         "> Checksums and expiry live in manifest.json."
     )
