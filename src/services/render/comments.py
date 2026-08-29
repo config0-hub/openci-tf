@@ -47,6 +47,8 @@ def _command_context_from_event(
     if not isinstance(webhook, dict):
         return ""
     action = str(event.get("action") or webhook.get("action") or "plan")
+    if action == "report":
+        return ""
     folders = event.get("folders")
     folder_list = list(folders) if isinstance(folders, list) else []
     all_flag = bool(event.get("all_flag"))

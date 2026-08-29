@@ -58,6 +58,143 @@ def test_with_command_context_prefixes_body_for_github_pr():
     assert "## status" in body
 
 
+def _report_event(**overrides) -> dict:
+    event = _plan_event(
+        action="report",
+        all_flag=True,
+        webhook_info={
+            "repo_name": "org/repo",
+            "pr_number": 7,
+            "commit_hash": _FULL_SHA,
+            "trigger_id": "trigger",
+            "event_type": "issue_comment",
+            "comment_id": 42,
+            "comment_body": "tf report",
+        },
+        outcomes=[
+            {
+                "folder": "infra/a",
+                "account_id": "123456789012",
+                "execution_id": "run.abc.0",
+                "succeeded": True,
+            }
+        ],
+    )
+    event.update(overrides)
+    return event
+
+
+def _assert_report_body_omits_command_metadata(body: str) -> None:
+    assert "### openci-tf command" not in body
+    assert "- command: `tf report`" not in body
+    assert "triggering comment" not in body.lower()
+    assert "- run id:" not in body
+    assert "- commit:" not in body
+    assert "\n\n---\n\n" not in body
+
+
+def test_with_command_context_is_noop_for_report_action():
+    body = _with_command_context(_report_event(), "**Type:** Report\n\nreport body", run_id="run-1")
+    assert body == "**Type:** Report\n\nreport body"
+
+
+def _noop_github_client():
+    return SimpleNamespace(delete_comment=lambda *_, **__: None)
+
+
+def test_report_terminal_render_omits_command_metadata(monkeypatch):
+    monkeypatch.setenv("LOCKS_TABLE_NAME", "locks")
+    monkeypatch.setenv("TMP_BUCKET_NAME", "tmp")
+    monkeypatch.setattr(render, "get_github_token", lambda _: "token")
+    monkeypatch.setattr(render.boto3, "resource", lambda *_: SimpleNamespace(Table=lambda _: object()))
+    monkeypatch.setattr(render, "list_text_prefix", lambda *_: {})
+    monkeypatch.setattr(render, "list_prefix_object_names", lambda *_: frozenset())
+    monkeypatch.setattr(render, "_plan_artifact_metadata", lambda *_, **__: None)
+    monkeypatch.setattr(render.run_lock, "release", lambda *_, **__: None)
+    monkeypatch.setattr(render, "GitHubClient", lambda _: _noop_github_client())
+    monkeypatch.setattr(render, "_publish_report_all_pointer", lambda *_, **__: None)
+    posted: list[tuple[str, str, str, bool, bool]] = []
+
+    def capture(*args, **kwargs):
+        posted.append(
+            (args[3], args[4], args[5], kwargs.get("report_all", False), kwargs.get("emit_marker", True))
+        )
+        return 1
+
+    monkeypatch.setattr(render, "_delete_and_repost", capture)
+    monkeypatch.setattr(render, "_delete_transient_status_comment", lambda *_args: [])
+
+    result = render.handler(_report_event(), None)
+
+    assert result["rendered"] is True
+    assert len(posted) == 2
+    folder_body, folder_action, folder_name, folder_report_all, folder_emit = posted[0]
+    summary_body, summary_action, summary_name, summary_report_all, summary_emit = posted[1]
+    assert folder_action == "report" and folder_name == "infra/a" and not folder_report_all
+    assert summary_action == "report" and summary_name == "all" and summary_report_all
+    assert folder_emit is True and summary_emit is True
+    for body in (folder_body, summary_body):
+        _assert_report_body_omits_command_metadata(body)
+    assert "**Type:** Report" in summary_body
+    repo, pr = "org/repo", 7
+    folder_marker = format_comment_object_marker(repo, pr, "report", "infra/a")
+    summary_marker = format_comment_object_marker(repo, pr, "report-all", "all")
+    assert render._managed_comment_marker(repo, pr, "report", "infra/a") == folder_marker
+    assert render._managed_comment_marker(repo, pr, "report", "all", report_all=True) == summary_marker
+
+
+def test_report_placeholder_omits_command_metadata(monkeypatch):
+    monkeypatch.setattr(render, "get_github_token", lambda _: "token")
+    monkeypatch.setattr(render, "GitHubClient", lambda _: _noop_github_client())
+    posted: list[str] = []
+    monkeypatch.setattr(
+        render,
+        "_delete_and_repost",
+        lambda *_args, **kwargs: posted.append(_args[3]) or 1,
+    )
+
+    result = render.handler(
+        {
+            **_report_event(),
+            "placeholder": True,
+            "map_items": [{"folder": "infra/a", "account_id": "123456789012"}],
+            "skipped": [],
+        },
+        None,
+    )
+
+    assert result["placeholder_rendered"] is True
+    assert len(posted) == 2
+    for body in posted:
+        _assert_report_body_omits_command_metadata(body)
+    assert "## openci-tf report" in posted[1]
+
+
+def test_plan_render_still_prefixes_command_metadata(monkeypatch):
+    monkeypatch.setenv("LOCKS_TABLE_NAME", "locks")
+    monkeypatch.setenv("TMP_BUCKET_NAME", "tmp")
+    monkeypatch.setattr(render, "get_github_token", lambda _: "token")
+    monkeypatch.setattr(render.boto3, "resource", lambda *_: SimpleNamespace(Table=lambda _: object()))
+    monkeypatch.setattr(render, "list_text_prefix", lambda *_: {})
+    monkeypatch.setattr(render, "_plan_artifact_metadata", lambda *_, **__: None)
+    monkeypatch.setattr(render.run_lock, "release", lambda *_, **__: None)
+    monkeypatch.setattr(render, "GitHubClient", lambda _: _noop_github_client())
+    posted: list[str] = []
+    monkeypatch.setattr(
+        render,
+        "_delete_and_repost",
+        lambda *_args, **kwargs: posted.append(_args[3]) or 1,
+    )
+    monkeypatch.setattr(render, "_delete_generated_comment", lambda *_, **__: None)
+    monkeypatch.setattr(render, "_delete_transient_status_comment", lambda *_args: [])
+
+    render.handler(_plan_event(), None)
+
+    assert posted
+    assert any("### openci-tf command" in body for body in posted)
+    assert any("- command: `tf plan infra/a`" in body for body in posted)
+
+
 def test_generated_marker_cleanup_deletes_only_bot_comments():
     marker_deleted: list[int] = []
     marker = format_comment_object_marker("org/repo", 7, "plan", "infra/a")
