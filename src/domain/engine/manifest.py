@@ -166,7 +166,15 @@ def _artifact_names_for_action(action: str) -> tuple[str, ...]:
         return ("init.out", "validate.out", "plan-show.out", "apply.out")
     if action == "destroy":
         return ("init.out", "validate.out", "plan-show.out", "destroy.out")
-    return ("init.out", "validate.out", "tf/plan.out", "tfsec.json", "tfsec.output", "infracost.json")
+    return (
+        "init.out",
+        "validate.out",
+        "tf/plan.out",
+        "tfsec.json",
+        "tfsec.output",
+        "infracost.json",
+        "infracost.output",
+    )
 
 
 def _expected_done_uri(done_bucket: str, execution_id: str) -> str:
@@ -609,7 +617,7 @@ def _build_artifact_entries(
         uri = f"s3://{tmp_bucket}/{key}"
         meta = head_object(tmp_bucket, key)
         if meta is None:
-            if require_complete:
+            if require_complete and name not in _OPTIONAL_PLAN_REPORT_ENTRIES:
                 raise ValueError(f"expected artifact missing: {name}")
             continue
         generated_timestamps.append(_last_modified(meta))
@@ -629,29 +637,6 @@ def _build_artifact_entries(
                 expires_at=_tmp_entry_expiry(meta, key),
             )
         )
-    if action in {"plan", "report"}:
-        optional_name = "infracost.output"
-        optional_key = keys.infracost_output
-        optional_uri = f"s3://{tmp_bucket}/{optional_key}"
-        optional_meta = head_object(tmp_bucket, optional_key)
-        if optional_meta is not None:
-            generated_timestamps.append(_last_modified(optional_meta))
-            entries.append(
-                _entry(
-                    optional_name,
-                    optional_uri,
-                    _head_content_type(optional_meta, _TEXT_ARTIFACTS[optional_name]),
-                    size=int(optional_meta["content_length"]),
-                    checksum=_content_checksum(
-                        optional_meta,
-                        bucket=tmp_bucket,
-                        key=optional_key,
-                        read_object_bytes=read_object_bytes,
-                        max_bytes=MAX_DONE_MARKER_BYTES,
-                    ),
-                    expires_at=_tmp_entry_expiry(optional_meta, optional_key),
-                )
-            )
 
 
 def build_manifest(

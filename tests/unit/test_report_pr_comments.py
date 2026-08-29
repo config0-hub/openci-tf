@@ -432,6 +432,64 @@ def test_report_folder_artifacts_use_authenticated_console_links():
     assert "s3://" not in rendered
 
 
+def test_report_folder_artifact_links_use_pr_scoped_report_prefix():
+    from urllib.parse import unquote
+
+    from src.domain.engine.artifact_paths import build_folder_artifact_keys_for_run
+
+    repo_name = "org/repo"
+    run_id = "1756419360000.1a2b3c4d"
+    folder = "infra/app"
+    pr_number = 7
+    keys = build_folder_artifact_keys_for_run(
+        repo_name=repo_name,
+        run_id=run_id,
+        folder_path=folder,
+        pr_number=pr_number,
+        pointer_type="report",
+    )
+    rendered = folder_comment(
+        "infra/app",
+        _outcome("infra/app"),
+        _artifacts(),
+        **_report_link_kwargs(
+            repo_name=repo_name,
+            run_id=run_id,
+            pr_number=pr_number,
+            existing_names=frozenset({"manifest.json"}),
+        ),
+    )
+    decoded = unquote(rendered)
+    assert f"pr-{pr_number}/executions/{run_id}/report/" in decoded
+    assert keys.manifest_json in decoded
+
+
+def test_report_folder_artifact_links_fall_back_to_run_scoped_prefix_without_pr():
+    from urllib.parse import unquote
+
+    from src.domain.engine.artifact_paths import build_folder_artifact_keys
+
+    repo_name = "org/repo"
+    run_id = "1756419360000.1a2b3c4d"
+    folder = "infra/app"
+    keys = build_folder_artifact_keys(
+        repo_name=repo_name, run_id=run_id, folder_path=folder
+    )
+    rendered = folder_comment(
+        folder,
+        _outcome(folder),
+        _artifacts(),
+        **_report_link_kwargs(
+            repo_name=repo_name,
+            run_id=run_id,
+            existing_names=frozenset({"manifest.json"}),
+        ),
+    )
+    decoded = unquote(rendered)
+    assert keys.manifest_json in decoded
+    assert "/executions/" not in decoded
+
+
 def test_report_folder_execution_shows_step_functions_not_codebuild():
     rendered = folder_comment(
         "infra/a",

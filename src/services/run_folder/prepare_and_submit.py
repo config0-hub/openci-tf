@@ -165,7 +165,7 @@ def _artifact_names(action: str) -> tuple[str, ...]:
         return ("init.out", "validate.out", "plan-show.out", "destroy.out")
     names = ("init.out", "validate.out", "tf/plan.out", "drift.json")
     if action in {"plan", "report"}:
-        return (*names, "tfsec.json", "tfsec.output", "infracost.json")
+        return (*names, "tfsec.json", "tfsec.output", "infracost.json", "infracost.output")
     return names
 
 

@@ -13,11 +13,15 @@ from typing import Any
 
 from src.core.terminal_evidence import redact_and_bound_terminal_evidence
 from src.domain.engine.artifact_paths import (
+    FolderArtifactKeys,
     build_folder_artifact_keys,
+    build_folder_artifact_keys_for_run,
     latest_plan_pointer,
+    pointer_type_for_action,
     pr_pointer_key,
     run_scoped_plan_pointer,
 )
+from src.domain.engine.outer_execution_id import validate_outer_run_id
 from src.domain.formatters.console_urls import s3_object_console_url
 from src.domain.formatters.comment_bounds import (  # noqa: F401  (re-exported)
     _MAX_COMMENT_CHARS,
@@ -842,15 +846,49 @@ _REPORT_ARTIFACT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
 )
 
 
+def _report_artifact_layout_keys(
+    *,
+    repo_name: str,
+    run_id: str,
+    folder: str,
+    pr_number: int | None,
+) -> FolderArtifactKeys:
+    scoped_pr: int | None = None
+    pointer_type: str | None = None
+    if isinstance(pr_number, int):
+        try:
+            validate_outer_run_id(run_id)
+        except ValueError:
+            pass
+        else:
+            scoped_pr = pr_number
+            pointer_type = pointer_type_for_action("report")
+    if scoped_pr is not None and pointer_type is not None:
+        return build_folder_artifact_keys_for_run(
+            repo_name=repo_name,
+            run_id=run_id,
+            folder_path=folder,
+            pr_number=scoped_pr,
+            pointer_type=pointer_type,
+        )
+    return build_folder_artifact_keys(
+        repo_name=repo_name, run_id=run_id, folder_path=folder
+    )
+
+
 def _report_artifact_key(
     *,
     repo_name: str,
     run_id: str,
     folder: str,
     storage_name: str,
+    pr_number: int | None = None,
 ) -> str:
-    keys = build_folder_artifact_keys(
-        repo_name=repo_name, run_id=run_id, folder_path=folder
+    keys = _report_artifact_layout_keys(
+        repo_name=repo_name,
+        run_id=run_id,
+        folder=folder,
+        pr_number=pr_number,
     )
     by_name = {
         "manifest.json": keys.manifest_json,
@@ -879,6 +917,7 @@ def _report_artifacts_collapsible(
     hub_account_id: str | None,
     identity_center_start_url: str | None,
     identity_center_role_name: str | None,
+    pr_number: int | None = None,
 ) -> str:
     if not repo_name or not run_id or not tmp_bucket or not region:
         return ""
@@ -893,6 +932,7 @@ def _report_artifacts_collapsible(
                 run_id=run_id,
                 folder=folder,
                 storage_name=storage_name,
+                pr_number=pr_number,
             )
             url = s3_object_console_url(
                 tmp_bucket,
@@ -934,6 +974,7 @@ def _report_folder_comment(
     console_url: str | None = None,
     run_id: str | None = None,
     repo_name: str = "",
+    pr_number: int | None = None,
     existing_names: frozenset[str] | None = None,
     tmp_bucket: str = "",
     region: str = "",
@@ -967,6 +1008,7 @@ def _report_folder_comment(
             hub_account_id=hub_account_id,
             identity_center_start_url=identity_center_start_url,
             identity_center_role_name=identity_center_role_name,
+            pr_number=pr_number,
         ),
     ]
     return _wrap_collapsed(
@@ -1520,6 +1562,7 @@ def folder_comment(
             console_url=console_url,
             run_id=run_id,
             repo_name=repo_name,
+            pr_number=pr_number,
             existing_names=existing_names,
             tmp_bucket=tmp_bucket,
             region=region,

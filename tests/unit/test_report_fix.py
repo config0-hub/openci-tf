@@ -80,6 +80,103 @@ def test_report_script_uses_tfsec_soft_fail_out_and_silent_curl():
     assert 'printf \'%s\\n\' \'{"skipped":true,"reason":"not configured"}\'' in script
 
 
+def test_report_script_upload_loop_includes_infracost_output():
+    script = render(ScriptParams("report", "lambda", folder="infra"))
+    upload_names = next(
+        line.split("for name in ", 1)[1].split("; do", 1)[0]
+        for line in script.splitlines()
+        if line.strip().startswith("for name in ")
+    )
+    assert "infracost.output" in upload_names
+
+
+def test_report_script_uploads_infracost_output_when_configured(tmp_path):
+    uploads: list[str] = []
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    for binary in ("tofu", "tfsec", "infracost"):
+        source = tmp_path / binary
+        if binary == "tofu":
+            body = '''case "$1" in
+  init) echo init ;;
+  validate) echo validate ;;
+  plan) for arg in "$@"; do case "$arg" in -out=*) printf 'binary-plan' > "${arg#-out=}" ;; esac; done; echo plan ;;
+esac'''
+        elif binary == "tfsec":
+            body = _TFSEC_EMPTY
+        else:
+            body = _INFRACOST_WRITE
+        source.write_text(f"#!/usr/bin/env bash\n{body}\n")
+        source.chmod(0o755)
+        with tarfile.open(downloads / f"{binary}.tar.gz", "w:gz") as archive:
+            archive.add(source, arcname=binary)
+    upload_log = tmp_path / "uploads.log"
+    curl = tmp_path / "curl"
+    curl.write_text(f'''#!/usr/bin/env bash
+set -euo pipefail
+if [[ " $* " == *" --upload-file "* ]]; then
+  for arg in "$@"; do
+    case "$arg" in
+      --upload-file) file="$2" ;;
+      https://*) url="$arg" ;;
+    esac
+  done
+  printf '%s %s\\n' "$url" "$(basename "$file")" >> "{upload_log}"
+  exit 0
+fi
+for arg in "$@"; do case "$arg" in https://cache/*) exit 22 ;; https://upstream/*) source="$arg" ;; esac; done
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then cp "{downloads}/$(basename "$source").tar.gz" "$2"; exit 0; fi
+  shift
+done
+''')
+    curl.chmod(0o755)
+    sha256sum = tmp_path / "sha256sum"
+    sha256sum.write_text("#!/usr/bin/env bash\ncat >/dev/null\n")
+    sha256sum.chmod(0o755)
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    artifacts = tmp_path / "artifacts"
+    script_path = tmp_path / "run.sh"
+    script_path.write_text(render(ScriptParams("report", "lambda", folder=str(folder))))
+    infracost_output_url = "https://upload/infracost-output"
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "ARTIFACTS_DIR": str(artifacts),
+        "INFRACOST_API_KEY": "ico-test",
+        "ARTIFACT_PUT_URL_INIT_OUT": "https://upload/init",
+        "ARTIFACT_PUT_URL_VALIDATE_OUT": "https://upload/validate",
+        "ARTIFACT_PUT_URL_TF_PLAN_OUT": "https://upload/plan",
+        "ARTIFACT_PUT_URL_TFSEC_JSON": "https://upload/tfsec-json",
+        "ARTIFACT_PUT_URL_TFSEC_OUTPUT": "https://upload/tfsec-output",
+        "ARTIFACT_PUT_URL_INFRACOST_JSON": "https://upload/infracost-json",
+        "ARTIFACT_PUT_URL_INFRACOST_OUTPUT": infracost_output_url,
+        "PLAN_BINARY_PUT_URL": "https://upload-plan",
+        "PLAN_SHA256_PUT_URL": "https://upload-sha",
+        "PLAN_METADATA_PUT_URL": "https://upload-metadata",
+        "OPENCI_TF_PLAN_S3_URI": "s3://tmp/plans/repo/sha/account/folder/execution/attempt/plan.tfplan",
+        "OPENCI_TF_PLAN_SHA256_S3_URI": "s3://tmp/plans/repo/sha/account/folder/execution/attempt/plan.tfplan.sha256",
+        "OPENCI_TF_PLAN_METADATA_S3_URI": "s3://tmp/plans/repo/sha/account/folder/execution/attempt/plan-metadata.json",
+        "OPENCI_TF_PLAN_EXPIRES_AFTER_DAYS": "2",
+        "OPENCI_TF_REPO_NAME": "org/repo",
+        "OPENCI_TF_PINNED_SHA": "a" * 40,
+        "OPENCI_TF_ACCOUNT_ID": "123456789012",
+        "OPENCI_TF_FOLDER": str(folder),
+        "OPENCI_TF_ACTION": "report",
+        "OPENCI_TF_TF_RUNTIME": "tofu:1.8.0",
+        "OPENCI_TF_RUN_ID": "0",
+        **{f"CACHE_GET_URL_{binary.upper()}": f"https://cache/{binary.lower()}" for binary in ("TOFU", "TFSEC", "INFRACOST")},
+        **{f"CACHE_PUT_URL_{binary.upper()}": f"https://cache-put/{binary.lower()}" for binary in ("TOFU", "TFSEC", "INFRACOST")},
+        **{f"UPSTREAM_URL_{binary.upper()}": f"https://upstream/{binary.lower()}" for binary in ("TOFU", "TFSEC", "INFRACOST")},
+    }
+    completed = subprocess.run(["bash", str(script_path)], env=env, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr
+    assert (artifacts / "infracost.output").exists()
+    logged = upload_log.read_text()
+    assert infracost_output_url in logged
+
+
 def test_plan_script_includes_scanners():
     script = render(ScriptParams("plan", "lambda"))
     assert "tfsec . --format json" in script
