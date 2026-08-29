@@ -1493,6 +1493,53 @@ def pending_summary(
     return "\n".join(rows)
 
 
+def _terminal_failure_execution_section(
+    *,
+    action: str,
+    console_url: str | None,
+    commit_hash: str,
+    include_ci_details: bool,
+) -> str:
+    """Deterministic execution-link section for terminal failure bodies.
+
+    Report comments keep the finalized report surface: the Step Functions link
+    is a separate Execution child and CodeBuild never appears. Plan and drift
+    keep the CI Details convention used by terminal single-folder comments.
+    """
+    if not console_url:
+        return ""
+    if action == "report":
+        return _report_execution_collapsible(console_url=console_url)
+    if include_ci_details and commit_hash:
+        return ci_details(commit_hash, console_url, "failed")
+    return ""
+
+
+def _terminal_failure_comment(
+    *,
+    folder: str,
+    account_id: str,
+    commit_hash: str,
+    status_label: str,
+    body: str,
+    action: str,
+    console_url: str | None,
+    include_ci_details: bool,
+) -> str:
+    """Assemble one terminal failure comment with its execution link attached."""
+    execution = _terminal_failure_execution_section(
+        action=action,
+        console_url=console_url,
+        commit_hash=commit_hash,
+        include_ci_details=include_ci_details,
+    )
+    if execution:
+        body = f"{body}\n\n{execution}"
+    return _wrap_collapsed(
+        _summary_line(folder, account_id, commit_hash, status_label), body
+    )
+
+
 def folder_comment(
     folder: str,
     outcome: dict[str, Any],
@@ -1533,25 +1580,46 @@ def folder_comment(
             _summary_line(folder, account_id, commit_hash, status_label), body
         )
     if outcome.get("status") == "infrastructure_error":
-        body = (
-            f"{_folder_heading(folder, account_id, action=action)}"
-            f"{_error_block('Infrastructure error', _format_error(outcome))}"
-        )
-        return _wrap_collapsed(
-            _summary_line(folder, account_id, commit_hash, status_label), body
+        return _terminal_failure_comment(
+            folder=folder,
+            account_id=account_id,
+            commit_hash=commit_hash,
+            status_label=status_label,
+            body=(
+                f"{_folder_heading(folder, account_id, action=action)}"
+                f"{_error_block('Infrastructure error', _format_error(outcome))}"
+            ),
+            action=action,
+            console_url=console_url,
+            include_ci_details=include_ci_details,
         )
     if outcome.get("credential_expired"):
-        body = f"{_folder_heading(folder, account_id, action=action)} Credentials expired while the folder run was executing."
-        return _wrap_collapsed(
-            _summary_line(folder, account_id, commit_hash, status_label), body
+        return _terminal_failure_comment(
+            folder=folder,
+            account_id=account_id,
+            commit_hash=commit_hash,
+            status_label=status_label,
+            body=(
+                f"{_folder_heading(folder, account_id, action=action)}"
+                " Credentials expired while the folder run was executing."
+            ),
+            action=action,
+            console_url=console_url,
+            include_ci_details=include_ci_details,
         )
     if outcome.get("succeeded") is False or outcome.get("status") == "failed":
-        body = (
-            f"{_folder_heading(folder, account_id, action=action)}"
-            f"{_error_block('Folder execution failed', _format_error(outcome))}"
-        )
-        return _wrap_collapsed(
-            _summary_line(folder, account_id, commit_hash, status_label), body
+        return _terminal_failure_comment(
+            folder=folder,
+            account_id=account_id,
+            commit_hash=commit_hash,
+            status_label=status_label,
+            body=(
+                f"{_folder_heading(folder, account_id, action=action)}"
+                f"{_error_block('Folder execution failed', _format_error(outcome))}"
+            ),
+            action=action,
+            console_url=console_url,
+            include_ci_details=include_ci_details,
         )
 
     if action == "report":
