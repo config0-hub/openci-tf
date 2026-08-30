@@ -94,6 +94,8 @@ def test_mutation_sequential_map_item_selector_keeps_pin_fields():
     assert '"folder_pin.$"' in block
     assert '"source_plan_run_id.$"' in block
     assert '"grace_seconds.$"' in block
+    assert '"pipeline_plan_focus.$"' in block
+    assert '"$$.Map.Item.Value.pipeline_plan_focus"' in block
 
 
 def test_placeholder_render_failure_routes_to_read_step_gate_or_mutation_map():
@@ -196,6 +198,7 @@ def test_mutation_collect_lane_requires_source_plan_run_id():
     }
     params = collect_task_parameters(state, mutation=True)
     assert params["source_plan_run_id"] == "plan-run"
+    assert params["pipeline_plan_focus"] is False
 
 
 def test_intent_create_lambda_receives_plan_retention_days():

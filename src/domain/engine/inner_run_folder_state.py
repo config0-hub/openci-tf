@@ -44,6 +44,8 @@ def collect_task_parameters(state: dict[str, Any], *, mutation: bool) -> dict[st
     }
     if mutation:
         params["source_plan_run_id"] = state["source_plan_run_id"]
+    params["step_index"] = state.get("step_index", 0)
+    params["pipeline_plan_focus"] = state.get("pipeline_plan_focus") is True
     build_id = result.get("codebuild_build_id")
     if isinstance(build_id, str) and build_id:
         params["codebuild_build_id"] = build_id

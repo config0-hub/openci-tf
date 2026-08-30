@@ -503,7 +503,9 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             "ssm_openci_tf_github_token": github_token_path,
             "ssm_infracost_api_key": infracost_key_path,
         }
-        item["pipeline_plan_focus"] = pipeline_plan_focus
+        item["pipeline_plan_focus"] = (
+            False if action in _MUTATION_ACTIONS else pipeline_plan_focus
+        )
         grace_seconds = 0
         if action in _MUTATION_ACTIONS:
             source_plan_run_id = event.get("source_plan_run_id")
