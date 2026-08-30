@@ -81,6 +81,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         else:
             result["intent_create"] = True
 
+    if result.get("pipeline_mutation_plan_first") is not True:
+        result["pipeline_mutation_plan_first"] = False
+        result["pending_mutation_action"] = None
+
     # Preserve the prepared execution contract; parsing only owns command grammar.
     for field in ("folder_configs", "upstream_urls"):
         if field in event:

@@ -2065,19 +2065,21 @@ def pipeline_mutation_aggregate_comment(
     checkpoint_rows: list[dict[str, Any]],
     footer: str | None = None,
     metadata_lines: list[str] | None = None,
+    cumulative_succeeded: int | None = None,
+    cumulative_failed: int | None = None,
 ) -> str:
     """Render one stable aggregate pipeline apply/destroy checkpoint comment."""
     if not checkpoint_rows:
         raise ValueError("checkpoint_rows must be non-empty")
-    succeeded = sum(
-        1
-        for row in checkpoint_rows
-        if row.get("succeeded") is True
+    succeeded = (
+        cumulative_succeeded
+        if cumulative_succeeded is not None
+        else sum(1 for row in checkpoint_rows if row.get("succeeded") is True)
     )
-    failed = sum(
-        1
-        for row in checkpoint_rows
-        if row.get("succeeded") is False
+    failed = (
+        cumulative_failed
+        if cumulative_failed is not None
+        else sum(1 for row in checkpoint_rows if row.get("succeeded") is False)
     )
     pending = max(checkpoint_count - succeeded - failed, 0)
     lines = [

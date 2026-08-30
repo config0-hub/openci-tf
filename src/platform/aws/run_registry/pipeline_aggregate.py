@@ -11,7 +11,8 @@ from . import _shared
 from .keys import pipeline_aggregate_pk
 from ._shared import RunRegistryError, _normalize
 
-_MAX_CHECKPOINT_ROWS = 20
+# Must match domain.run.limits.MAX_FOLDERS_PER_REQUEST (platform layer cannot import domain).
+_MAX_CHECKPOINT_ROWS = 50
 
 
 def _aggregate_sk() -> str:
@@ -62,6 +63,12 @@ def save_pipeline_aggregate_state(
     if not isinstance(checkpoint_rows, list):
         raise ValueError("checkpoint_rows must be a list")
     bounded_rows = checkpoint_rows[-_MAX_CHECKPOINT_ROWS:]
+    cumulative_succeeded = sum(
+        1 for row in checkpoint_rows if row.get("succeeded") is True
+    )
+    cumulative_failed = sum(
+        1 for row in checkpoint_rows if row.get("succeeded") is False
+    )
     pk = pipeline_aggregate_pk(
         trigger_id=trigger_id,
         repo_name=repo_name,
@@ -79,6 +86,8 @@ def save_pipeline_aggregate_state(
                 "sk": _aggregate_sk(),
                 "comment_id": comment_id,
                 "checkpoint_rows": bounded_rows,
+                "cumulative_succeeded": cumulative_succeeded,
+                "cumulative_failed": cumulative_failed,
                 "updated_at": now,
             }
         )

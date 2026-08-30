@@ -328,7 +328,7 @@ def _pipeline_mutation_aggregate_body(
     commit_hash: str,
     footer: str | None,
     plan_pending: bool = False,
-) -> tuple[str, list[dict[str, Any]]]:
+) -> tuple[str, list[dict[str, Any]], int | None]:
     webhook = event["webhook_info"]
     pipeline = str(webhook.get("pipeline") or "")
     step_index = webhook.get("pipeline_step_index")
@@ -350,6 +350,9 @@ def _pipeline_mutation_aggregate_body(
         plan_pending=plan_pending,
     )
     prior_rows: list[dict[str, Any]] = []
+    existing_comment_id: int | None = None
+    cumulative_succeeded: int | None = None
+    cumulative_failed: int | None = None
     identity = _pipeline_aggregate_identity(event, action)
     if identity is not None and os.environ.get("RUN_REGISTRY_TABLE_NAME"):
         from src.platform.aws.run_registry.pipeline_aggregate import (
@@ -357,11 +360,28 @@ def _pipeline_mutation_aggregate_body(
         )
 
         state = get_pipeline_aggregate_state(**identity)
-        if isinstance(state, dict) and isinstance(state.get("checkpoint_rows"), list):
-            prior_rows = [
-                row for row in state["checkpoint_rows"] if isinstance(row, dict)
-            ]
+        if isinstance(state, dict):
+            if isinstance(state.get("checkpoint_rows"), list):
+                prior_rows = [
+                    row for row in state["checkpoint_rows"] if isinstance(row, dict)
+                ]
+            if type(state.get("comment_id")) is int:
+                existing_comment_id = state["comment_id"]
+            if type(state.get("cumulative_succeeded")) is int:
+                cumulative_succeeded = state["cumulative_succeeded"]
+            if type(state.get("cumulative_failed")) is int:
+                cumulative_failed = state["cumulative_failed"]
     checkpoint_rows = _merge_checkpoint_rows(prior_rows, current_row)
+    if cumulative_succeeded is not None or cumulative_failed is not None:
+        prior_indexes = {
+            int(row.get("checkpoint_index") or 0) for row in prior_rows
+        }
+        current_index = int(current_row.get("checkpoint_index") or 0)
+        if current_index not in prior_indexes:
+            if current_row.get("succeeded") is True:
+                cumulative_succeeded = (cumulative_succeeded or 0) + 1
+            elif current_row.get("succeeded") is False:
+                cumulative_failed = (cumulative_failed or 0) + 1
     body = pipeline_mutation_aggregate_comment(
         action=mutation_action,
         pipeline=pipeline,
@@ -372,8 +392,10 @@ def _pipeline_mutation_aggregate_body(
             f"- Run ID: `{event.get('run_id')}`",
             f"- Source plan run ID: `{_source_plan_run_id(outcome) or event.get('run_id') or 'unknown'}`",
         ],
+        cumulative_succeeded=cumulative_succeeded,
+        cumulative_failed=cumulative_failed,
     )
-    return body, checkpoint_rows
+    return body, checkpoint_rows, existing_comment_id
 
 
 def _pipeline_apply_footer(
@@ -1220,7 +1242,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             if isinstance(execution_id, str) and execution_id:
                 run_lock.release(table, repo, folder, execution_id)
     if pipeline_mutation:
-        aggregate_body, checkpoint_rows = _pipeline_mutation_aggregate_body(
+        aggregate_body, checkpoint_rows, existing_comment_id = _pipeline_mutation_aggregate_body(
             event,
             action=action,
             outcomes=outcomes,
@@ -1230,16 +1252,6 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             plan_pending=plan_pending,
         )
         identity = _pipeline_aggregate_identity(event, action)
-        existing_comment_id = None
-        if identity is not None and os.environ.get("RUN_REGISTRY_TABLE_NAME"):
-            from src.platform.aws.run_registry.pipeline_aggregate import (
-                get_pipeline_aggregate_state,
-                save_pipeline_aggregate_state,
-            )
-
-            state = get_pipeline_aggregate_state(**identity)
-            if isinstance(state, dict) and type(state.get("comment_id")) is int:
-                existing_comment_id = state["comment_id"]
         comment_id = _upsert_managed_comment(
             client,
             repo,

@@ -373,6 +373,9 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                         "outcomes": [],
                         "skipped": [],
                         "no_op_reason": "no configured Terraform folders are affected by this pull request",
+                        "pipeline_plan_focus": False,
+                        "pipeline_mutation_plan_first": False,
+                        "pending_mutation_action": None,
                     }
                 raise ConfigResolutionError("no configured folders found")
         else:
@@ -500,8 +503,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             "ssm_openci_tf_github_token": github_token_path,
             "ssm_infracost_api_key": infracost_key_path,
         }
-        if pipeline_plan_focus:
-            item["pipeline_plan_focus"] = True
+        item["pipeline_plan_focus"] = pipeline_plan_focus
         grace_seconds = 0
         if action in _MUTATION_ACTIONS:
             source_plan_run_id = event.get("source_plan_run_id")
@@ -532,8 +534,13 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         "deadline_at": deadline_at,
         "no_op_reason": None,
     }
-    if pipeline_plan_focus:
-        resolved_event["pipeline_plan_focus"] = True
+    resolved_event["pipeline_plan_focus"] = pipeline_plan_focus
+    resolved_event["pipeline_mutation_plan_first"] = pipeline_mutation_plan_first
+    resolved_event["pending_mutation_action"] = (
+        event.get("pending_mutation_action")
+        if pipeline_mutation_plan_first
+        else None
+    )
     build_compact_resolve_result(
         resolved_event, run_id=run_id, full_items=candidates, skipped=[]
     )

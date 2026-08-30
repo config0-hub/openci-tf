@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, cast
 
+import requests
+
 from src.domain.formatters.artifacts import (
     bound_comment,
     metadata_section,
@@ -347,8 +349,9 @@ def _upsert_managed_comment(
         try:
             client.update_comment(repo, existing_comment_id, bounded)
             return existing_comment_id
-        except Exception:
-            pass
+        except requests.HTTPError as error:
+            if error.response is None or error.response.status_code != 404:
+                raise
     _delete_managed_comment(
         client,
         repo,

@@ -390,3 +390,27 @@ def test_aggregate_comment_uses_total_checkpoint_count_and_cumulative_results():
     assert "**3 checkpoints** · **1 succeeded** · **0 failed** · **2 pending**" in body
     assert "| 1/3 | `infra/vpc` |" in body
     assert "| 2/3 | `infra/rds` |" in body
+
+
+def test_aggregate_comment_uses_persisted_cumulative_counts_when_rows_are_truncated():
+    body = pipeline_mutation_aggregate_comment(
+        action="apply",
+        pipeline="data/primary",
+        checkpoint_count=30,
+        checkpoint_rows=[
+            {
+                "checkpoint_index": 30,
+                "folder": "infra/f29",
+                "account_id": "123",
+                "plan_show_text": "plan 30",
+                "pinned_plan_artifact": "plan.tfplan",
+                "confirmation_status": "Confirmed ✅",
+                "result_label": "Apply succeeded ✅",
+                "succeeded": True,
+            }
+        ],
+        cumulative_succeeded=25,
+        cumulative_failed=3,
+    )
+
+    assert "**30 checkpoints** · **25 succeeded** · **3 failed** · **2 pending**" in body

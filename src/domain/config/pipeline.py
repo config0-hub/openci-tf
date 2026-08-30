@@ -96,21 +96,6 @@ def checkpoint_count(pipeline: Pipeline) -> int:
     return len(flatten_pipeline_folders(pipeline))
 
 
-def folders_from_checkpoint(
-    pipeline: Pipeline,
-    checkpoint_index: int,
-    *,
-    reverse: bool = False,
-) -> list[str]:
-    """Return folders still requiring gate checks from one checkpoint onward."""
-    if checkpoint_index < 1:
-        raise ValueError("checkpoint_index must be an integer >= 1")
-    folders = list(flatten_pipeline_folders(pipeline, reverse=reverse))
-    if checkpoint_index > len(folders):
-        raise ValueError("checkpoint_index is out of range")
-    return folders[checkpoint_index - 1 :]
-
-
 def folder_at_checkpoint(
     pipeline: Pipeline,
     checkpoint_index: int,
