@@ -211,6 +211,9 @@ def find_latest_successful_pipeline_checkpoint(
     pipeline: str,
     action: str,
     step_index: int,
+    pr_number: int,
+    commit_hash: str,
+    pipeline_sha256: str,
 ) -> dict[str, Any] | None:
     """Return the newest successful apply/destroy run for one pipeline checkpoint."""
     if action not in {"apply", "destroy"}:
@@ -221,6 +224,9 @@ def find_latest_successful_pipeline_checkpoint(
         pipeline=pipeline,
         action=action,
         step_index=step_index,
+        pr_number=pr_number,
+        commit_hash=commit_hash,
+        pipeline_sha256=pipeline_sha256,
     )
     query_kwargs: dict[str, Any] = {
         "IndexName": "pipeline_apply_step",
@@ -258,6 +264,9 @@ def find_latest_successful_pipeline_apply(
     repo_name: str,
     pipeline: str,
     step_index: int,
+    pr_number: int,
+    commit_hash: str,
+    pipeline_sha256: str,
 ) -> dict[str, Any] | None:
     """Return the newest successful apply run for one pipeline checkpoint."""
     return find_latest_successful_pipeline_checkpoint(
@@ -266,6 +275,9 @@ def find_latest_successful_pipeline_apply(
         pipeline=pipeline,
         action="apply",
         step_index=step_index,
+        pr_number=pr_number,
+        commit_hash=commit_hash,
+        pipeline_sha256=pipeline_sha256,
     )
 
 

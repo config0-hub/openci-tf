@@ -360,6 +360,9 @@ def create_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     requested_comment_body = webhook.get("comment_body")
     if isinstance(requested_comment_body, str):
         requested_comment_body = normalized_command_context_line(requested_comment_body)
+    source_plan_run_id = event.get("source_plan_run_id")
+    if not isinstance(source_plan_run_id, str) or not source_plan_run_id:
+        source_plan_run_id = None
     try:
         failure, record = create_intent(
             action=action,
@@ -379,6 +382,7 @@ def create_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             requested_comment_body=requested_comment_body
             if isinstance(requested_comment_body, str)
             else None,
+            source_plan_run_id=source_plan_run_id,
         )
     except IntentCreationError as error:
         failures = [IntentGateFailure(str(error))]

@@ -270,6 +270,12 @@ def test_plan_lookup_destroy_reads_destroy_pointer(monkeypatch):
         "src.domain.intent.plan_lookup.list_runs_for_repo",
         lambda *_args, **_kwargs: ([], None),
     )
+    monkeypatch.setattr(
+        "src.domain.intent.plan_lookup.get_run",
+        lambda run_id: {"created_at": 1_786_850_065_992}
+        if run_id == "1786850065992.24d545e0"
+        else None,
+    )
 
     result = find_newest_fresh_plan_run(
         trigger_id="trigger",
@@ -288,6 +294,7 @@ def test_plan_lookup_destroy_reads_destroy_pointer(monkeypatch):
         "plan_sha256": "d" * 64,
         "plan_artifact_name": "destroy.plan.tfplan",
         "tf_runtime": "tofu:1.8.0",
+        "created_at": 1_786_850_065_992,
     }
     assert result.stale is False
     assert captured["pointer_key"] == pr_pointer_key(
@@ -354,6 +361,12 @@ def test_plan_lookup_fallback_uses_pr_scoped_manifest_for_destroy(monkeypatch):
         "src.domain.intent.plan_lookup.get_folder_record",
         lambda *_args, **_kwargs: {"status": "succeeded", "manifest_sha256": "c" * 64},
     )
+    monkeypatch.setattr(
+        "src.domain.intent.plan_lookup.get_run",
+        lambda run_id: {"created_at": 1_700_000_000_000}
+        if run_id == "destroy-run"
+        else None,
+    )
 
     result = find_newest_fresh_plan_run(
         trigger_id="trigger",
@@ -372,6 +385,7 @@ def test_plan_lookup_fallback_uses_pr_scoped_manifest_for_destroy(monkeypatch):
         "plan_sha256": "e" * 64,
         "plan_artifact_name": "destroy.plan.tfplan",
         "tf_runtime": "tofu:1.8.0",
+        "created_at": 1_700_000_000_000,
     }
     assert result.stale is False
     assert captured == {
@@ -486,6 +500,7 @@ def test_intent_gate_pins_current_account_and_runtime(monkeypatch):
                 "plan_sha256": "b" * 64,
                 "plan_artifact_name": "plan.tfplan",
                 "tf_runtime": "tofu:1.8.0",
+                "created_at": 1_700_000_000_000,
             }
         ),
     )

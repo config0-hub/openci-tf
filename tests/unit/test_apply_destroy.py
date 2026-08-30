@@ -193,6 +193,7 @@ def test_intent_gate_apply_enabled_account_passes_folder_gate(monkeypatch):
                 "plan_sha256": "b" * 64,
                 "plan_artifact_name": "plan.tfplan",
                 "tf_runtime": "tofu:1.8.0",
+                "created_at": 1_700_000_000_000,
             }
         ),
     )
@@ -372,6 +373,12 @@ def test_plan_lookup_marks_plan_stale_when_newer_mutation_succeeded(monkeypatch)
     monkeypatch.setattr(
         "src.domain.intent.plan_lookup.get_folder_record", folder_record
     )
+    monkeypatch.setattr(
+        "src.domain.intent.plan_lookup.get_run",
+        lambda run_id: {"created_at": 1_700_000_000_000}
+        if run_id == "1700000000000.aaaaaaaa"
+        else None,
+    )
 
     result = find_newest_fresh_plan_run(
         trigger_id="trigger",
@@ -496,7 +503,11 @@ def test_apply_pipeline_intent_scopes_record_to_requested_step(monkeypatch):
     )
     monkeypatch.setattr(
         "src.services.intent.create.find_latest_successful_pipeline_checkpoint",
-        lambda **_kwargs: {"pipeline_sha256": "c" * 64, "run_id": "prior.apply"},
+        lambda **_kwargs: {
+            "pipeline_sha256": "c" * 64,
+            "run_id": "prior.apply",
+            "pipeline_checkpoint_completed_at": 1_700_000_000,
+        },
     )
     monkeypatch.setattr("src.services.intent.create.evaluate_intent_gates", _fake_gates)
     monkeypatch.setattr(
@@ -558,6 +569,7 @@ def test_pipeline_apply_step_2_rejects_plan_before_prior_checkpoint(monkeypatch)
                     "plan_sha256": "a" * 64,
                     "plan_artifact_name": "plan.tfplan",
                     "tf_runtime": "terraform",
+                    "created_at": 1_787_688_123_671,
                 }
             )
         return PlanLookupResult(match=None)
@@ -582,6 +594,7 @@ def test_pipeline_apply_step_2_rejects_plan_before_prior_checkpoint(monkeypatch)
         lambda **_kwargs: {
             "pipeline_sha256": "p" * 64,
             "run_id": "1788002834366.faf33c46",
+            "pipeline_checkpoint_completed_at": 1_788_002_834_366,
         },
     )
     monkeypatch.setattr(
@@ -632,6 +645,7 @@ def test_pipeline_apply_step_2_accepts_fresh_plan_after_prior_checkpoint(monkeyp
                     "plan_sha256": "a" * 64,
                     "plan_artifact_name": "plan.tfplan",
                     "tf_runtime": "terraform",
+                    "created_at": 1_788_002_924_418,
                 }
             )
         return PlanLookupResult(match=None)
@@ -656,6 +670,7 @@ def test_pipeline_apply_step_2_accepts_fresh_plan_after_prior_checkpoint(monkeyp
         lambda **_kwargs: {
             "pipeline_sha256": "p" * 64,
             "run_id": "1788002834366.faf33c46",
+            "pipeline_checkpoint_completed_at": 1_788_002_834_366,
         },
     )
     monkeypatch.setattr(
@@ -752,7 +767,11 @@ def test_apply_pipeline_intent_rejects_pipeline_hash_mismatch(monkeypatch):
     )
     monkeypatch.setattr(
         "src.services.intent.create.find_latest_successful_pipeline_checkpoint",
-        lambda **_kwargs: {"pipeline_sha256": "old", "run_id": "prior.apply"},
+        lambda **_kwargs: {
+            "pipeline_sha256": "old",
+            "run_id": "prior.apply",
+            "pipeline_checkpoint_completed_at": 1_700_000_000,
+        },
     )
     monkeypatch.setattr(
         "src.services.intent.create.evaluate_intent_gates",
@@ -873,7 +892,7 @@ def test_apply_pipeline_intent_accepts_same_hash_prior_step_from_previous_day(
         "src.services.intent.create.find_latest_successful_pipeline_checkpoint",
         lambda **_kwargs: {
             "pipeline_sha256": "w" * 64,
-            "pipeline_apply_completed_at": 1_700_000_000 - 86_400,
+            "pipeline_checkpoint_completed_at": 1_700_000_000 - 86_400,
             "run_id": "prior.apply",
         },
     )
@@ -917,7 +936,11 @@ def test_apply_pipeline_intent_accepts_whitespace_only_pipeline_change(monkeypat
     )
     monkeypatch.setattr(
         "src.services.intent.create.find_latest_successful_pipeline_checkpoint",
-        lambda **_kwargs: {"pipeline_sha256": "canonical", "run_id": "prior.apply"},
+        lambda **_kwargs: {
+            "pipeline_sha256": "canonical",
+            "run_id": "prior.apply",
+            "pipeline_checkpoint_completed_at": 1_700_000_000,
+        },
     )
     monkeypatch.setattr("src.services.intent.create.evaluate_intent_gates", _fake_gates)
     monkeypatch.setattr(

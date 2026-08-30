@@ -564,6 +564,11 @@ def test_rendered_outer_map_item_selector_merges_shared_fields():
     assert '"folder_config.$"              = "$$.Map.Item.Value.c"' in block
     assert '"account_binding.$"            = "$$.Map.Item.Value.b"' in block
     assert '"execution_id.$"               = "$$.Map.Item.Value.e"' in block
+    assert '"pipeline_plan_focus.$"        = "$$.Map.Item.Value.pipeline_plan_focus"' in block
+    render_pr = source.split("RenderPR = {", 1)[1].split("\n      }", 1)[0]
+    assert '"pipeline_plan_focus.$"          = "$.pipeline_plan_focus"' in render_pr
+    placeholder = source.split("RenderPlaceholder = {", 1)[1].split("\n      }", 1)[0]
+    assert '"pipeline_plan_focus.$"          = "$.pipeline_plan_focus"' in placeholder
 
 
 def test_credential_retry_merge_preserves_required_fields():

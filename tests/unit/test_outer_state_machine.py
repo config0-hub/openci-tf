@@ -22,7 +22,8 @@ def _state_block(source: str, name: str) -> str:
 def test_outer_definition_has_safe_and_intent_lanes():
     for verb in ("plan", "plan_destroy", "drift", "report"):
         assert f'StringEquals = "{verb}", Next = "ValidateAndResolve"' in SOURCE
-    assert "CreateIntent" in SOURCE
+    assert "PreparePipelineIntent" in SOURCE
+    assert "pipeline_mutation_plan_first" in SOURCE
     assert "CreateApplyIntent" not in SOURCE
     assert "CreateDestroyIntent" not in SOURCE
     assert "IntentFailed" in SOURCE
@@ -72,7 +73,7 @@ def test_no_op_uses_the_normal_empty_map_and_final_render_path():
     assert "FailRenderNoOp" not in SOURCE
     assert 'Next = "RenderPlaceholder"' in _state_block(SOURCE, "ValidateAndResolve")
     assert 'ItemsPath      = "$.current_step_items"' in _state_block(SOURCE, "RunStepFolders")
-    assert '"no_op_reason.$"        = "$.no_op_reason"' in _state_block(
+    assert '"no_op_reason.$"                 = "$.no_op_reason"' in _state_block(
         SOURCE, "RenderPR"
     )
 
@@ -282,6 +283,9 @@ def test_render_consumer_normalizes_config_resolution_error():
         "intent_comment_id": None,
         "consumed_confirm_token": None,
         "confirm_token": None,
+        "pipeline_plan_focus": None,
+        "pipeline_mutation_plan_first": None,
+        "pending_mutation_action": None,
     }
 
 

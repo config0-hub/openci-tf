@@ -26,6 +26,12 @@ from src.domain.command.affected_folders import (
     resolve_affected_folders,
 )
 from src.domain.config.outer_state import discover_folders, resolve_outer_state
+from src.domain.config.pipeline import (
+    canonical_pipeline_sha256,
+    checkpoint_count,
+    folder_at_checkpoint,
+    load_pipeline,
+)
 from src.domain.engine.artifact_limits import (
     MAX_GIT_URL_CHARS,
     MAX_REPO_NAME_CHARS,
@@ -45,6 +51,8 @@ from src.domain.run.limits import MAX_FOLDERS_PER_REQUEST
 from src.platform.aws.run_registry import set_run_deadline
 from src.platform.aws.run_registry import set_run_pipeline_metadata
 from src.platform.aws.run_registry import put_folder_gate_observations
+from src.platform.aws.run_registry import find_latest_successful_pipeline_checkpoint
+from src.platform.aws.run_registry import RunRegistryError
 from src.platform.aws.ssm import get_github_token
 from src.platform.git.clone import cleanup_clone, shallow_clone
 from src.platform.git.origin import validate_clone_source
@@ -57,6 +65,72 @@ _SAFE_ACTIONS = frozenset({"plan", "drift", "report", "plan_destroy", "apply", "
 _MUTATION_ACTIONS = frozenset({"apply", "destroy"})
 _FULL_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 _NO_OP_FINALIZATION_BUDGET_SECONDS = 900
+
+
+def _resolve_pipeline_mutation_plan_first(
+    clone_dir: str,
+    *,
+    pipeline_name: str,
+    checkpoint_index: int,
+    pending_action: str,
+    action: str,
+    upstream_urls: object,
+    webhook: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    pipeline = load_pipeline(Path(clone_dir), pipeline_name)
+    total = checkpoint_count(pipeline)
+    if checkpoint_index > total:
+        raise ConfigResolutionError(
+            f"pipeline {pipeline.name} step {checkpoint_index} is out of range; step_count={total}"
+        )
+    reverse = pending_action == "destroy"
+    folder = folder_at_checkpoint(pipeline, checkpoint_index, reverse=reverse)
+    pipeline_hash = canonical_pipeline_sha256(pipeline)
+    trigger_id = webhook.get("trigger_id")
+    repo_name = webhook.get("repo_name")
+    pr_number = webhook.get("pr_number")
+    commit_hash = _pinned_commit_hash(webhook)
+    if checkpoint_index > 1:
+        if (
+            not isinstance(trigger_id, str)
+            or not isinstance(repo_name, str)
+            or type(pr_number) is not int
+        ):
+            raise ConfigResolutionError(
+                "pipeline checkpoint progression requires trigger, repo, and pr_number"
+            )
+        try:
+            prior = find_latest_successful_pipeline_checkpoint(
+                trigger_id=trigger_id,
+                repo_name=repo_name,
+                pipeline=pipeline.name,
+                action=pending_action,
+                step_index=checkpoint_index - 1,
+                pr_number=pr_number,
+                commit_hash=commit_hash,
+                pipeline_sha256=pipeline_hash,
+            )
+        except RunRegistryError as error:
+            raise ConfigResolutionError(str(error)) from error
+        if prior is None:
+            raise ConfigResolutionError(
+                f"pipeline {pipeline.name} step {checkpoint_index} requires a completed "
+                f"{pending_action} of step {checkpoint_index - 1} first"
+            )
+    resolved = resolve_outer_state(
+        clone_dir,
+        [folder],
+        upstream_urls,
+        action,
+        pipeline_plan_focus=True,
+    )
+    webhook_updates = {
+        "pipeline": pipeline.name,
+        "pipeline_step_index": checkpoint_index,
+        "pipeline_step_count": total,
+        "pipeline_sha256": pipeline_hash,
+    }
+    return resolved, webhook_updates
 
 
 def _project_folder_gate_flags(folder: str, cfg: dict[str, Any]) -> dict[str, bool]:
@@ -277,9 +351,9 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         if raw_pipeline is not None and (not isinstance(raw_pipeline, str) or not raw_pipeline):
             raise ConfigResolutionError("pipeline must be a non-empty string")
         pipeline = raw_pipeline if isinstance(raw_pipeline, str) else None
-        pipeline_plan_focus = (
-            pipeline is not None and action in {"plan", "plan_destroy"}
-        )
+        pipeline_plan_focus = pipeline is not None and action in {"plan", "plan_destroy"}
+        pipeline_mutation_plan_first = event.get("pipeline_mutation_plan_first") is True
+        webhook_updates: dict[str, Any] = {}
         if pipeline is None:
             folders = _selected_folders(event, clone_dir, token, commit_hash)
             if not folders:
@@ -310,6 +384,24 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 settings["upstream_urls"],
                 action,
             )
+        elif pipeline_mutation_plan_first:
+            pending_action = event.get("pending_mutation_action")
+            if pending_action not in {"apply", "destroy"}:
+                raise ConfigResolutionError(
+                    "pipeline plan-first requires pending_mutation_action apply or destroy"
+                )
+            checkpoint_index = event.get("pipeline_step")
+            if type(checkpoint_index) is not int or checkpoint_index < 1:
+                checkpoint_index = 1
+            resolved, webhook_updates = _resolve_pipeline_mutation_plan_first(
+                clone_dir,
+                pipeline_name=pipeline,
+                checkpoint_index=checkpoint_index,
+                pending_action=pending_action,
+                action=action,
+                upstream_urls=settings["upstream_urls"],
+                webhook=webhook,
+            )
         else:
             resolved = resolve_outer_state(
                 clone_dir,
@@ -319,6 +411,9 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 pipeline=pipeline,
                 pipeline_plan_focus=pipeline_plan_focus,
             )
+        if webhook_updates:
+            event = {**event, "webhook_info": {**webhook, **webhook_updates}}
+            webhook = event["webhook_info"]
     finally:
         cleanup_clone(clone_dir)
     configs = resolved["folder_configs"]

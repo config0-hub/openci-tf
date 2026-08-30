@@ -28,6 +28,7 @@ from src.domain.formatters.artifacts import (
     pipeline_mutation_aggregate_comment,
     status_comment_in_progress,
     summary,
+    _pipeline_mutation_result_label,
 )
 from src.domain.formatters.console_urls import step_functions_execution_url
 from src.domain.intent.models import intent_record_matches_current_request
@@ -67,6 +68,7 @@ from src.services.render.comments import (
     _delete_generated_comment,
     _delete_transient_status_comment,
     _managed_comment_marker as _comments_managed_comment_marker,
+    _upsert_managed_comment,
     _with_cleanup_warnings,
     _with_command_context,
 )
@@ -212,13 +214,109 @@ def _pipeline_mutation_footer(
 
 
 def _is_pipeline_mutation(event: dict[str, Any], action: str) -> bool:
-    if action not in {"apply", "destroy"}:
+    if action not in {"apply", "destroy", "plan", "plan_destroy"}:
         return False
     webhook = event.get("webhook_info")
     if not isinstance(webhook, dict):
         return False
     pipeline = webhook.get("pipeline")
-    return isinstance(pipeline, str) and bool(pipeline)
+    if not isinstance(pipeline, str) or not pipeline:
+        return False
+    if action in {"plan", "plan_destroy"}:
+        return event.get("pipeline_mutation_plan_first") is True
+    return True
+
+
+def _pipeline_mutation_action(event: dict[str, Any], action: str) -> str:
+    pending = event.get("pending_mutation_action")
+    if isinstance(pending, str) and pending in {"apply", "destroy"}:
+        return pending
+    return action
+
+
+def _pipeline_aggregate_identity(event: dict[str, Any], action: str) -> dict[str, Any] | None:
+    webhook = event.get("webhook_info")
+    if not isinstance(webhook, dict):
+        return None
+    pipeline = webhook.get("pipeline")
+    pipeline_sha256 = webhook.get("pipeline_sha256")
+    trigger_id = webhook.get("trigger_id")
+    repo_name = webhook.get("repo_name")
+    pr_number = webhook.get("pr_number")
+    commit_hash = webhook.get("commit_hash")
+    mutation_action = _pipeline_mutation_action(event, action)
+    if mutation_action not in {"apply", "destroy"}:
+        return None
+    if (
+        not isinstance(pipeline, str)
+        or not isinstance(pipeline_sha256, str)
+        or not isinstance(trigger_id, str)
+        or not isinstance(repo_name, str)
+        or type(pr_number) is not int
+        or not isinstance(commit_hash, str)
+    ):
+        return None
+    return {
+        "trigger_id": trigger_id,
+        "repo_name": repo_name,
+        "pipeline": pipeline,
+        "action": mutation_action,
+        "pr_number": pr_number,
+        "commit_hash": commit_hash.lower(),
+        "pipeline_sha256": pipeline_sha256,
+    }
+
+
+def _checkpoint_row_from_outcome(
+    *,
+    step_index: int,
+    step_count: int,
+    action: str,
+    outcome: dict[str, Any],
+    artifacts: dict[str, str],
+    plan_pending: bool,
+) -> dict[str, Any]:
+    folder = str(outcome.get("folder") or "")
+    plan_show = artifacts.get("plan-show.out", "")
+    pinned = "plan.tfplan" if action == "apply" else "destroy.plan.tfplan"
+    if plan_pending:
+        return {
+            "checkpoint_index": step_index,
+            "folder": folder,
+            "account_id": str(outcome.get("account_id") or ""),
+            "plan_show_text": plan_show or None,
+            "pinned_plan_artifact": pinned,
+            "replanned_after_prior": step_index > 1,
+            "confirmation_status": "Confirmation required",
+            "result_label": "Plan ready ⏳",
+        }
+    succeeded = outcome.get("succeeded") is True and str(outcome.get("status") or "") not in {
+        "failed",
+        "infrastructure_error",
+        "in_progress",
+        "skipped",
+    }
+    return {
+        "checkpoint_index": step_index,
+        "folder": folder,
+        "account_id": str(outcome.get("account_id") or ""),
+        "plan_show_text": plan_show or None,
+        "pinned_plan_artifact": pinned,
+        "replanned_after_prior": step_index > 1,
+        "confirmation_status": "Confirmed ✅",
+        "result_label": _pipeline_mutation_result_label(action, succeeded=succeeded),
+        "succeeded": succeeded,
+    }
+
+
+def _merge_checkpoint_rows(
+    prior_rows: list[dict[str, Any]],
+    current_row: dict[str, Any],
+) -> list[dict[str, Any]]:
+    merged = [row for row in prior_rows if row.get("checkpoint_index") != current_row["checkpoint_index"]]
+    merged.append(current_row)
+    merged.sort(key=lambda row: int(row.get("checkpoint_index") or 0))
+    return merged
 
 
 def _pipeline_mutation_aggregate_body(
@@ -229,7 +327,8 @@ def _pipeline_mutation_aggregate_body(
     artifacts_by_folder: dict[str, dict[str, str]],
     commit_hash: str,
     footer: str | None,
-) -> str:
+    plan_pending: bool = False,
+) -> tuple[str, list[dict[str, Any]]]:
     webhook = event["webhook_info"]
     pipeline = str(webhook.get("pipeline") or "")
     step_index = webhook.get("pipeline_step_index")
@@ -238,41 +337,43 @@ def _pipeline_mutation_aggregate_body(
         raise ValueError("pipeline mutation render requires step metadata")
     if not outcomes:
         raise ValueError("pipeline mutation render requires one folder outcome")
+    mutation_action = _pipeline_mutation_action(event, action)
     outcome = outcomes[0]
     folder = str(outcome.get("folder") or "")
     artifacts = artifacts_by_folder.get(folder, {})
-    plan_show = artifacts.get("plan-show.out", "")
-    succeeded = outcome.get("succeeded") is True and str(outcome.get("status") or "") not in {
-        "failed",
-        "infrastructure_error",
-        "in_progress",
-        "skipped",
-    }
-    requested_body = event.get("requested_comment_body")
-    if not isinstance(requested_body, str) or not requested_body.strip():
-        requested_body = f"tf {action} pipeline {pipeline}"
-        if step_index > 1:
-            requested_body = f"{requested_body} step {step_index}"
-    pinned = "plan.tfplan" if action == "apply" else "destroy.plan.tfplan"
-    return pipeline_mutation_aggregate_comment(
-        action=action,
+    current_row = _checkpoint_row_from_outcome(
+        step_index=step_index,
+        step_count=step_count,
+        action=mutation_action,
+        outcome=outcome,
+        artifacts=artifacts,
+        plan_pending=plan_pending,
+    )
+    prior_rows: list[dict[str, Any]] = []
+    identity = _pipeline_aggregate_identity(event, action)
+    if identity is not None and os.environ.get("RUN_REGISTRY_TABLE_NAME"):
+        from src.platform.aws.run_registry.pipeline_aggregate import (
+            get_pipeline_aggregate_state,
+        )
+
+        state = get_pipeline_aggregate_state(**identity)
+        if isinstance(state, dict) and isinstance(state.get("checkpoint_rows"), list):
+            prior_rows = [
+                row for row in state["checkpoint_rows"] if isinstance(row, dict)
+            ]
+    checkpoint_rows = _merge_checkpoint_rows(prior_rows, current_row)
+    body = pipeline_mutation_aggregate_comment(
+        action=mutation_action,
         pipeline=pipeline,
-        commit_hash=commit_hash,
-        requested_command=requested_body,
-        checkpoint_index=step_index,
         checkpoint_count=step_count,
-        folder=folder,
-        account_id=str(outcome.get("account_id") or ""),
-        succeeded=succeeded,
-        plan_show_text=plan_show or None,
-        pinned_plan_artifact=pinned,
-        replanned_after_prior=step_index > 1,
+        checkpoint_rows=checkpoint_rows,
         footer=footer,
         metadata_lines=[
             f"- Run ID: `{event.get('run_id')}`",
-            f"- Source plan run ID: `{_source_plan_run_id(outcome) or 'unknown'}`",
+            f"- Source plan run ID: `{_source_plan_run_id(outcome) or event.get('run_id') or 'unknown'}`",
         ],
     )
+    return body, checkpoint_rows
 
 
 def _pipeline_apply_footer(
@@ -965,6 +1066,9 @@ def _normalize_config_resolution_error(event: dict[str, Any]) -> dict[str, Any]:
         "intent_comment_id": state.get("intent_comment_id"),
         "consumed_confirm_token": state.get("consumed_confirm_token"),
         "confirm_token": state.get("confirm_token"),
+        "pipeline_plan_focus": state.get("pipeline_plan_focus"),
+        "pipeline_mutation_plan_first": state.get("pipeline_mutation_plan_first"),
+        "pending_mutation_action": state.get("pending_mutation_action"),
     }
 
 
@@ -1031,6 +1135,8 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     table = cast(Any, boto3.resource("dynamodb")).Table(os.environ["LOCKS_TABLE_NAME"])
     pipeline_plan_focus = _pipeline_plan_focus_enabled(event)
     pipeline_mutation = _is_pipeline_mutation(event, action)
+    plan_pending = event.get("pipeline_mutation_plan_first") is True
+    mutation_action = _pipeline_mutation_action(event, action)
     for outcome in render_items:
         folder = outcome["folder"]
         execution_id = outcome.get("execution_id", outcome.get("exec_id"))
@@ -1114,31 +1220,55 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             if isinstance(execution_id, str) and execution_id:
                 run_lock.release(table, repo, folder, execution_id)
     if pipeline_mutation:
-        _delete_and_repost(
+        aggregate_body, checkpoint_rows = _pipeline_mutation_aggregate_body(
+            event,
+            action=action,
+            outcomes=outcomes,
+            artifacts_by_folder=artifacts_by_folder,
+            commit_hash=commit_hash,
+            footer=None if plan_pending else pipeline_footer,
+            plan_pending=plan_pending,
+        )
+        identity = _pipeline_aggregate_identity(event, action)
+        existing_comment_id = None
+        if identity is not None and os.environ.get("RUN_REGISTRY_TABLE_NAME"):
+            from src.platform.aws.run_registry.pipeline_aggregate import (
+                get_pipeline_aggregate_state,
+                save_pipeline_aggregate_state,
+            )
+
+            state = get_pipeline_aggregate_state(**identity)
+            if isinstance(state, dict) and type(state.get("comment_id")) is int:
+                existing_comment_id = state["comment_id"]
+        comment_id = _upsert_managed_comment(
             client,
             repo,
             pr,
             _with_command_context(
                 event,
-                _pipeline_mutation_aggregate_body(
-                    event,
-                    action=action,
-                    outcomes=outcomes,
-                    artifacts_by_folder=artifacts_by_folder,
-                    commit_hash=commit_hash,
-                    footer=pipeline_footer,
-                ),
+                aggregate_body,
                 run_id=run_id,
-                comments_removed=True,
+                comments_removed=not plan_pending,
                 include_account=False,
                 include_source_plan_run_id=False,
                 include_metadata=False,
             ),
-            action,
+            mutation_action,
             "all",
             report_all=False,
-            emit_marker=should_emit_comment_object_marker(action, terminal=True),
+            existing_comment_id=existing_comment_id,
+            emit_marker=should_emit_comment_object_marker(mutation_action, terminal=True),
         )
+        if identity is not None and os.environ.get("RUN_REGISTRY_TABLE_NAME"):
+            from src.platform.aws.run_registry.pipeline_aggregate import (
+                save_pipeline_aggregate_state,
+            )
+
+            save_pipeline_aggregate_state(
+                **identity,
+                comment_id=comment_id,
+                checkpoint_rows=checkpoint_rows,
+            )
     elif pipeline_plan_focus:
         steps = event.get("steps") if isinstance(event.get("steps"), list) else None
         preview_body = pipeline_plan_preview_comment(

@@ -64,6 +64,9 @@ def pipeline_checkpoint_gsi_pk(
     pipeline: str,
     action: str,
     step_index: int,
+    pr_number: int,
+    commit_hash: str,
+    pipeline_sha256: str,
 ) -> str:
     if not trigger_id or not repo_name or not pipeline:
         raise ValueError("pipeline checkpoint GSI identity fields are required")
@@ -71,6 +74,12 @@ def pipeline_checkpoint_gsi_pk(
         raise ValueError("pipeline checkpoint action must be apply or destroy")
     if type(step_index) is not int or step_index < 1:
         raise ValueError("step_index must be an integer >= 1")
+    if type(pr_number) is not int or pr_number < 1:
+        raise ValueError("pr_number must be a positive integer")
+    if not isinstance(commit_hash, str) or len(commit_hash) != 40:
+        raise ValueError("commit_hash must be a 40-character SHA")
+    if not isinstance(pipeline_sha256, str) or not pipeline_sha256:
+        raise ValueError("pipeline_sha256 must be a non-empty string")
     identity = "|".join(
         (
             f"trigger={len(trigger_id)}:{trigger_id}",
@@ -78,6 +87,9 @@ def pipeline_checkpoint_gsi_pk(
             f"pipeline={len(pipeline)}:{pipeline}",
             f"action={action}",
             f"step={step_index}",
+            f"pr={pr_number}",
+            f"sha={commit_hash.lower()}",
+            f"pipeline_sha256={pipeline_sha256}",
         )
     )
     return f"pipeline-checkpoint#{hashlib.sha256(identity.encode('utf-8')).hexdigest()}"
@@ -89,6 +101,9 @@ def pipeline_apply_gsi_pk(
     repo_name: str,
     pipeline: str,
     step_index: int,
+    pr_number: int,
+    commit_hash: str,
+    pipeline_sha256: str,
 ) -> str:
     return pipeline_checkpoint_gsi_pk(
         trigger_id=trigger_id,
@@ -96,7 +111,36 @@ def pipeline_apply_gsi_pk(
         pipeline=pipeline,
         action="apply",
         step_index=step_index,
+        pr_number=pr_number,
+        commit_hash=commit_hash,
+        pipeline_sha256=pipeline_sha256,
     )
+
+
+def pipeline_aggregate_pk(
+    *,
+    trigger_id: str,
+    repo_name: str,
+    pipeline: str,
+    action: str,
+    pr_number: int,
+    commit_hash: str,
+    pipeline_sha256: str,
+) -> str:
+    if action not in {"apply", "destroy"}:
+        raise ValueError("pipeline aggregate action must be apply or destroy")
+    identity = "|".join(
+        (
+            f"trigger={len(trigger_id)}:{trigger_id}",
+            f"repo={len(repo_name)}:{repo_name}",
+            f"pipeline={len(pipeline)}:{pipeline}",
+            f"action={action}",
+            f"pr={pr_number}",
+            f"sha={commit_hash.lower()}",
+            f"pipeline_sha256={pipeline_sha256}",
+        )
+    )
+    return f"pipeline-aggregate#{hashlib.sha256(identity.encode('utf-8')).hexdigest()}"
 
 
 def pipeline_apply_gsi_sk(completed_at: int, run_id: str) -> str:

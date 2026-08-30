@@ -115,7 +115,11 @@ def test_apply_pipeline_intent_scopes_to_single_folder_checkpoint(monkeypatch):
     )
     monkeypatch.setattr(
         "src.services.intent.create.find_latest_successful_pipeline_checkpoint",
-        lambda **_kwargs: {"pipeline_sha256": "c" * 64, "run_id": "prior.run"},
+        lambda **_kwargs: {
+            "pipeline_sha256": "c" * 64,
+            "run_id": "prior.run",
+            "pipeline_checkpoint_completed_at": 1_700_000_000,
+        },
     )
     monkeypatch.setattr("src.services.intent.create.evaluate_intent_gates", _fake_gates)
     monkeypatch.setattr(
@@ -159,6 +163,7 @@ def test_later_checkpoint_rejects_plan_before_prior_mutation(monkeypatch):
                 "plan_sha256": "a" * 64,
                 "plan_artifact_name": "plan.tfplan",
                 "tf_runtime": "terraform",
+                "created_at": 1_600_000_000,
             }
         )
 
@@ -182,7 +187,7 @@ def test_later_checkpoint_rejects_plan_before_prior_mutation(monkeypatch):
         ),
         pr_number=1,
         commit_hash="a" * 40,
-        prior_checkpoint_run_id="1788002834366.faf33c46",
+        prior_checkpoint_completed_at=1_700_000_000,
     )
 
     assert not result.ok
@@ -204,7 +209,7 @@ def test_destroy_pipeline_intent_uses_reverse_checkpoint_order(monkeypatch):
         calls.append(kwargs["step_index"])
         if kwargs["step_index"] == 1:
             return None
-        return {"pipeline_sha256": "d" * 64, "run_id": "prior.destroy"}
+        return {"pipeline_sha256": "d" * 64, "run_id": "prior.destroy", "pipeline_checkpoint_completed_at": 1}
 
     monkeypatch.setattr(
         "src.services.intent.create.get_repo_settings",
@@ -244,15 +249,20 @@ def test_aggregate_comment_is_bounded_balanced_and_redacts_tokens():
     body = pipeline_mutation_aggregate_comment(
         action="apply",
         pipeline="acceptance-cbea57b",
-        commit_hash="a" * 40,
-        requested_command="tf apply confirm deadbeef",
-        checkpoint_index=1,
         checkpoint_count=2,
-        folder="terraform/primary/ap-northeast-1/05-s3-bucket",
-        account_id="998038917735",
-        succeeded=True,
-        plan_show_text="Plan: 1 to add, 0 to change, 0 to destroy",
-        pinned_plan_artifact="plan.tfplan",
+        checkpoint_rows=[
+            {
+                "checkpoint_index": 1,
+                "folder": "terraform/primary/ap-northeast-1/05-s3-bucket",
+                "account_id": "998038917735",
+                "plan_show_text": "Plan: 1 to add, 0 to change, 0 to destroy",
+                "pinned_plan_artifact": "plan.tfplan",
+                "replanned_after_prior": False,
+                "confirmation_status": "Confirmed ✅",
+                "result_label": "Apply succeeded ✅",
+                "succeeded": True,
+            }
+        ],
         metadata_lines=["- Confirmation commands: `tf apply confirm <redacted>`"],
     )
 
@@ -294,3 +304,89 @@ def test_destroy_pipeline_checkpoint_requires_prior_step(monkeypatch):
     assert failure == IntentGateFailure(
         "pipeline data/primary step 2 requires a completed destroy of step 1 first"
     )
+
+
+def test_plan_first_mutation_resolver_uses_pipeline_plan_focus():
+    from pathlib import Path
+
+    source = Path("src/services/resolve/validate_and_resolve.py").read_text()
+    plan_first_block = source.split("def _resolve_pipeline_mutation_plan_first", 1)[1].split(
+        "def _project_folder_gate_flags", 1
+    )[0]
+    assert "pipeline_plan_focus=True" in plan_first_block
+    assert 'pipeline_mutation_plan_first") is not True' not in source
+
+
+def test_parse_command_routes_pipeline_apply_to_plan_first():
+    from src.services.resolve import handler as parse_handler
+
+    result = parse_handler.handler(
+        {
+            "webhook_info": {
+                "repo_name": "org/repo",
+                "comment_body": "tf apply pipeline data/primary step 2",
+            },
+            "settings": {},
+        },
+        None,
+    )
+
+    assert result["action"] == "plan"
+    assert result["pipeline_mutation_plan_first"] is True
+    assert result["pending_mutation_action"] == "apply"
+    assert result["intent_create"] is True
+    assert result["pipeline"] == "data/primary"
+    assert result["pipeline_step"] == 2
+
+
+def test_checkpoint_gsi_pk_scopes_pr_sha_and_pipeline_hash():
+    from src.platform.aws.run_registry.keys import pipeline_checkpoint_gsi_pk
+
+    base = dict(
+        trigger_id="t",
+        repo_name="org/repo",
+        pipeline="data/primary",
+        action="apply",
+        step_index=1,
+        pr_number=1,
+        commit_hash="a" * 40,
+        pipeline_sha256="c" * 64,
+    )
+    same = pipeline_checkpoint_gsi_pk(**base)
+    assert pipeline_checkpoint_gsi_pk(**base) == same
+    assert pipeline_checkpoint_gsi_pk(**{**base, "pr_number": 2}) != same
+    assert pipeline_checkpoint_gsi_pk(**{**base, "commit_hash": "b" * 40}) != same
+    assert pipeline_checkpoint_gsi_pk(**{**base, "pipeline_sha256": "d" * 64}) != same
+
+
+def test_aggregate_comment_uses_total_checkpoint_count_and_cumulative_results():
+    body = pipeline_mutation_aggregate_comment(
+        action="apply",
+        pipeline="data/primary",
+        checkpoint_count=3,
+        checkpoint_rows=[
+            {
+                "checkpoint_index": 1,
+                "folder": "infra/vpc",
+                "account_id": "123",
+                "plan_show_text": "plan 1",
+                "pinned_plan_artifact": "plan.tfplan",
+                "confirmation_status": "Confirmed ✅",
+                "result_label": "Apply succeeded ✅",
+                "succeeded": True,
+            },
+            {
+                "checkpoint_index": 2,
+                "folder": "infra/rds",
+                "account_id": "123",
+                "plan_show_text": "plan 2",
+                "pinned_plan_artifact": "plan.tfplan",
+                "confirmation_status": "Confirmation required",
+                "result_label": "Plan ready ⏳",
+            },
+        ],
+    )
+
+    assert "**3 checkpoints** · **1 succeeded** · **0 failed** · **2 pending**" in body
+    assert "| 1/3 | `infra/vpc` |" in body
+    assert "| 2/3 | `infra/rds` |" in body

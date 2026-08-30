@@ -69,6 +69,8 @@ def _successful_pipeline_checkpoint_metadata(event: dict[str, Any]) -> dict[str,
     pipeline_sha256 = webhook.get("pipeline_sha256")
     trigger_id = webhook.get("trigger_id")
     repo_name = webhook.get("repo_name")
+    pr_number = webhook.get("pr_number")
+    commit_hash = webhook.get("commit_hash")
     action = str(event.get("action") or webhook.get("action") or "")
     if action not in {"apply", "destroy"}:
         return None
@@ -84,6 +86,10 @@ def _successful_pipeline_checkpoint_metadata(event: dict[str, Any]) -> dict[str,
         raise ValueError("trigger_id is required for pipeline checkpoint registry metadata")
     if not isinstance(repo_name, str) or not repo_name:
         raise ValueError("repo_name is required for pipeline checkpoint registry metadata")
+    if type(pr_number) is not int or pr_number < 1:
+        raise ValueError("pr_number is required for pipeline checkpoint registry metadata")
+    if not isinstance(commit_hash, str) or len(commit_hash) != 40:
+        raise ValueError("commit_hash is required for pipeline checkpoint registry metadata")
     return {
         "trigger_id": trigger_id,
         "repo_name": repo_name,
@@ -92,6 +98,8 @@ def _successful_pipeline_checkpoint_metadata(event: dict[str, Any]) -> dict[str,
         "step_index": step_index,
         "step_count": step_count,
         "pipeline_sha256": pipeline_sha256,
+        "pr_number": pr_number,
+        "commit_hash": commit_hash.lower(),
     }
 
 

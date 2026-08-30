@@ -328,6 +328,39 @@ def _delete_and_repost(
     return client.create_comment(repo, pr, bound_comment(body, suffix=suffix))
 
 
+def _upsert_managed_comment(
+    client: GitHubClient,
+    repo: str,
+    pr: int,
+    body: str,
+    action: str,
+    folder: str,
+    *,
+    report_all: bool = False,
+    existing_comment_id: int | None = None,
+    emit_marker: bool = True,
+) -> int:
+    marker = _managed_comment_marker(repo, pr, action, folder, report_all=report_all)
+    suffix = f"\n\n{marker}" if emit_marker else ""
+    bounded = bound_comment(body, suffix=suffix)
+    if isinstance(existing_comment_id, int) and existing_comment_id > 0:
+        try:
+            client.update_comment(repo, existing_comment_id, bounded)
+            return existing_comment_id
+        except Exception:
+            pass
+    _delete_managed_comment(
+        client,
+        repo,
+        pr,
+        marker,
+        legacy_suffix=_legacy_suffix_for_managed_comment(
+            action, folder, report_all=report_all
+        ),
+    )
+    return client.create_comment(repo, pr, bounded)
+
+
 def _delete_generated_comment(
     client: GitHubClient,
     repo: str,

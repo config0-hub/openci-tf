@@ -109,6 +109,7 @@ def _create_pipeline_mutation_intent(
     commit_hash: str,
     requested_comment_id: int | None = None,
     requested_comment_body: str | None = None,
+    source_plan_run_id: str | None = None,
 ) -> tuple[IntentGateFailure | None, dict[str, Any] | None]:
     if action not in {"apply", "destroy"}:
         return IntentGateFailure(f"unsupported pipeline mutation action: {action}"), None
@@ -128,7 +129,7 @@ def _create_pipeline_mutation_intent(
             ),
             None,
         )
-    prior_checkpoint_run_id: str | None = None
+    prior_checkpoint_completed_at: int | None = None
     if checkpoint_index > 1:
         prior_checkpoint = checkpoint_index - 1
         try:
@@ -138,6 +139,9 @@ def _create_pipeline_mutation_intent(
                 pipeline=pipeline.name,
                 action=action,
                 step_index=prior_checkpoint,
+                pr_number=pr_number,
+                commit_hash=commit_hash,
+                pipeline_sha256=pipeline_hash,
             )
         except RunRegistryError as error:
             raise IntentCreationError(str(error)) from error
@@ -166,7 +170,16 @@ def _create_pipeline_mutation_intent(
                 ),
                 None,
             )
-        prior_checkpoint_run_id = prior_run_id
+        completed_at = prior.get("pipeline_checkpoint_completed_at")
+        if type(completed_at) is not int or completed_at < 0:
+            return (
+                IntentGateFailure(
+                    f"pipeline {pipeline.name} step {checkpoint_index} requires a completed "
+                    f"{action} of step {prior_checkpoint} first"
+                ),
+                None,
+            )
+        prior_checkpoint_completed_at = completed_at
     gate_folders = folders_for_pipeline_mutation_gate(
         pipeline, checkpoint_index, reverse=reverse
     )
@@ -192,7 +205,8 @@ def _create_pipeline_mutation_intent(
         pr_number=pr_number,
         commit_hash=commit_hash,
         approval_client=_GitHubApprovalClient(approval_token),
-        prior_checkpoint_run_id=prior_checkpoint_run_id,
+        prior_checkpoint_completed_at=prior_checkpoint_completed_at,
+        source_plan_run_id=source_plan_run_id,
     )
     if not checkpoint_gates.ok or checkpoint_gates.record is None:
         return (
@@ -227,6 +241,7 @@ def create_intent(
     pipeline_step: int | None = None,
     requested_comment_id: int | None = None,
     requested_comment_body: str | None = None,
+    source_plan_run_id: str | None = None,
 ) -> tuple[IntentGateFailure | None, dict[str, Any] | None]:
     settings = get_repo_settings(trigger_id, with_webhook_secret=False)
     token = get_github_token(settings.ssm_openci_tf_github_token)
@@ -241,6 +256,7 @@ def create_intent(
             commit_hash=commit_hash,
             requested_comment_id=requested_comment_id,
             requested_comment_body=requested_comment_body,
+            source_plan_run_id=source_plan_run_id,
         )
     folder_configs = _folder_configs_for_intent(settings=settings, commit_hash=commit_hash, folders=folders)
     result = evaluate_intent_gates(

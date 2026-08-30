@@ -192,6 +192,8 @@ def test_mark_pipeline_apply_succeeded_writes_queryable_step_index(mock_table):
         step_index=2,
         step_count=3,
         pipeline_sha256="c" * 64,
+        pr_number=42,
+        commit_hash="a" * 40,
         completed_at=1_700_000_000,
     )
 
@@ -217,6 +219,8 @@ def test_mark_pipeline_apply_succeeded_rejects_out_of_bounds_steps(step_index, s
             step_index=step_index,
             step_count=step_count,
             pipeline_sha256="c" * 64,
+            pr_number=42,
+            commit_hash="a" * 40,
         )
 
 
@@ -243,6 +247,9 @@ def test_find_latest_successful_pipeline_apply_uses_indexed_query(mock_table):
         repo_name="org/repo",
         pipeline="data/primary",
         step_index=1,
+        pr_number=42,
+        commit_hash="a" * 40,
+        pipeline_sha256="c" * 64,
     )
 
     assert result == item
@@ -254,6 +261,9 @@ def test_find_latest_successful_pipeline_apply_uses_indexed_query(mock_table):
             repo_name="org/repo",
             pipeline="data/primary",
             step_index=1,
+            pr_number=42,
+            commit_hash="a" * 40,
+            pipeline_sha256="c" * 64,
         )
     }
     table.scan.assert_not_called()

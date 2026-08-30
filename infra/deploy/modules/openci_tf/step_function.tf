@@ -10,6 +10,8 @@ resource "aws_sfn_state_machine" "openci_tf" {
       RouteAction = {
         Type = "Choice"
         Choices = [
+          { And = [{ Variable = "$.pipeline_mutation_plan_first", IsPresent = true }, { Variable = "$.pipeline_mutation_plan_first", BooleanEquals = true }, { Variable = "$.action", StringEquals = "plan" }], Next = "ValidateAndResolve" },
+          { And = [{ Variable = "$.pipeline_mutation_plan_first", IsPresent = true }, { Variable = "$.pipeline_mutation_plan_first", BooleanEquals = true }, { Variable = "$.action", StringEquals = "plan_destroy" }], Next = "ValidateAndResolve" },
           { And = [{ Variable = "$.intent_create", IsPresent = true }, { Variable = "$.intent_create", BooleanEquals = true }, { Variable = "$.action", StringEquals = "apply" }], Next = "CreateIntent" },
           { And = [{ Variable = "$.intent_create", IsPresent = true }, { Variable = "$.intent_create", BooleanEquals = true }, { Variable = "$.action", StringEquals = "destroy" }], Next = "CreateIntent" },
           { Variable = "$.action", StringEquals = "plan", Next = "ValidateAndResolve" },
@@ -55,19 +57,22 @@ resource "aws_sfn_state_machine" "openci_tf" {
         Type     = "Task"
         Resource = local.lambda_arns["render-pr"]
         Parameters = {
-          placeholder             = true
-          "webhook_info.$"        = "$.webhook_info"
-          "settings.$"            = "$.settings"
-          "action.$"              = "$.action"
-          "run_id.$"              = "$.run_id"
-          "notification_target.$" = "$.notification_target"
-          "map_items.$"           = "$.map_items"
-          "skipped.$"             = "$.skipped"
-          "folders.$"             = "$.folders"
-          "all_flag.$"            = "$.all_flag"
-          "affected_flag.$"       = "$.affected_flag"
-          "execution_arn.$"       = "$$.Execution.Id"
-          outcomes                = []
+          placeholder                      = true
+          "webhook_info.$"                 = "$.webhook_info"
+          "settings.$"                     = "$.settings"
+          "action.$"                       = "$.action"
+          "run_id.$"                       = "$.run_id"
+          "notification_target.$"          = "$.notification_target"
+          "map_items.$"                    = "$.map_items"
+          "skipped.$"                      = "$.skipped"
+          "folders.$"                      = "$.folders"
+          "all_flag.$"                     = "$.all_flag"
+          "affected_flag.$"                = "$.affected_flag"
+          "pipeline_plan_focus.$"          = "$.pipeline_plan_focus"
+          "pipeline_mutation_plan_first.$" = "$.pipeline_mutation_plan_first"
+          "pending_mutation_action.$"      = "$.pending_mutation_action"
+          "execution_arn.$"                = "$$.Execution.Id"
+          outcomes                         = []
         }
         ResultPath = null
         Catch      = [{ ErrorEquals = ["States.ALL"], ResultPath = null, Next = "NextStep" }]
@@ -107,6 +112,7 @@ resource "aws_sfn_state_machine" "openci_tf" {
           "budget.$"                     = "$$.Map.Item.Value.budget"
           "deadline_at.$"                = "$$.Map.Item.Value.deadline_at"
           "step_index.$"                 = "$$.Map.Item.Value.step_index"
+          "pipeline_plan_focus.$"        = "$$.Map.Item.Value.pipeline_plan_focus"
           "folder_config.$"              = "$$.Map.Item.Value.c"
           "execution_id.$"               = "$$.Map.Item.Value.e"
           "upstream_urls.$"              = "$.map_shared.upstream_urls"
@@ -156,6 +162,7 @@ resource "aws_sfn_state_machine" "openci_tf" {
           "budget.$"                     = "$$.Map.Item.Value.budget"
           "deadline_at.$"                = "$$.Map.Item.Value.deadline_at"
           "step_index.$"                 = "$.step_index"
+          "pipeline_plan_focus.$"        = "$$.Map.Item.Value.pipeline_plan_focus"
           "folder_config.$"              = "$$.Map.Item.Value.c"
           "execution_id.$"               = "$$.Map.Item.Value.e"
           "upstream_urls.$"              = "$.map_shared.upstream_urls"
@@ -214,21 +221,24 @@ resource "aws_sfn_state_machine" "openci_tf" {
         Type     = "Task"
         Resource = local.lambda_arns["render-pr"]
         Parameters = {
-          "webhook_info.$"        = "$.webhook_info"
-          "settings.$"            = "$.settings"
-          "action.$"              = "$.action"
-          "run_id.$"              = "$.run_id"
-          "deadline_at.$"         = "$.deadline_at"
-          "notification_target.$" = "$.notification_target"
-          "steps.$"               = "$.steps"
-          "step_count.$"          = "$.step_count"
-          "outcomes.$"            = "$.outcomes"
-          "skipped.$"             = "$.skipped"
-          "no_op_reason.$"        = "$.no_op_reason"
-          "folders.$"             = "$.folders"
-          "all_flag.$"            = "$.all_flag"
-          "affected_flag.$"       = "$.affected_flag"
-          "execution_arn.$"       = "$$.Execution.Id"
+          "webhook_info.$"                 = "$.webhook_info"
+          "settings.$"                     = "$.settings"
+          "action.$"                       = "$.action"
+          "run_id.$"                       = "$.run_id"
+          "deadline_at.$"                  = "$.deadline_at"
+          "notification_target.$"          = "$.notification_target"
+          "steps.$"                        = "$.steps"
+          "step_count.$"                   = "$.step_count"
+          "outcomes.$"                     = "$.outcomes"
+          "skipped.$"                      = "$.skipped"
+          "no_op_reason.$"                 = "$.no_op_reason"
+          "folders.$"                      = "$.folders"
+          "all_flag.$"                     = "$.all_flag"
+          "affected_flag.$"                = "$.affected_flag"
+          "pipeline_plan_focus.$"          = "$.pipeline_plan_focus"
+          "pipeline_mutation_plan_first.$" = "$.pipeline_mutation_plan_first"
+          "pending_mutation_action.$"      = "$.pending_mutation_action"
+          "execution_arn.$"                = "$$.Execution.Id"
         }
         # ResultPath = $.render_flags keeps outcomes while surfacing terminal failure.
         ResultPath = "$.render_flags"
@@ -252,8 +262,33 @@ resource "aws_sfn_state_machine" "openci_tf" {
             ]
             Next = "FinalizeRun"
           },
+          {
+            And = [
+              { Variable = "$.pipeline_mutation_plan_first", IsPresent = true },
+              { Variable = "$.pipeline_mutation_plan_first", BooleanEquals = true },
+              { Variable = "$.render_flags.execution_failed", IsPresent = true },
+              { Variable = "$.render_flags.execution_failed", BooleanEquals = false },
+            ]
+            Next = "PreparePipelineIntent"
+          },
         ]
         Default = "Done"
+      }
+      PreparePipelineIntent = {
+        Type = "Pass"
+        Parameters = {
+          "action.$"                     = "$.pending_mutation_action"
+          "pipeline_mutation_plan_first" = false
+          "source_plan_run_id.$"         = "$.run_id"
+          "intent_create"                = true
+          "webhook_info.$"               = "$.webhook_info"
+          "settings.$"                   = "$.settings"
+          "run_id.$"                     = "$.run_id"
+          "pipeline.$"                   = "$.pipeline"
+          "pipeline_step.$"              = "$.pipeline_step"
+          "pending_mutation_action.$"    = "$.pending_mutation_action"
+        }
+        Next = "CreateIntent"
       }
       FinalizeAfterRenderFailure = {
         Type       = "Task"

@@ -343,6 +343,15 @@ def _mutation_supersedes_plan_run(
     return False
 
 
+def _with_plan_created_at(match: dict[str, Any]) -> dict[str, Any]:
+    run_id = str(match.get("run_id") or "")
+    run = get_run(run_id) if run_id else None
+    created_at = run.get("created_at") if isinstance(run, dict) else None
+    if type(created_at) is not int or created_at <= 0:
+        return match
+    return {**match, "created_at": created_at}
+
+
 def find_newest_fresh_plan_run(
     *,
     trigger_id: str,
@@ -377,6 +386,7 @@ def find_newest_fresh_plan_run(
             max_scan=max_scan,
         ):
             return PlanLookupResult(match=None, stale=True)
+        pointer_match = _with_plan_created_at(pointer_match)
         return PlanLookupResult(match=pointer_match)
     cursor: str | None = None
     scanned = 0
@@ -419,6 +429,7 @@ def find_newest_fresh_plan_run(
                 "plan_artifact_name": artifact_name,
                 "tf_runtime": expected_tf_runtime,
             }
+            match = _with_plan_created_at(match)
             if _mutation_supersedes_plan_run(
                 trigger_id=trigger_id,
                 pr_number=pr_number,

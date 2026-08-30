@@ -11,7 +11,6 @@ from src.core.models import FolderConfig, RepoSettings
 from src.domain.config.pipeline import Pipeline
 from src.domain.accounts.aliases import AccountAlias, load_account_alias
 from src.domain.accounts.binding import account_binding_from_alias
-from src.domain.engine.outer_execution_id import parse_outer_run_epoch
 from src.domain.intent.models import (
     FolderPlanPin,
     IntentGateFailure,
@@ -61,16 +60,14 @@ def _folder_config_allows(action: str, config: FolderConfig) -> bool:
 
 def _plan_after_prior_checkpoint(
     *,
-    plan_run_id: str,
-    prior_checkpoint_run_id: str | None,
+    plan_created_at: int,
+    prior_checkpoint_completed_at: int | None,
 ) -> bool:
-    if prior_checkpoint_run_id is None:
+    if prior_checkpoint_completed_at is None:
         return True
-    plan_epoch = parse_outer_run_epoch(plan_run_id)
-    prior_epoch = parse_outer_run_epoch(prior_checkpoint_run_id)
-    if plan_epoch is None or prior_epoch is None:
+    if type(prior_checkpoint_completed_at) is not int or prior_checkpoint_completed_at < 0:
         return False
-    return plan_epoch > prior_epoch
+    return plan_created_at > prior_checkpoint_completed_at
 
 
 def evaluate_intent_gates(
@@ -83,7 +80,8 @@ def evaluate_intent_gates(
     commit_hash: str,
     approval_client: _ApprovalClient | None = None,
     now: int | None = None,
-    prior_checkpoint_run_id: str | None = None,
+    prior_checkpoint_completed_at: int | None = None,
+    source_plan_run_id: str | None = None,
 ) -> IntentGateResult:
     """Run the ask-if tree for apply/destroy step 1."""
     failures: list[IntentGateFailure] = []
@@ -156,9 +154,26 @@ def evaluate_intent_gates(
             continue
         match = lookup.match
         plan_run_id = str(match["run_id"])
+        plan_created_at = match.get("created_at")
+        if type(plan_created_at) is not int or plan_created_at <= 0:
+            failures.append(
+                IntentGateFailure(
+                    "plan record is missing a valid creation timestamp",
+                    folder=folder,
+                )
+            )
+            continue
+        if source_plan_run_id is not None and plan_run_id != source_plan_run_id:
+            failures.append(
+                IntentGateFailure(
+                    "plan does not match the pinned checkpoint plan",
+                    folder=folder,
+                )
+            )
+            continue
         if not _plan_after_prior_checkpoint(
-            plan_run_id=plan_run_id,
-            prior_checkpoint_run_id=prior_checkpoint_run_id,
+            plan_created_at=plan_created_at,
+            prior_checkpoint_completed_at=prior_checkpoint_completed_at,
         ):
             failures.append(
                 IntentGateFailure(

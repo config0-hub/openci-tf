@@ -73,7 +73,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         result["confirm_token"] = cmd.confirm_token
         result["intent_confirm"] = True
     elif cmd.action in {"apply", "destroy"}:
-        result["intent_create"] = True
+        if cmd.pipeline is not None:
+            result["pipeline_mutation_plan_first"] = True
+            result["pending_mutation_action"] = cmd.action
+            result["action"] = "plan" if cmd.action == "apply" else "plan_destroy"
+            result["intent_create"] = True
+        else:
+            result["intent_create"] = True
 
     # Preserve the prepared execution contract; parsing only owns command grammar.
     for field in ("folder_configs", "upstream_urls"):

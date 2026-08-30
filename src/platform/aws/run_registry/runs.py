@@ -169,6 +169,8 @@ def mark_pipeline_checkpoint_succeeded(
     step_index: int,
     step_count: int,
     pipeline_sha256: str,
+    pr_number: int,
+    commit_hash: str,
     completed_at: int | None = None,
 ) -> None:
     """Index one successful pipeline mutation checkpoint for later progression checks."""
@@ -179,6 +181,10 @@ def mark_pipeline_checkpoint_succeeded(
     api_step_index, api_step_count = validate_registry_step_range(step_index, step_count)
     if not isinstance(pipeline_sha256, str) or not pipeline_sha256:
         raise ValueError("pipeline_sha256 must be a non-empty string")
+    if type(pr_number) is not int or pr_number < 1:
+        raise ValueError("pr_number must be a positive integer")
+    if not isinstance(commit_hash, str) or len(commit_hash) != 40:
+        raise ValueError("commit_hash must be a 40-character SHA")
     completed = int(time.time()) if completed_at is None else completed_at
     gsi_pk = pipeline_checkpoint_gsi_pk(
         trigger_id=trigger_id,
@@ -186,6 +192,9 @@ def mark_pipeline_checkpoint_succeeded(
         pipeline=pipeline,
         action=action,
         step_index=api_step_index,
+        pr_number=pr_number,
+        commit_hash=commit_hash,
+        pipeline_sha256=pipeline_sha256,
     )
     gsi_sk = pipeline_apply_gsi_sk(completed, run_id)
     _shared._table().update_item(
@@ -231,6 +240,8 @@ def mark_pipeline_apply_succeeded(
     step_index: int,
     step_count: int,
     pipeline_sha256: str,
+    pr_number: int,
+    commit_hash: str,
     completed_at: int | None = None,
 ) -> None:
     """Index one successful pipeline apply checkpoint for later step-order checks."""
@@ -243,6 +254,8 @@ def mark_pipeline_apply_succeeded(
         step_index=step_index,
         step_count=step_count,
         pipeline_sha256=pipeline_sha256,
+        pr_number=pr_number,
+        commit_hash=commit_hash,
         completed_at=completed_at,
     )
 

@@ -96,8 +96,12 @@ Destroy uses the same checkpoint model in reverse flattened order:
 4. Ad hoc multi-folder `tf destroy a,b` is rejected; use `tf destroy pipeline <name>`.
 
 Locks are held only for the current mutation checkpoint. One stable aggregate managed
-PR comment is updated after each plan publication and mutation result. Separate
+PR comment is updated in place after each plan publication and mutation result. Separate
 command-audit and confirmation comments are preserved.
+
+Deploying a release that changes pipeline checkpoint registry keys leaves in-flight
+multi-step pipelines fail-closed: checkpoints recorded under the prior key are not
+visible, so the next step is rejected until the pipeline restarts from step 1.
 
 ## User-visible errors
 

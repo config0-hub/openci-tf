@@ -2061,55 +2061,64 @@ def pipeline_mutation_aggregate_comment(
     *,
     action: str,
     pipeline: str,
-    commit_hash: str,
-    requested_command: str,
-    checkpoint_index: int,
     checkpoint_count: int,
-    folder: str,
-    account_id: str,
-    succeeded: bool,
-    plan_show_text: str | None = None,
-    pinned_plan_artifact: str,
-    replanned_after_prior: bool = False,
-    confirmation_status: str = "Confirmed ✅",
+    checkpoint_rows: list[dict[str, Any]],
     footer: str | None = None,
     metadata_lines: list[str] | None = None,
 ) -> str:
     """Render one stable aggregate pipeline apply/destroy checkpoint comment."""
-    result = _pipeline_mutation_result_label(action, succeeded=succeeded)
-    plan_label = _pipeline_mutation_plan_label(
-        action, replanned=replanned_after_prior
+    if not checkpoint_rows:
+        raise ValueError("checkpoint_rows must be non-empty")
+    succeeded = sum(
+        1
+        for row in checkpoint_rows
+        if row.get("succeeded") is True
     )
+    failed = sum(
+        1
+        for row in checkpoint_rows
+        if row.get("succeeded") is False
+    )
+    pending = max(checkpoint_count - succeeded - failed, 0)
     lines = [
-        f"> **Pipeline {action} · checkpoint {checkpoint_index}/{checkpoint_count}**",
+        f"> **Pipeline {action} · checkpoint {checkpoint_rows[-1]['checkpoint_index']}/{checkpoint_count}**",
         "",
         _pipeline_mutation_note(action),
         "",
-        f"**{checkpoint_index} checkpoint{'s' if checkpoint_count != 1 else ''}** · "
-        f"**{1 if succeeded else 0} succeeded** · **{0 if succeeded else 1} failed**",
+        (
+            f"**{checkpoint_count} checkpoint{'s' if checkpoint_count != 1 else ''}** · "
+            f"**{succeeded} succeeded** · **{failed} failed**"
+            + (f" · **{pending} pending**" if pending else "")
+        ),
         "",
         "| Step | Folder | Plan | Confirmation | Result |",
         "|---|---|---|---|---|",
-        (
-            f"| {checkpoint_index}/{checkpoint_count} | `{folder}` | {plan_label} | "
-            f"{confirmation_status} | {result} |"
-        ),
-        "",
-        _wrap_collapsed(
-            f"Step {checkpoint_index}/{checkpoint_count} · `{folder}` · "
-            f"{account_id} · {result}",
+    ]
+    for row in checkpoint_rows:
+        plan_label = row.get("plan_label") or _pipeline_mutation_plan_label(
+            action, replanned=bool(row.get("replanned_after_prior"))
+        )
+        lines.append(
+            f"| {row['checkpoint_index']}/{checkpoint_count} | `{row['folder']}` | "
+            f"{plan_label} | {row['confirmation_status']} | {row['result_label']} |"
+        )
+    lines.append("")
+    for row in checkpoint_rows:
+        collapsible = _wrap_collapsed(
+            f"Step {row['checkpoint_index']}/{checkpoint_count} · `{row['folder']}` · "
+            f"{row.get('account_id', '')} · {row['result_label']}",
             "\n\n".join(
                 part
                 for part in [
                     _mutation_plan_collapsible(
-                        plan_show_text,
-                        pinned_plan_artifact=pinned_plan_artifact,
+                        row.get("plan_show_text"),
+                        pinned_plan_artifact=str(row.get("pinned_plan_artifact") or "plan.tfplan"),
                     ),
                 ]
                 if part
             ),
-        ),
-    ]
+        )
+        lines.extend(["", collapsible])
     if footer:
         lines.extend(["", footer])
     if metadata_lines:

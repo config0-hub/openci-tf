@@ -275,6 +275,7 @@ def _capture_pipeline_apply_terminal_body(monkeypatch, *, step_index: int, step_
         return 1
 
     monkeypatch.setattr(render, "_delete_and_repost", capture)
+    monkeypatch.setattr("src.services.render.handler._upsert_managed_comment", capture)
     render.handler(
         _pipeline_apply_render_event(step_index=step_index, step_count=step_count),
         None,

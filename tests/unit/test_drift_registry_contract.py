@@ -75,6 +75,8 @@ def test_render_indexes_successful_pipeline_apply_step(monkeypatch):
         "webhook_info": {
             "trigger_id": "trigger-1",
             "repo_name": "org/repo",
+            "pr_number": 42,
+            "commit_hash": "a" * 40,
             "pipeline": "data/primary",
             "pipeline_step_index": 1,
             "pipeline_step_count": 2,
@@ -98,6 +100,8 @@ def test_render_indexes_successful_pipeline_apply_step(monkeypatch):
         step_index=1,
         step_count=2,
         pipeline_sha256="c" * 64,
+        pr_number=42,
+        commit_hash="a" * 40,
     )
 
 
