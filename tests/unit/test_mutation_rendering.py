@@ -114,6 +114,7 @@ def _stub_render_mutation_dependencies(monkeypatch):
     monkeypatch.setattr(render.run_lock, "release", lambda *_, **__: None)
     monkeypatch.setattr(render, "_delete_generated_comment", lambda *_, **__: None)
     monkeypatch.setattr(render, "_delete_transient_status_comment", lambda *_, **__: [])
+    monkeypatch.setattr(render, "_delete_pipeline_plan_preview_placeholder", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(render, "_cleanup_terminal_mutation_comments", lambda *_, **__: [])
 
 

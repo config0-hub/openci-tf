@@ -305,6 +305,14 @@ def _terminalize_intent_create_run(event: dict[str, Any], status: str) -> None:
     run_id = event.get("run_id")
     if not isinstance(run_id, str) or not run_id:
         raise ValueError("intent-create run terminalization requires run_id")
+    source_plan_run_id = event.get("source_plan_run_id")
+    if (
+        status == "failed"
+        and isinstance(source_plan_run_id, str)
+        and source_plan_run_id
+        and run_id == source_plan_run_id
+    ):
+        return
     update_run_status(run_id, status)
 
 

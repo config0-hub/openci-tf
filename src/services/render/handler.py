@@ -66,7 +66,9 @@ from src.services.render.comments import (
     _delete_and_repost,
     _delete_and_repost_unmanaged,
     _delete_generated_comment,
+    _delete_managed_comment,
     _delete_transient_status_comment,
+    _legacy_suffix_for_managed_comment,
     _managed_comment_marker as _comments_managed_comment_marker,
     _upsert_managed_comment,
     _with_cleanup_warnings,
@@ -319,6 +321,75 @@ def _merge_checkpoint_rows(
     return merged
 
 
+# Must match platform.aws.run_registry.pipeline_aggregate._MAX_CHECKPOINT_ROWS.
+_PIPELINE_AGGREGATE_MAX_CHECKPOINT_ROWS = 50
+
+
+def _checkpoint_rows_truncated(prior_rows: list[dict[str, Any]]) -> bool:
+    return (
+        len(prior_rows) >= _PIPELINE_AGGREGATE_MAX_CHECKPOINT_ROWS
+        and prior_rows
+        and min(int(row.get("checkpoint_index") or 0) for row in prior_rows) > 1
+    )
+
+
+def _pipeline_aggregate_cumulative_counts(
+    prior_rows: list[dict[str, Any]],
+    current_row: dict[str, Any],
+    *,
+    cumulative_succeeded: int | None,
+    cumulative_failed: int | None,
+) -> tuple[int | None, int | None]:
+    """Return persisted cumulative counts only when checkpoint rows were truncated."""
+    if not _checkpoint_rows_truncated(prior_rows):
+        return None, None
+    succeeded = cumulative_succeeded or 0
+    failed = cumulative_failed or 0
+    current_index = int(current_row.get("checkpoint_index") or 0)
+    prior_by_index = {
+        int(row.get("checkpoint_index") or 0): row for row in prior_rows
+    }
+    prior_row = prior_by_index.get(current_index)
+    if prior_row is None:
+        if current_row.get("succeeded") is True:
+            succeeded += 1
+        elif current_row.get("succeeded") is False:
+            failed += 1
+    else:
+        prior_succeeded = prior_row.get("succeeded")
+        current_succeeded = current_row.get("succeeded")
+        if prior_succeeded is not True and current_succeeded is True:
+            succeeded += 1
+        elif prior_succeeded is not False and current_succeeded is False:
+            failed += 1
+        elif prior_succeeded is True and current_succeeded is not True:
+            succeeded -= 1
+        elif prior_succeeded is False and current_succeeded is not True:
+            failed -= 1
+    return succeeded, failed
+
+
+def _delete_pipeline_plan_preview_placeholder(
+    client: GitHubClient,
+    repo: str,
+    pr: int,
+    mutation_action: str,
+) -> None:
+    preview_action = "plan_destroy" if mutation_action == "destroy" else "plan"
+    report_all = _summary_uses_report_all(preview_action)
+    _delete_managed_comment(
+        client,
+        repo,
+        pr,
+        _comments_managed_comment_marker(
+            repo, pr, preview_action, "all", report_all=report_all
+        ),
+        legacy_suffix=_legacy_suffix_for_managed_comment(
+            preview_action, "all", report_all=report_all
+        ),
+    )
+
+
 def _pipeline_mutation_aggregate_body(
     event: dict[str, Any],
     *,
@@ -372,16 +443,12 @@ def _pipeline_mutation_aggregate_body(
             if type(state.get("cumulative_failed")) is int:
                 cumulative_failed = state["cumulative_failed"]
     checkpoint_rows = _merge_checkpoint_rows(prior_rows, current_row)
-    if cumulative_succeeded is not None or cumulative_failed is not None:
-        prior_indexes = {
-            int(row.get("checkpoint_index") or 0) for row in prior_rows
-        }
-        current_index = int(current_row.get("checkpoint_index") or 0)
-        if current_index not in prior_indexes:
-            if current_row.get("succeeded") is True:
-                cumulative_succeeded = (cumulative_succeeded or 0) + 1
-            elif current_row.get("succeeded") is False:
-                cumulative_failed = (cumulative_failed or 0) + 1
+    cumulative_succeeded, cumulative_failed = _pipeline_aggregate_cumulative_counts(
+        prior_rows,
+        current_row,
+        cumulative_succeeded=cumulative_succeeded,
+        cumulative_failed=cumulative_failed,
+    )
     body = pipeline_mutation_aggregate_comment(
         action=mutation_action,
         pipeline=pipeline,
@@ -1252,6 +1319,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             plan_pending=plan_pending,
         )
         identity = _pipeline_aggregate_identity(event, action)
+        _delete_pipeline_plan_preview_placeholder(client, repo, pr, mutation_action)
         comment_id = _upsert_managed_comment(
             client,
             repo,
@@ -1269,7 +1337,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             "all",
             report_all=False,
             existing_comment_id=existing_comment_id,
-            emit_marker=should_emit_comment_object_marker(mutation_action, terminal=True),
+            emit_marker=True,
         )
         if identity is not None and os.environ.get("RUN_REGISTRY_TABLE_NAME"):
             from src.platform.aws.run_registry.pipeline_aggregate import (

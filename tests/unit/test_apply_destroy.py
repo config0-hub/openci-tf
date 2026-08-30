@@ -1499,6 +1499,53 @@ def test_create_handler_gate_refusal_terminalizes_run_failed(monkeypatch):
     assert terminalized == ["failed"]
 
 
+@patch("src.services.intent.handler.update_run_status")
+def test_plan_first_intent_gate_failure_preserves_plan_run_status(
+    mock_update_run_status, monkeypatch
+):
+    monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")
+    monkeypatch.setattr(
+        "src.services.intent.handler._current_pr_head_sha",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler.create_intent",
+        lambda **_kwargs: (
+            IntentGateFailure("approval required before apply"),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._post_comment",
+        lambda *_args, **_kwargs: 9001,
+    )
+    monkeypatch.setattr(
+        "src.services.intent.handler._delete_triggering_comment_after_replacement",
+        lambda *_args, **_kwargs: None,
+    )
+
+    plan_run_id = "1787000000000.planrun01"
+    event = {
+        "run_id": plan_run_id,
+        "source_plan_run_id": plan_run_id,
+        "action": "apply",
+        "folders": ["infra/vpc"],
+        "webhook_info": {
+            "pr_number": 1,
+            "trigger_id": "t",
+            "repo_name": "o/r",
+            "comment_id": 44,
+            "comment_body": "tf apply pipeline data/primary step 1",
+        },
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+    }
+
+    result = create_handler(event, None)
+
+    assert result["intent_failed"] is True
+    mock_update_run_status.assert_not_called()
+
+
 def test_create_handler_metadata_failure_does_not_terminalize_succeeded(monkeypatch):
     monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")
     monkeypatch.setattr(

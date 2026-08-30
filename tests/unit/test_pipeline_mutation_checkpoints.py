@@ -414,3 +414,284 @@ def test_aggregate_comment_uses_persisted_cumulative_counts_when_rows_are_trunca
     )
 
     assert "**30 checkpoints** · **25 succeeded** · **3 failed** · **2 pending**" in body
+
+
+def _pipeline_mutation_render_event(
+    *,
+    step_index: int,
+    step_count: int,
+    plan_pending: bool,
+    folder: str = "infra/vpc",
+) -> dict:
+    return {
+        "run_id": "1787000000000.abc12345",
+        "pending_mutation_action": "apply",
+        "pipeline_mutation_plan_first": plan_pending,
+        "webhook_info": {
+            "repo_name": "org/repo",
+            "pr_number": 22,
+            "commit_hash": "a" * 40,
+            "trigger_id": "trigger",
+            "pipeline": "data/primary",
+            "pipeline_sha256": "c" * 64,
+            "pipeline_step_index": step_index,
+            "pipeline_step_count": step_count,
+        },
+        "settings": {"ssm_openci_tf_github_token": "/token"},
+        "outcomes": [
+            {
+                "folder": folder,
+                "account_id": "123456789012",
+                "execution_id": "inner.apply.0",
+                "status": "succeeded",
+                "succeeded": True,
+            }
+        ],
+        "skipped": [],
+    }
+
+
+def _stub_pipeline_mutation_render(monkeypatch):
+    from types import SimpleNamespace
+
+    from src.services.render import handler as render_handler
+
+    monkeypatch.setenv("LOCKS_TABLE_NAME", "locks")
+    monkeypatch.setenv("TMP_BUCKET_NAME", "tmp")
+    monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")
+    monkeypatch.setattr(render_handler, "get_github_token", lambda _: "token")
+    monkeypatch.setattr(
+        render_handler.boto3,
+        "resource",
+        lambda *_: SimpleNamespace(Table=lambda _: object()),
+    )
+    monkeypatch.setattr(
+        render_handler,
+        "list_text_prefix",
+        lambda *_args, **_kw: {
+            "plan-show.out": "Plan: 1 to add, 0 to change, 0 to destroy",
+            "apply.out": "Apply complete!",
+        },
+    )
+    monkeypatch.setattr(render_handler, "_plan_artifact_metadata", lambda *_, **__: None)
+    monkeypatch.setattr(render_handler.run_lock, "release", lambda *_, **__: None)
+    monkeypatch.setattr(render_handler, "_delete_generated_comment", lambda *_, **__: None)
+    monkeypatch.setattr(render_handler, "_delete_transient_status_comment", lambda *_args: [])
+    monkeypatch.setattr(render_handler, "_update_run_registry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        render_handler,
+        "delete_acknowledged_command_comment",
+        lambda *_, **__: [],
+    )
+
+
+def test_pipeline_mutation_aggregate_handler_counts_replace_plan_first_row(monkeypatch):
+    from src.services.render.handler import (
+        _pipeline_aggregate_identity,
+        _pipeline_mutation_aggregate_body,
+    )
+
+    monkeypatch.setenv("RUN_REGISTRY_TABLE_NAME", "registry")
+    aggregate_state: dict[str, object] = {}
+
+    def fake_get(**_kwargs):
+        return aggregate_state or None
+
+    def fake_save(**kwargs):
+        aggregate_state.clear()
+        aggregate_state.update(
+            {
+                "checkpoint_rows": kwargs["checkpoint_rows"],
+                "comment_id": kwargs["comment_id"],
+                "cumulative_succeeded": sum(
+                    1
+                    for row in kwargs["checkpoint_rows"]
+                    if row.get("succeeded") is True
+                ),
+                "cumulative_failed": sum(
+                    1
+                    for row in kwargs["checkpoint_rows"]
+                    if row.get("succeeded") is False
+                ),
+            }
+        )
+
+    monkeypatch.setattr(
+        "src.platform.aws.run_registry.pipeline_aggregate.get_pipeline_aggregate_state",
+        fake_get,
+    )
+    monkeypatch.setattr(
+        "src.platform.aws.run_registry.pipeline_aggregate.save_pipeline_aggregate_state",
+        fake_save,
+    )
+
+    event = _pipeline_mutation_render_event(
+        step_index=1, step_count=2, plan_pending=True, folder="infra/vpc"
+    )
+    common = {
+        "artifacts_by_folder": {
+            "infra/vpc": {"plan-show.out": "Plan: 1 to add, 0 to change, 0 to destroy"}
+        },
+        "commit_hash": "a" * 40,
+        "footer": None,
+    }
+    outcome = event["outcomes"][0]
+    identity = _pipeline_aggregate_identity(event, "plan")
+    assert identity is not None
+
+    body, rows, _ = _pipeline_mutation_aggregate_body(
+        event,
+        action="plan",
+        outcomes=[outcome],
+        plan_pending=True,
+        **common,
+    )
+    assert "**2 checkpoints** · **0 succeeded** · **0 failed** · **2 pending**" in body
+    fake_save(comment_id=9001, checkpoint_rows=rows, **identity)
+
+    body, rows, _ = _pipeline_mutation_aggregate_body(
+        event,
+        action="apply",
+        outcomes=[outcome],
+        plan_pending=False,
+        **common,
+    )
+    assert "**2 checkpoints** · **1 succeeded** · **0 failed** · **1 pending**" in body
+    fake_save(comment_id=9001, checkpoint_rows=rows, **identity)
+
+    event_step2 = _pipeline_mutation_render_event(
+        step_index=2, step_count=2, plan_pending=True, folder="infra/rds"
+    )
+    outcome_step2 = event_step2["outcomes"][0]
+    common_step2 = {
+        "artifacts_by_folder": {
+            "infra/rds": {"plan-show.out": "Plan: 1 to add, 0 to change, 0 to destroy"}
+        },
+        "commit_hash": "a" * 40,
+        "footer": None,
+    }
+    identity_step2 = _pipeline_aggregate_identity(event_step2, "plan")
+    assert identity_step2 is not None
+
+    body, rows, _ = _pipeline_mutation_aggregate_body(
+        event_step2,
+        action="plan",
+        outcomes=[outcome_step2],
+        plan_pending=True,
+        **common_step2,
+    )
+    assert "**2 checkpoints** · **1 succeeded** · **0 failed** · **1 pending**" in body
+    fake_save(comment_id=9001, checkpoint_rows=rows, **identity_step2)
+
+    body, rows, _ = _pipeline_mutation_aggregate_body(
+        event_step2,
+        action="apply",
+        outcomes=[outcome_step2],
+        plan_pending=False,
+        **common_step2,
+    )
+    assert "**2 checkpoints** · **2 succeeded** · **0 failed**" in body
+    assert "pending" not in body.split("**2 succeeded** · **0 failed**", 1)[1].split("\n", 1)[0]
+
+
+def test_pipeline_mutation_render_deletes_plan_preview_placeholder(monkeypatch):
+    from src.services.render import handler as render_handler
+
+    _stub_pipeline_mutation_render(monkeypatch)
+    deleted_markers: list[str] = []
+
+    def capture_delete(_client, _repo, _pr, marker, **kwargs):
+        deleted_markers.append(marker)
+
+    monkeypatch.setattr(render_handler, "_delete_managed_comment", capture_delete)
+    monkeypatch.setattr(
+        render_handler,
+        "_upsert_managed_comment",
+        lambda *_args, **_kwargs: 9001,
+    )
+    monkeypatch.setattr(
+        "src.platform.aws.run_registry.pipeline_aggregate.get_pipeline_aggregate_state",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "src.platform.aws.run_registry.pipeline_aggregate.save_pipeline_aggregate_state",
+        lambda **_kwargs: None,
+    )
+
+    render_handler.handler(
+        _pipeline_mutation_render_event(step_index=1, step_count=2, plan_pending=True),
+        None,
+    )
+
+    assert deleted_markers
+    assert deleted_markers[0].endswith("::plan:all")
+
+
+def test_pipeline_mutation_aggregate_retry_after_state_save_failure_reuses_marker(
+    monkeypatch,
+):
+    from src.platform.aws.run_registry import RunRegistryError
+    from src.services.render import handler as render_handler
+    from src.services.render.comments import _managed_comment_marker
+
+    _stub_pipeline_mutation_render(monkeypatch)
+    save_attempts = 0
+    aggregate_state: dict[str, object] = {}
+    comments_by_marker: dict[str, int] = {}
+    upsert_calls = 0
+
+    def fake_upsert(_client, repo, pr, _body, action, folder, **kwargs):
+        nonlocal upsert_calls
+        upsert_calls += 1
+        assert kwargs.get("emit_marker") is True
+        marker = _managed_comment_marker(
+            repo, pr, action, folder, report_all=kwargs.get("report_all", False)
+        )
+        existing = kwargs.get("existing_comment_id")
+        if isinstance(existing, int) and existing > 0:
+            comments_by_marker[marker] = existing
+            return existing
+        if marker in comments_by_marker:
+            return comments_by_marker[marker]
+        comment_id = 9001
+        comments_by_marker[marker] = comment_id
+        return comment_id
+
+    monkeypatch.setattr(render_handler, "_upsert_managed_comment", fake_upsert)
+    monkeypatch.setattr(render_handler, "_delete_pipeline_plan_preview_placeholder", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "src.platform.aws.run_registry.pipeline_aggregate.get_pipeline_aggregate_state",
+        lambda **_kwargs: aggregate_state or None,
+    )
+
+    def flaky_save(**kwargs):
+        nonlocal save_attempts
+        save_attempts += 1
+        aggregate_state.clear()
+        aggregate_state.update(
+            {
+                "comment_id": kwargs["comment_id"],
+                "checkpoint_rows": kwargs["checkpoint_rows"],
+                "cumulative_succeeded": 0,
+                "cumulative_failed": 0,
+            }
+        )
+        if save_attempts == 1:
+            aggregate_state.clear()
+            raise RunRegistryError("failed to persist pipeline aggregate state")
+
+    monkeypatch.setattr(
+        "src.platform.aws.run_registry.pipeline_aggregate.save_pipeline_aggregate_state",
+        flaky_save,
+    )
+
+    event = _pipeline_mutation_render_event(step_index=1, step_count=2, plan_pending=True)
+    with pytest.raises(RunRegistryError):
+        render_handler.handler(event, None)
+    assert upsert_calls == 1
+    assert len(comments_by_marker) == 1
+
+    render_handler.handler(event, None)
+    assert upsert_calls == 2
+    assert len(comments_by_marker) == 1
+    assert save_attempts == 2
