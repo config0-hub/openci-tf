@@ -495,8 +495,8 @@ def test_apply_pipeline_intent_scopes_record_to_requested_step(monkeypatch):
         lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "c" * 64),
     )
     monkeypatch.setattr(
-        "src.services.intent.create.find_latest_successful_pipeline_apply",
-        lambda **_kwargs: {"pipeline_sha256": "c" * 64},
+        "src.services.intent.create.find_latest_successful_pipeline_checkpoint",
+        lambda **_kwargs: {"pipeline_sha256": "c" * 64, "run_id": "prior.apply"},
     )
     monkeypatch.setattr("src.services.intent.create.evaluate_intent_gates", _fake_gates)
     monkeypatch.setattr(
@@ -515,12 +515,12 @@ def test_apply_pipeline_intent_scopes_record_to_requested_step(monkeypatch):
 
     assert failure is None
     assert record is not None
-    assert record["folders"] == ["infra/rds", "infra/ec2"]
+    assert record["folders"] == ["infra/rds"]
     assert record["pipeline"] == "data/primary"
     assert record["step_index"] == 2
-    assert record["step_count"] == 3
+    assert record["step_count"] == 4
     assert record["pipeline_sha256"] == "c" * 64
-    assert stored[0].folders == ("infra/rds", "infra/ec2")
+    assert stored[0].folders == ("infra/rds",)
 
 
 def _us08_two_step_pipeline() -> Pipeline:
@@ -545,17 +545,12 @@ def _us08_two_step_configs() -> dict[str, FolderConfig]:
     }
 
 
-def test_pipeline_apply_step_2_succeeds_without_replan_after_step_1_apply(monkeypatch):
-    step1 = "terraform/primary/ap-northeast-1/03-sqs"
+def test_pipeline_apply_step_2_rejects_plan_before_prior_checkpoint(monkeypatch):
     step2 = "terraform/primary/ap-northeast-1/06-sns-topic"
     plan_run_id = "1787688123671.7e34ddd6"
-    stored: list[IntentRecord] = []
 
     def fake_lookup(**kwargs):
-        folder = kwargs["folder"]
-        if folder == step1:
-            return PlanLookupResult(match=None, stale=True)
-        if folder == step2:
+        if kwargs["folder"] == step2:
             return PlanLookupResult(
                 match={
                     "run_id": plan_run_id,
@@ -583,8 +578,85 @@ def test_pipeline_apply_step_2_succeeds_without_replan_after_step_1_apply(monkey
         ),
     )
     monkeypatch.setattr(
-        "src.services.intent.create.find_latest_successful_pipeline_apply",
-        lambda **_kwargs: {"pipeline_sha256": "p" * 64},
+        "src.services.intent.create.find_latest_successful_pipeline_checkpoint",
+        lambda **_kwargs: {
+            "pipeline_sha256": "p" * 64,
+            "run_id": "1788002834366.faf33c46",
+        },
+    )
+    monkeypatch.setattr(
+        "src.domain.intent.gates.load_account_alias",
+        lambda alias: SimpleNamespace(
+            account_id="123456789012",
+            role_name="openci-tf-executor-readonly",
+            poweruser_role_name="openci-tf-executor-poweruser",
+            external_id="openci-tf-0123456789abcdef",
+            max_ttl=3600,
+            enable_apply=True,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.domain.intent.gates.find_newest_fresh_plan_run", fake_lookup
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.put_intent",
+        lambda _record: pytest.fail("stale pipeline plan must not store an intent"),
+    )
+
+    failure, record = create_intent(
+        action="apply",
+        folders=[],
+        trigger_id="t",
+        pr_number=1,
+        commit_hash="a" * 40,
+        pipeline="primary-msg",
+        pipeline_step=2,
+    )
+
+    assert record is None
+    assert failure is not None
+    assert "fresh plan" in failure.message
+
+
+def test_pipeline_apply_step_2_accepts_fresh_plan_after_prior_checkpoint(monkeypatch):
+    step2 = "terraform/primary/ap-northeast-1/06-sns-topic"
+    plan_run_id = "1788002924418.7e34ddd6"
+    stored: list[IntentRecord] = []
+
+    def fake_lookup(**kwargs):
+        if kwargs["folder"] == step2:
+            return PlanLookupResult(
+                match={
+                    "run_id": plan_run_id,
+                    "folder": step2,
+                    "plan_sha256": "a" * 64,
+                    "plan_artifact_name": "plan.tfplan",
+                    "tf_runtime": "terraform",
+                }
+            )
+        return PlanLookupResult(match=None)
+
+    monkeypatch.setattr(
+        "src.services.intent.create.get_repo_settings",
+        lambda *_args, **_kwargs: _intent_gate_settings(),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.get_github_token", lambda _path: "github-token"
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create._pipeline_for_intent",
+        lambda **_kwargs: (
+            _us08_two_step_pipeline(),
+            _us08_two_step_configs(),
+            "p" * 64,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.services.intent.create.find_latest_successful_pipeline_checkpoint",
+        lambda **_kwargs: {
+            "pipeline_sha256": "p" * 64,
+            "run_id": "1788002834366.faf33c46",
+        },
     )
     monkeypatch.setattr(
         "src.domain.intent.gates.load_account_alias",
@@ -638,7 +710,7 @@ def test_pipeline_apply_step_2_refused_when_step_1_not_applied(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        "src.services.intent.create.find_latest_successful_pipeline_apply",
+        "src.services.intent.create.find_latest_successful_pipeline_checkpoint",
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -679,8 +751,8 @@ def test_apply_pipeline_intent_rejects_pipeline_hash_mismatch(monkeypatch):
         lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "new"),
     )
     monkeypatch.setattr(
-        "src.services.intent.create.find_latest_successful_pipeline_apply",
-        lambda **_kwargs: {"pipeline_sha256": "old"},
+        "src.services.intent.create.find_latest_successful_pipeline_checkpoint",
+        lambda **_kwargs: {"pipeline_sha256": "old", "run_id": "prior.apply"},
     )
     monkeypatch.setattr(
         "src.services.intent.create.evaluate_intent_gates",
@@ -718,7 +790,7 @@ def test_apply_pipeline_intent_rejects_missing_prior_step_anchor(monkeypatch):
         lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "h" * 64),
     )
     monkeypatch.setattr(
-        "src.services.intent.create.find_latest_successful_pipeline_apply",
+        "src.services.intent.create.find_latest_successful_pipeline_checkpoint",
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -761,7 +833,7 @@ def test_apply_pipeline_intent_propagates_prior_step_registry_errors(monkeypatch
         raise RunRegistryError("registry query failed")
 
     monkeypatch.setattr(
-        "src.services.intent.create.find_latest_successful_pipeline_apply",
+        "src.services.intent.create.find_latest_successful_pipeline_checkpoint",
         _fail_registry,
     )
 
@@ -798,10 +870,11 @@ def test_apply_pipeline_intent_accepts_same_hash_prior_step_from_previous_day(
         lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "w" * 64),
     )
     monkeypatch.setattr(
-        "src.services.intent.create.find_latest_successful_pipeline_apply",
+        "src.services.intent.create.find_latest_successful_pipeline_checkpoint",
         lambda **_kwargs: {
             "pipeline_sha256": "w" * 64,
             "pipeline_apply_completed_at": 1_700_000_000 - 86_400,
+            "run_id": "prior.apply",
         },
     )
     monkeypatch.setattr("src.services.intent.create.evaluate_intent_gates", _fake_gates)
@@ -843,8 +916,8 @@ def test_apply_pipeline_intent_accepts_whitespace_only_pipeline_change(monkeypat
         lambda **_kwargs: (_phase4_pipeline(), _phase4_configs(), "canonical"),
     )
     monkeypatch.setattr(
-        "src.services.intent.create.find_latest_successful_pipeline_apply",
-        lambda **_kwargs: {"pipeline_sha256": "canonical"},
+        "src.services.intent.create.find_latest_successful_pipeline_checkpoint",
+        lambda **_kwargs: {"pipeline_sha256": "canonical", "run_id": "prior.apply"},
     )
     monkeypatch.setattr("src.services.intent.create.evaluate_intent_gates", _fake_gates)
     monkeypatch.setattr(
@@ -886,12 +959,12 @@ def test_apply_pipeline_intent_rejects_step_out_of_range(monkeypatch):
         pr_number=1,
         commit_hash="a" * 40,
         pipeline="data/primary",
-        pipeline_step=4,
+        pipeline_step=5,
     )
 
     assert record is None
     assert failure is not None
-    assert "step_count=3" in failure.message
+    assert "step_count=4" in failure.message
 
 
 def test_pipeline_apply_footer_renders_next_step_and_completion():
@@ -918,12 +991,12 @@ def test_pipeline_apply_footer_renders_next_step_and_completion():
     }
     assert (
         _pipeline_apply_footer(complete_event, "apply", outcomes, [])
-        == "> [!NOTE]\n> Pipeline `data/primary` complete (2 steps)."
+        == "> [!NOTE]\n> Pipeline `data/primary` complete (2 folders applied)."
     )
     assert _pipeline_apply_footer(event, "apply", [{"status": "failed"}], []) is None
 
 
-def test_pipeline_apply_footer_destroy_emits_no_footer():
+def test_pipeline_apply_footer_destroy_renders_next_step():
     event = {
         "webhook_info": {
             "pipeline": "data/primary",
@@ -932,7 +1005,10 @@ def test_pipeline_apply_footer_destroy_emits_no_footer():
         }
     }
     outcomes = [{"folder": "infra/vpc", "status": "succeeded", "succeeded": True}]
-    assert _pipeline_apply_footer(event, "destroy", outcomes, []) is None
+    assert (
+        _pipeline_apply_footer(event, "destroy", outcomes, [])
+        == "> [!NOTE]\n> Next step: `tf destroy pipeline data/primary step 2`"
+    )
 
 
 @patch("src.domain.accounts.aliases.get_account_alias")

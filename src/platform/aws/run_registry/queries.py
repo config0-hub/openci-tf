@@ -12,6 +12,7 @@ from botocore.exceptions import ClientError  # type: ignore[import-not-found]
 from .keys import (
     folder_gate_pk,
     folder_gate_sk,
+    pipeline_checkpoint_gsi_pk,
     pipeline_apply_gsi_pk,
     repo_gsi_pk,
     run_meta_sk,
@@ -203,18 +204,22 @@ def list_runs_for_repo(trigger_id: str, *, limit: int = 25, cursor: str | None =
     return items, next_cursor
 
 
-def find_latest_successful_pipeline_apply(
+def find_latest_successful_pipeline_checkpoint(
     *,
     trigger_id: str,
     repo_name: str,
     pipeline: str,
+    action: str,
     step_index: int,
 ) -> dict[str, Any] | None:
-    """Return the newest successful apply run for one pipeline step."""
-    gsi_pk = pipeline_apply_gsi_pk(
+    """Return the newest successful apply/destroy run for one pipeline checkpoint."""
+    if action not in {"apply", "destroy"}:
+        raise ValueError("pipeline checkpoint action must be apply or destroy")
+    gsi_pk = pipeline_checkpoint_gsi_pk(
         trigger_id=trigger_id,
         repo_name=repo_name,
         pipeline=pipeline,
+        action=action,
         step_index=step_index,
     )
     query_kwargs: dict[str, Any] = {
@@ -227,21 +232,41 @@ def find_latest_successful_pipeline_apply(
         response = _shared._table().query(**query_kwargs)
         for raw_item in response.get("Items", []):
             if not isinstance(raw_item, dict):
-                raise RunRegistryError("DynamoDB query returned a non-object pipeline apply item")
+                raise RunRegistryError("DynamoDB query returned a non-object pipeline checkpoint item")
             item = _normalize(raw_item)
             if item is None:
-                raise RunRegistryError("DynamoDB query returned an empty pipeline apply item")
+                raise RunRegistryError("DynamoDB query returned an empty pipeline checkpoint item")
             if is_expired(item):
                 continue
-            if item.get("status") != "succeeded" or item.get("action") != "apply":
-                raise RunRegistryError("pipeline apply index contains a non-successful apply run")
-            if item.get("pipeline") != pipeline or item.get("step_index") != step_index:
-                raise RunRegistryError("pipeline apply index row identity does not match query")
+            if item.get("status") != "succeeded" or item.get("action") != action:
+                raise RunRegistryError("pipeline checkpoint index contains a non-successful run")
+            if (
+                item.get("pipeline") != pipeline
+                or item.get("step_index") != step_index
+            ):
+                raise RunRegistryError("pipeline checkpoint index row identity does not match query")
             return item
         last_key = response.get("LastEvaluatedKey")
         if not isinstance(last_key, dict):
             return None
         query_kwargs["ExclusiveStartKey"] = last_key
+
+
+def find_latest_successful_pipeline_apply(
+    *,
+    trigger_id: str,
+    repo_name: str,
+    pipeline: str,
+    step_index: int,
+) -> dict[str, Any] | None:
+    """Return the newest successful apply run for one pipeline checkpoint."""
+    return find_latest_successful_pipeline_checkpoint(
+        trigger_id=trigger_id,
+        repo_name=repo_name,
+        pipeline=pipeline,
+        action="apply",
+        step_index=step_index,
+    )
 
 
 def put_folder_gate_observations(

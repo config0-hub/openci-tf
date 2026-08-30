@@ -68,6 +68,7 @@ def test_render_indexes_successful_pipeline_apply_step(monkeypatch):
         }
     ]
     event = {
+        "action": "apply",
         "run_id": "run-1",
         "deadline_at": "2026-08-22T16:00:00Z",
         "skipped": [],
@@ -83,7 +84,7 @@ def test_render_indexes_successful_pipeline_apply_step(monkeypatch):
     with patch("src.platform.aws.run_registry.put_folder_record"), patch(
         "src.platform.aws.run_registry.update_run_status"
     ) as update_run, patch(
-        "src.platform.aws.run_registry.mark_pipeline_apply_succeeded"
+        "src.platform.aws.run_registry.mark_pipeline_checkpoint_succeeded"
     ) as mark_step:
         render_handler._update_run_registry(event, outcomes, "apply")
 
@@ -93,6 +94,7 @@ def test_render_indexes_successful_pipeline_apply_step(monkeypatch):
         trigger_id="trigger-1",
         repo_name="org/repo",
         pipeline="data/primary",
+        action="apply",
         step_index=1,
         step_count=2,
         pipeline_sha256="c" * 64,

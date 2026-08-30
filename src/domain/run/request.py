@@ -243,14 +243,14 @@ def parse_run_request(body: dict[str, Any], *, ingress_source: str = "api") -> R
         pipeline = _canonical_pipeline_name(raw_pipeline)
         if folders:
             raise RunRequestValidationError("pipeline is mutually exclusive with folders")
-        if action == "destroy":
-            raise RunRequestValidationError("destroy pipeline is not supported")
         if action == "report":
             raise RunRequestValidationError("report is not supported for pipelines")
-        if action == "apply":
+        if action in {"apply", "destroy"}:
             pipeline_step = _canonical_pipeline_step(raw_pipeline_step)
         elif raw_pipeline_step is not None:
-            raise RunRequestValidationError("pipeline_step is only valid for apply pipelines")
+            raise RunRequestValidationError(
+                "pipeline_step is only valid for apply and destroy pipelines"
+            )
     else:
         if raw_pipeline is not None:
             raise RunRequestValidationError("pipeline may only be supplied with pipeline folder_mode")

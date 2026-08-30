@@ -123,19 +123,22 @@ def _parse_mutating_command(verb: str, tokens: list[str]) -> Command:
     folders = _parse_folder_list([target])
     if not folders:
         raise ParseError("a folder target is required")
+    if verb == "destroy" and len(folders) > 1:
+        raise ParseError(
+            "multi-folder destroy is not supported; use tf destroy pipeline <name> "
+            "for ordered destroy"
+        )
     return Command(action=verb, folders=folders)
 
 
 def _parse_mutating_pipeline_command(verb: str, tokens: list[str]) -> Command:
-    if verb == "destroy":
-        raise ParseError("destroy pipeline is not supported")
     if len(tokens) not in {2, 4}:
-        raise ParseError("expected: tf apply pipeline <name> [step <n>]")
+        raise ParseError(f"expected: tf {verb} pipeline <name> [step <n>]")
     name = _validated_pipeline_name(tokens[1])
     step = 1
     if len(tokens) == 4:
         if tokens[2].lower() != "step":
-            raise ParseError("expected: tf apply pipeline <name> [step <n>]")
+            raise ParseError(f"expected: tf {verb} pipeline <name> [step <n>]")
         if not _PIPELINE_STEP.fullmatch(tokens[3]):
             raise ParseError("pipeline step must be an integer >= 1")
         step = int(tokens[3])

@@ -51,19 +51,22 @@ def test_build_run_request_accepts_github_pipeline_mode() -> None:
     assert request.notification_target.type == "github_pr"
 
 
-def test_build_run_request_rejects_pipeline_destroy() -> None:
-    with pytest.raises(RunRequestValidationError, match="destroy pipeline is not supported"):
-        build_run_request(
-            trigger_id="trigger-1",
-            commit_hash=_FULL_SHA,
-            action="destroy",
-            folder_mode="pipeline",
-            folders=[],
-            idempotency_key="delivery-12345678",
-            notification_target=NotificationTarget("github_pr", 7),
-            ingress_source="github",
-            pipeline="data/primary",
-        )
+def test_build_run_request_accepts_destroy_pipeline() -> None:
+    request = build_run_request(
+        trigger_id="trigger-1",
+        commit_hash=_FULL_SHA,
+        action="destroy",
+        folder_mode="pipeline",
+        folders=[],
+        idempotency_key="delivery-12345678",
+        notification_target=NotificationTarget("github_pr", 7),
+        ingress_source="github",
+        pipeline="data/primary",
+        pipeline_step=2,
+    )
+
+    assert request.pipeline == "data/primary"
+    assert request.pipeline_step == 2
 
 
 def test_build_run_request_accepts_apply_pipeline_step() -> None:
@@ -147,12 +150,13 @@ def test_build_run_request_accepts_apply_pipeline_step() -> None:
             {
                 "trigger_id": "trigger-1",
                 "commit_hash": _FULL_SHA,
-                "action": "destroy",
+                "action": "plan",
                 "folder_mode": "pipeline",
                 "pipeline": "data/primary",
+                "pipeline_step": 2,
                 "idempotency_key": "idem-key-12345678",
             },
-            "destroy pipeline is not supported",
+            "pipeline_step is only valid for apply and destroy pipelines",
         ),
         (
             {

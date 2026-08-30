@@ -10,15 +10,24 @@ from typing import Any
 from src.core.errors import ConfigResolutionError, ConfigValidationError
 from src.core.models import FolderConfig, RepoSettings
 from src.domain.config.outer_state import discover_folders, resolve_outer_state
-from src.domain.config.pipeline import Pipeline, canonical_pipeline_sha256, load_pipeline
-from src.domain.intent.gates import evaluate_intent_gates, folders_for_pipeline_apply_gate
+from src.domain.config.pipeline import (
+    Pipeline,
+    canonical_pipeline_sha256,
+    checkpoint_count,
+    folder_at_checkpoint,
+    load_pipeline,
+)
+from src.domain.intent.gates import evaluate_intent_gates, folders_for_pipeline_mutation_gate
 from src.domain.intent.models import IntentGateFailure
 from src.platform.aws.dynamo import get_repo_settings
 from src.platform.aws.ssm import get_github_token
 from src.platform.git.clone import cleanup_clone, shallow_clone
 from src.platform.git.origin import validate_clone_source
 from src.platform.github.client import GitHubClient
-from src.platform.aws.run_registry import RunRegistryError, find_latest_successful_pipeline_apply
+from src.platform.aws.run_registry import (
+    RunRegistryError,
+    find_latest_successful_pipeline_checkpoint,
+)
 from src.services.intent.registry import IntentRegistryError, put_intent
 
 
@@ -89,59 +98,78 @@ def _pipeline_for_intent(
         cleanup_clone(clone_dir)
 
 
-def _create_pipeline_apply_intent(
+def _create_pipeline_mutation_intent(
     *,
     action: str,
     settings: RepoSettings,
     approval_token: str,
     pipeline_name: str,
-    pipeline_step: int,
+    checkpoint_index: int,
     pr_number: int,
     commit_hash: str,
     requested_comment_id: int | None = None,
     requested_comment_body: str | None = None,
 ) -> tuple[IntentGateFailure | None, dict[str, Any] | None]:
-    if pipeline_step < 1:
+    if action not in {"apply", "destroy"}:
+        return IntentGateFailure(f"unsupported pipeline mutation action: {action}"), None
+    if checkpoint_index < 1:
         return IntentGateFailure("pipeline step must be an integer >= 1"), None
+    reverse = action == "destroy"
     pipeline, folder_configs, pipeline_hash = _pipeline_for_intent(
         settings=settings,
         commit_hash=commit_hash,
         pipeline_name=pipeline_name,
     )
-    step_count = len(pipeline.steps)
-    if pipeline_step > step_count:
+    total_checkpoints = checkpoint_count(pipeline)
+    if checkpoint_index > total_checkpoints:
         return (
             IntentGateFailure(
-                f"pipeline {pipeline.name} step {pipeline_step} is out of range; step_count={step_count}"
+                f"pipeline {pipeline.name} step {checkpoint_index} is out of range; step_count={total_checkpoints}"
             ),
             None,
         )
-    if pipeline_step > 1:
-        prior_step = pipeline_step - 1
+    prior_checkpoint_run_id: str | None = None
+    if checkpoint_index > 1:
+        prior_checkpoint = checkpoint_index - 1
         try:
-            prior = find_latest_successful_pipeline_apply(
+            prior = find_latest_successful_pipeline_checkpoint(
                 trigger_id=settings.trigger_id,
                 repo_name=settings.repo_name,
                 pipeline=pipeline.name,
-                step_index=prior_step,
+                action=action,
+                step_index=prior_checkpoint,
             )
         except RunRegistryError as error:
             raise IntentCreationError(str(error)) from error
         if prior is None:
             return (
                 IntentGateFailure(
-                    f"pipeline {pipeline.name} step {pipeline_step} requires a completed apply of step {prior_step} first"
+                    f"pipeline {pipeline.name} step {checkpoint_index} requires a completed "
+                    f"{action} of step {prior_checkpoint} first"
                 ),
                 None,
             )
         if prior.get("pipeline_sha256") != pipeline_hash:
             return (
                 IntentGateFailure(
-                    f"pipeline {pipeline.name} changed since step {prior_step} was applied; restart from step 1"
+                    f"pipeline {pipeline.name} changed since step {prior_checkpoint} was "
+                    f"{'applied' if action == 'apply' else 'destroyed'}; restart from step 1"
                 ),
                 None,
             )
-    gate_folders = folders_for_pipeline_apply_gate(pipeline, pipeline_step)
+        prior_run_id = prior.get("run_id")
+        if not isinstance(prior_run_id, str) or not prior_run_id:
+            return (
+                IntentGateFailure(
+                    f"pipeline {pipeline.name} step {checkpoint_index} requires a completed "
+                    f"{action} of step {prior_checkpoint} first"
+                ),
+                None,
+            )
+        prior_checkpoint_run_id = prior_run_id
+    gate_folders = folders_for_pipeline_mutation_gate(
+        pipeline, checkpoint_index, reverse=reverse
+    )
     all_gates = evaluate_intent_gates(
         action=action,
         folders=gate_folders,
@@ -153,23 +181,30 @@ def _create_pipeline_apply_intent(
     )
     if not all_gates.ok:
         return all_gates.failures[0] if all_gates.failures else IntentGateFailure("intent gate failed"), None
-    step_folders = list(pipeline.steps[pipeline_step - 1].folders)
-    step_gates = evaluate_intent_gates(
+    checkpoint_folder = folder_at_checkpoint(
+        pipeline, checkpoint_index, reverse=reverse
+    )
+    checkpoint_gates = evaluate_intent_gates(
         action=action,
-        folders=step_folders,
+        folders=[checkpoint_folder],
         folder_configs=folder_configs,
         settings=settings,
         pr_number=pr_number,
         commit_hash=commit_hash,
         approval_client=_GitHubApprovalClient(approval_token),
+        prior_checkpoint_run_id=prior_checkpoint_run_id,
     )
-    if not step_gates.ok or step_gates.record is None:
-        return step_gates.failures[0] if step_gates.failures else IntentGateFailure("intent gate failed"), None
+    if not checkpoint_gates.ok or checkpoint_gates.record is None:
+        return (
+            checkpoint_gates.failures[0]
+            if checkpoint_gates.failures
+            else IntentGateFailure("intent gate failed")
+        ), None
     record = replace(
-        step_gates.record,
+        checkpoint_gates.record,
         pipeline=pipeline.name,
-        step_index=pipeline_step,
-        step_count=step_count,
+        step_index=checkpoint_index,
+        step_count=total_checkpoints,
         pipeline_sha256=pipeline_hash,
         requested_comment_id=requested_comment_id,
         requested_comment_body=requested_comment_body,
@@ -196,14 +231,12 @@ def create_intent(
     settings = get_repo_settings(trigger_id, with_webhook_secret=False)
     token = get_github_token(settings.ssm_openci_tf_github_token)
     if pipeline is not None:
-        if action != "apply":
-            return IntentGateFailure("destroy pipeline is not supported"), None
-        return _create_pipeline_apply_intent(
+        return _create_pipeline_mutation_intent(
             action=action,
             settings=settings,
             approval_token=token,
             pipeline_name=pipeline,
-            pipeline_step=1 if pipeline_step is None else pipeline_step,
+            checkpoint_index=1 if pipeline_step is None else pipeline_step,
             pr_number=pr_number,
             commit_hash=commit_hash,
             requested_comment_id=requested_comment_id,

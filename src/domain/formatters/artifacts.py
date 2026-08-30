@@ -2026,6 +2026,97 @@ def pipeline_plan_preview_comment(
     return "\n".join(lines).rstrip()
 
 
+def _pipeline_mutation_note(action: str) -> str:
+    if action == "destroy":
+        return (
+            "> [!CAUTION]\n"
+            "> This pipeline was previewed with `tf plan --destroy pipeline <name>`. "
+            "Destroy runs in reverse pipeline order. Before each folder is destroyed, "
+            "openci-tf requires a fresh destroy plan using the state left by the previous "
+            "checkpoint. That exact pinned destroy plan requires its own confirmation."
+        )
+    return (
+        "> [!IMPORTANT]\n"
+        "> This pipeline was previewed with `tf plan pipeline <name>`. Before each folder "
+        "is applied, openci-tf requires a fresh plan using the state left by the previous "
+        "checkpoint. That exact pinned plan requires its own confirmation."
+    )
+
+
+def _pipeline_mutation_result_label(action: str, *, succeeded: bool) -> str:
+    if action == "apply":
+        return "Apply succeeded ✅" if succeeded else "Apply failed ❌"
+    return "Destroy succeeded ✅" if succeeded else "Destroy failed ❌"
+
+
+def _pipeline_mutation_plan_label(action: str, *, replanned: bool) -> str:
+    if replanned:
+        return "Replanned after prior checkpoint"
+    if action == "destroy":
+        return "Fresh destroy plan"
+    return "Fresh plan"
+
+
+def pipeline_mutation_aggregate_comment(
+    *,
+    action: str,
+    pipeline: str,
+    commit_hash: str,
+    requested_command: str,
+    checkpoint_index: int,
+    checkpoint_count: int,
+    folder: str,
+    account_id: str,
+    succeeded: bool,
+    plan_show_text: str | None = None,
+    pinned_plan_artifact: str,
+    replanned_after_prior: bool = False,
+    confirmation_status: str = "Confirmed ✅",
+    footer: str | None = None,
+    metadata_lines: list[str] | None = None,
+) -> str:
+    """Render one stable aggregate pipeline apply/destroy checkpoint comment."""
+    result = _pipeline_mutation_result_label(action, succeeded=succeeded)
+    plan_label = _pipeline_mutation_plan_label(
+        action, replanned=replanned_after_prior
+    )
+    lines = [
+        f"> **Pipeline {action} · checkpoint {checkpoint_index}/{checkpoint_count}**",
+        "",
+        _pipeline_mutation_note(action),
+        "",
+        f"**{checkpoint_index} checkpoint{'s' if checkpoint_count != 1 else ''}** · "
+        f"**{1 if succeeded else 0} succeeded** · **{0 if succeeded else 1} failed**",
+        "",
+        "| Step | Folder | Plan | Confirmation | Result |",
+        "|---|---|---|---|---|",
+        (
+            f"| {checkpoint_index}/{checkpoint_count} | `{folder}` | {plan_label} | "
+            f"{confirmation_status} | {result} |"
+        ),
+        "",
+        _wrap_collapsed(
+            f"Step {checkpoint_index}/{checkpoint_count} · `{folder}` · "
+            f"{account_id} · {result}",
+            "\n\n".join(
+                part
+                for part in [
+                    _mutation_plan_collapsible(
+                        plan_show_text,
+                        pinned_plan_artifact=pinned_plan_artifact,
+                    ),
+                ]
+                if part
+            ),
+        ),
+    ]
+    if footer:
+        lines.extend(["", footer])
+    if metadata_lines:
+        lines.extend(["", _wrap_collapsed("Metadata", "\n".join(metadata_lines))])
+    return bound_comment("\n".join(lines))
+
+
 def summary(
     outcomes: list[dict[str, Any]],
     artifacts_by_folder: dict[str, dict[str, str]] | None = None,

@@ -30,6 +30,7 @@ from .folders import (
 )
 from .queries import (
     find_latest_successful_pipeline_apply,
+    find_latest_successful_pipeline_checkpoint,
     list_folder_gate_projections,
     list_runs_authorized,
     list_runs_for_repo,
@@ -42,6 +43,7 @@ from .runs import (
     get_idempotency,
     get_run,
     mark_pipeline_apply_succeeded,
+    mark_pipeline_checkpoint_succeeded,
     set_run_deadline,
     set_run_pipeline_metadata,
     update_run_status,
@@ -57,6 +59,7 @@ __all__ = [
     "expire_ttl",
     "finalize_run_if_running",
     "find_latest_successful_pipeline_apply",
+    "find_latest_successful_pipeline_checkpoint",
     "folder_submission_sk",
     "get_folder_attempt",
     "get_folder_record",
@@ -68,6 +71,7 @@ __all__ = [
     "list_runs_authorized",
     "list_runs_for_repo",
     "mark_pipeline_apply_succeeded",
+    "mark_pipeline_checkpoint_succeeded",
     "put_folder_attempt",
     "put_folder_gate_observations",
     "put_folder_record",

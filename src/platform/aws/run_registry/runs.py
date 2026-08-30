@@ -11,6 +11,7 @@ from botocore.exceptions import ClientError  # type: ignore[import-not-found]
 
 from .keys import (
     idempotency_pk,
+    pipeline_checkpoint_gsi_pk,
     pipeline_apply_gsi_pk,
     pipeline_apply_gsi_sk,
     run_meta_sk,
@@ -158,28 +159,32 @@ def set_run_pipeline_metadata(run_id: str, *, pipeline: str, step_count: int) ->
     )
 
 
-def mark_pipeline_apply_succeeded(
+def mark_pipeline_checkpoint_succeeded(
     run_id: str,
     *,
     trigger_id: str,
     repo_name: str,
     pipeline: str,
+    action: str,
     step_index: int,
     step_count: int,
     pipeline_sha256: str,
     completed_at: int | None = None,
 ) -> None:
-    """Index one successful pipeline apply step for later step-order checks."""
+    """Index one successful pipeline mutation checkpoint for later progression checks."""
+    if action not in {"apply", "destroy"}:
+        raise ValueError("pipeline checkpoint action must be apply or destroy")
     if not run_id or not trigger_id or not repo_name or not pipeline:
-        raise ValueError("pipeline apply success identity fields are required")
+        raise ValueError("pipeline checkpoint success identity fields are required")
     api_step_index, api_step_count = validate_registry_step_range(step_index, step_count)
     if not isinstance(pipeline_sha256, str) or not pipeline_sha256:
         raise ValueError("pipeline_sha256 must be a non-empty string")
     completed = int(time.time()) if completed_at is None else completed_at
-    gsi_pk = pipeline_apply_gsi_pk(
+    gsi_pk = pipeline_checkpoint_gsi_pk(
         trigger_id=trigger_id,
         repo_name=repo_name,
         pipeline=pipeline,
+        action=action,
         step_index=api_step_index,
     )
     gsi_sk = pipeline_apply_gsi_sk(completed, run_id)
@@ -188,12 +193,12 @@ def mark_pipeline_apply_succeeded(
         UpdateExpression=(
             "SET pipeline = :pipeline, step_index = :step_index, "
             "step_count = :step_count, pipeline_sha256 = :pipeline_sha256, "
-            "pipeline_apply_completed_at = :completed_at, "
+            "pipeline_checkpoint_completed_at = :completed_at, "
             "gsi2pk = :gsi2pk, gsi2sk = :gsi2sk, updated_at = :updated"
         ),
         ConditionExpression=(
             "attribute_exists(pk) AND trigger_id = :trigger_id AND repo_name = :repo_name "
-            "AND #action = :apply AND #status = :succeeded AND "
+            "AND #action = :action AND #status = :succeeded AND "
             "(attribute_not_exists(pipeline) OR pipeline = :pipeline) AND "
             "(attribute_not_exists(step_index) OR step_index = :step_index) AND "
             "(attribute_not_exists(step_count) OR step_count = :step_count) AND "
@@ -211,9 +216,34 @@ def mark_pipeline_apply_succeeded(
             ":updated": completed,
             ":trigger_id": trigger_id,
             ":repo_name": repo_name,
-            ":apply": "apply",
+            ":action": action,
             ":succeeded": "succeeded",
         },
+    )
+
+
+def mark_pipeline_apply_succeeded(
+    run_id: str,
+    *,
+    trigger_id: str,
+    repo_name: str,
+    pipeline: str,
+    step_index: int,
+    step_count: int,
+    pipeline_sha256: str,
+    completed_at: int | None = None,
+) -> None:
+    """Index one successful pipeline apply checkpoint for later step-order checks."""
+    mark_pipeline_checkpoint_succeeded(
+        run_id,
+        trigger_id=trigger_id,
+        repo_name=repo_name,
+        pipeline=pipeline,
+        action="apply",
+        step_index=step_index,
+        step_count=step_count,
+        pipeline_sha256=pipeline_sha256,
+        completed_at=completed_at,
     )
 
 

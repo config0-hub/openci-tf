@@ -35,8 +35,14 @@ Engine acceptance is authoritative. The inner folder service writes create-only 
 | `tf plan --destroy <folders>` | single | Runs `terraform plan -destroy`, writes `tf/destroy.plan.tfplan` under the run prefix |
 | `tf apply <folders>` | 1 | Creates an apply intent and posts a confirmation token |
 | `tf apply confirm <token>` | 2 | Executes the pinned plan for each folder sequentially |
-| `tf destroy <folders>` | 1 | Creates a destroy intent against the newest successful `plan_destroy` run |
+| `tf apply pipeline <name> [step <n>]` | 1 | Creates one apply intent for checkpoint `<n>` (one folder) |
+| `tf destroy <folder>` | 1 | Creates a destroy intent against the newest successful `plan_destroy` run |
 | `tf destroy confirm <token>` | 2 | Applies the pinned destroy plan sequentially |
+| `tf destroy pipeline <name> [step <n>]` | 1 | Creates one destroy intent for checkpoint `<n>` in reverse order |
+
+Multi-folder `tf destroy <csv>` is rejected. Use `tf destroy pipeline <name>` for ordered destroy.
+
+Pipeline apply and destroy use flattened per-folder checkpoints. Each checkpoint requires its own fresh pinned plan and single-use confirmation token. A plan from before the prior checkpoint's successful mutation cannot be confirmed. See [docs/PIPELINES.md](PIPELINES.md) for preview order, reverse destroy order, and blast-radius safeguards.
 
 ## Ask-if tree (step 1)
 
@@ -78,9 +84,11 @@ Artifact categories are nested collapsibles (`Run artifacts`, `Plan artifacts`,
 run ID, triggering and confirmation comment IDs) live only in the collapsed
 Metadata section; confirmation tokens remain redacted.
 
-Multi-folder pipeline apply updates one managed PR comment after each step.
-Aggregate destroy summaries list every folder with `Destroy succeeded ✅` (or
-failed/skipped variants) and no longer raise formatter errors at terminalization.
+Multi-folder pipeline apply and destroy update one stable managed PR comment after
+each checkpoint. The comment shows the fresh pinned plan, confirmation status, and
+the next required `tf apply pipeline` / `tf destroy pipeline` command before Metadata.
+Aggregate destroy summaries for ad hoc single-folder destroy still list every folder
+with `Destroy succeeded ✅` (or failed/skipped variants).
 
 ## PR comment lifecycle
 

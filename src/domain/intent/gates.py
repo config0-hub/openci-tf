@@ -11,6 +11,7 @@ from src.core.models import FolderConfig, RepoSettings
 from src.domain.config.pipeline import Pipeline
 from src.domain.accounts.aliases import AccountAlias, load_account_alias
 from src.domain.accounts.binding import account_binding_from_alias
+from src.domain.engine.outer_execution_id import parse_outer_run_epoch
 from src.domain.intent.models import (
     FolderPlanPin,
     IntentGateFailure,
@@ -26,17 +27,28 @@ class _ApprovalClient(Protocol):
         ...
 
 
+def folders_for_pipeline_mutation_gate(
+    pipeline: Pipeline,
+    checkpoint_index: int,
+    *,
+    reverse: bool = False,
+) -> list[str]:
+    """Return folders checked by the preliminary gate before creating a pipeline intent."""
+    if checkpoint_index < 1:
+        raise ValueError("checkpoint_index must be an integer >= 1")
+    all_folders: list[str] = []
+    for step in pipeline.steps:
+        all_folders.extend(step.folders)
+    if reverse:
+        all_folders = list(reversed(all_folders))
+    if checkpoint_index == 1:
+        return all_folders
+    return all_folders[checkpoint_index - 1 :]
+
+
 def folders_for_pipeline_apply_gate(pipeline: Pipeline, pipeline_step: int) -> list[str]:
-    """Return folders checked by the preliminary gate before creating a pipeline apply intent."""
-    if pipeline_step < 1:
-        raise ValueError("pipeline_step must be an integer >= 1")
-    if pipeline_step == 1:
-        return [folder for step in pipeline.steps for folder in step.folders]
-    return [
-        folder
-        for step in pipeline.steps[pipeline_step - 1 :]
-        for folder in step.folders
-    ]
+    """Backward-compatible alias for preliminary pipeline gate folder selection."""
+    return folders_for_pipeline_mutation_gate(pipeline, pipeline_step, reverse=False)
 
 
 def _folder_config_allows(action: str, config: FolderConfig) -> bool:
@@ -45,6 +57,20 @@ def _folder_config_allows(action: str, config: FolderConfig) -> bool:
     if action == "destroy":
         return config.destroy.allow is True
     raise ValueError(f"unsupported intent action: {action}")
+
+
+def _plan_after_prior_checkpoint(
+    *,
+    plan_run_id: str,
+    prior_checkpoint_run_id: str | None,
+) -> bool:
+    if prior_checkpoint_run_id is None:
+        return True
+    plan_epoch = parse_outer_run_epoch(plan_run_id)
+    prior_epoch = parse_outer_run_epoch(prior_checkpoint_run_id)
+    if plan_epoch is None or prior_epoch is None:
+        return False
+    return plan_epoch > prior_epoch
 
 
 def evaluate_intent_gates(
@@ -57,6 +83,7 @@ def evaluate_intent_gates(
     commit_hash: str,
     approval_client: _ApprovalClient | None = None,
     now: int | None = None,
+    prior_checkpoint_run_id: str | None = None,
 ) -> IntentGateResult:
     """Run the ask-if tree for apply/destroy step 1."""
     failures: list[IntentGateFailure] = []
@@ -128,11 +155,23 @@ def evaluate_intent_gates(
             failures.append(IntentGateFailure(message, folder=folder))
             continue
         match = lookup.match
-        source_run_ids.add(str(match["run_id"]))
+        plan_run_id = str(match["run_id"])
+        if not _plan_after_prior_checkpoint(
+            plan_run_id=plan_run_id,
+            prior_checkpoint_run_id=prior_checkpoint_run_id,
+        ):
+            failures.append(
+                IntentGateFailure(
+                    "plan predates prior pipeline checkpoint — create a fresh plan for this folder",
+                    folder=folder,
+                )
+            )
+            continue
+        source_run_ids.add(plan_run_id)
         pins.append(
             FolderPlanPin(
                 folder=folder,
-                source_run_id=str(match["run_id"]),
+                source_run_id=plan_run_id,
                 plan_sha256=str(match["plan_sha256"]),
                 plan_artifact_name=str(match["plan_artifact_name"]),
                 account_id=account_id,
@@ -146,11 +185,11 @@ def evaluate_intent_gates(
     if failures:
         return IntentGateResult(ok=False, failures=failures)
 
-    if len(source_run_ids) != 1:
+    if len(folders) > 1 and len(source_run_ids) != 1:
         failures.append(IntentGateFailure("folders resolve to different source plan runs"))
         return IntentGateResult(ok=False, failures=failures)
 
-    source_run_id = next(iter(source_run_ids))
+    source_run_id = next(iter(source_run_ids)) if source_run_ids else ""
     current = int(time.time()) if now is None else now
     token = mint_token()
     record = IntentRecord(

@@ -25,6 +25,7 @@ from src.domain.formatters.artifacts import (
     pending_plan_comment,
     pending_summary,
     pipeline_plan_preview_comment,
+    pipeline_mutation_aggregate_comment,
     status_comment_in_progress,
     summary,
 )
@@ -177,13 +178,13 @@ def _source_plan_run_id(outcome: dict[str, Any]) -> str | None:
     return source if isinstance(source, str) and source else None
 
 
-def _pipeline_apply_footer(
+def _pipeline_mutation_footer(
     event: dict[str, Any],
     action: str,
     outcomes: list[dict[str, Any]],
     skipped: list[dict[str, Any]],
 ) -> str | None:
-    if action != "apply":
+    if action not in {"apply", "destroy"}:
         return None
     webhook = event.get("webhook_info")
     if not isinstance(webhook, dict):
@@ -198,7 +199,7 @@ def _pipeline_apply_footer(
     if not isinstance(step_count, int) or isinstance(step_count, bool):
         return None
     if step_index < 1 or step_count < 1 or step_index > step_count:
-        raise ValueError("invalid pipeline apply step metadata")
+        raise ValueError("invalid pipeline mutation step metadata")
     if _terminal_status(outcomes, skipped) != "succeeded":
         return None
     if step_index < step_count:
@@ -206,7 +207,81 @@ def _pipeline_apply_footer(
             f"> [!NOTE]\n"
             f"> Next step: `tf {action} pipeline {pipeline} step {step_index + 1}`"
         )
-    return f"> [!NOTE]\n> Pipeline `{pipeline}` complete ({step_count} steps)."
+    verb = "applied" if action == "apply" else "destroyed"
+    return f"> [!NOTE]\n> Pipeline `{pipeline}` complete ({step_count} folders {verb})."
+
+
+def _is_pipeline_mutation(event: dict[str, Any], action: str) -> bool:
+    if action not in {"apply", "destroy"}:
+        return False
+    webhook = event.get("webhook_info")
+    if not isinstance(webhook, dict):
+        return False
+    pipeline = webhook.get("pipeline")
+    return isinstance(pipeline, str) and bool(pipeline)
+
+
+def _pipeline_mutation_aggregate_body(
+    event: dict[str, Any],
+    *,
+    action: str,
+    outcomes: list[dict[str, Any]],
+    artifacts_by_folder: dict[str, dict[str, str]],
+    commit_hash: str,
+    footer: str | None,
+) -> str:
+    webhook = event["webhook_info"]
+    pipeline = str(webhook.get("pipeline") or "")
+    step_index = webhook.get("pipeline_step_index")
+    step_count = webhook.get("pipeline_step_count")
+    if not isinstance(step_index, int) or not isinstance(step_count, int):
+        raise ValueError("pipeline mutation render requires step metadata")
+    if not outcomes:
+        raise ValueError("pipeline mutation render requires one folder outcome")
+    outcome = outcomes[0]
+    folder = str(outcome.get("folder") or "")
+    artifacts = artifacts_by_folder.get(folder, {})
+    plan_show = artifacts.get("plan-show.out", "")
+    succeeded = outcome.get("succeeded") is True and str(outcome.get("status") or "") not in {
+        "failed",
+        "infrastructure_error",
+        "in_progress",
+        "skipped",
+    }
+    requested_body = event.get("requested_comment_body")
+    if not isinstance(requested_body, str) or not requested_body.strip():
+        requested_body = f"tf {action} pipeline {pipeline}"
+        if step_index > 1:
+            requested_body = f"{requested_body} step {step_index}"
+    pinned = "plan.tfplan" if action == "apply" else "destroy.plan.tfplan"
+    return pipeline_mutation_aggregate_comment(
+        action=action,
+        pipeline=pipeline,
+        commit_hash=commit_hash,
+        requested_command=requested_body,
+        checkpoint_index=step_index,
+        checkpoint_count=step_count,
+        folder=folder,
+        account_id=str(outcome.get("account_id") or ""),
+        succeeded=succeeded,
+        plan_show_text=plan_show or None,
+        pinned_plan_artifact=pinned,
+        replanned_after_prior=step_index > 1,
+        footer=footer,
+        metadata_lines=[
+            f"- Run ID: `{event.get('run_id')}`",
+            f"- Source plan run ID: `{_source_plan_run_id(outcome) or 'unknown'}`",
+        ],
+    )
+
+
+def _pipeline_apply_footer(
+    event: dict[str, Any],
+    action: str,
+    outcomes: list[dict[str, Any]],
+    skipped: list[dict[str, Any]],
+) -> str | None:
+    return _pipeline_mutation_footer(event, action, outcomes, skipped)
 
 
 def _append_footer(body: str, footer: str | None) -> str:
@@ -955,6 +1030,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     folder_urls: dict[str, str] = {}
     table = cast(Any, boto3.resource("dynamodb")).Table(os.environ["LOCKS_TABLE_NAME"])
     pipeline_plan_focus = _pipeline_plan_focus_enabled(event)
+    pipeline_mutation = _is_pipeline_mutation(event, action)
     for outcome in render_items:
         folder = outcome["folder"]
         execution_id = outcome.get("execution_id", outcome.get("exec_id"))
@@ -998,7 +1074,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 if action in {"apply", "destroy"}
                 else None
             )
-            if not pipeline_plan_focus:
+            if not pipeline_plan_focus and not pipeline_mutation:
                 comment_id = _delete_and_repost(
                     client,
                     repo,
@@ -1037,7 +1113,33 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         finally:
             if isinstance(execution_id, str) and execution_id:
                 run_lock.release(table, repo, folder, execution_id)
-    if pipeline_plan_focus:
+    if pipeline_mutation:
+        _delete_and_repost(
+            client,
+            repo,
+            pr,
+            _with_command_context(
+                event,
+                _pipeline_mutation_aggregate_body(
+                    event,
+                    action=action,
+                    outcomes=outcomes,
+                    artifacts_by_folder=artifacts_by_folder,
+                    commit_hash=commit_hash,
+                    footer=pipeline_footer,
+                ),
+                run_id=run_id,
+                comments_removed=True,
+                include_account=False,
+                include_source_plan_run_id=False,
+                include_metadata=False,
+            ),
+            action,
+            "all",
+            report_all=False,
+            emit_marker=should_emit_comment_object_marker(action, terminal=True),
+        )
+    elif pipeline_plan_focus:
         steps = event.get("steps") if isinstance(event.get("steps"), list) else None
         preview_body = pipeline_plan_preview_comment(
             outcomes,

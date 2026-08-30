@@ -79,6 +79,51 @@ def discover_pipelines(root: Path) -> dict[str, Path]:
     return discovered
 
 
+def flatten_pipeline_folders(
+    pipeline: Pipeline,
+    *,
+    reverse: bool = False,
+) -> tuple[str, ...]:
+    """Return pipeline folders as one deterministic checkpoint per folder."""
+    folders = [folder for step in pipeline.steps for folder in step.folders]
+    if reverse:
+        return tuple(reversed(folders))
+    return tuple(folders)
+
+
+def checkpoint_count(pipeline: Pipeline) -> int:
+    """Return the number of per-folder mutation checkpoints in one pipeline."""
+    return len(flatten_pipeline_folders(pipeline))
+
+
+def folders_from_checkpoint(
+    pipeline: Pipeline,
+    checkpoint_index: int,
+    *,
+    reverse: bool = False,
+) -> list[str]:
+    """Return folders still requiring gate checks from one checkpoint onward."""
+    if checkpoint_index < 1:
+        raise ValueError("checkpoint_index must be an integer >= 1")
+    folders = list(flatten_pipeline_folders(pipeline, reverse=reverse))
+    if checkpoint_index > len(folders):
+        raise ValueError("checkpoint_index is out of range")
+    return folders[checkpoint_index - 1 :]
+
+
+def folder_at_checkpoint(
+    pipeline: Pipeline,
+    checkpoint_index: int,
+    *,
+    reverse: bool = False,
+) -> str:
+    """Return the single folder for one flattened checkpoint index."""
+    folders = list(flatten_pipeline_folders(pipeline, reverse=reverse))
+    if checkpoint_index < 1 or checkpoint_index > len(folders):
+        raise ValueError("checkpoint_index is out of range")
+    return folders[checkpoint_index - 1]
+
+
 def canonical_pipeline_sha256(pipeline: Pipeline) -> str:
     """Hash the canonical parsed pipeline shape used for apply step continuity."""
     payload = [[folder for folder in step.folders] for step in pipeline.steps]

@@ -19,9 +19,9 @@ steps:
 ```
 
 A step is either one `folder` or a `parallel` list of folders. The next step waits
-for all folders in the current step. `parallel` means concurrent plan/drift in the
-read lane. Apply for a parallel step uses one confirm token and then applies those
-folders serially in the listed order.
+for all folders in the current step during read-only runs. `parallel` means
+concurrent plan/drift in the read lane. Mutation checkpoints flatten parallel
+groups into one deterministic folder order (listed order within each parallel group).
 
 Limits and rejects:
 
@@ -32,6 +32,15 @@ Limits and rejects:
 - names may use letters, numbers, `_`, `.`, `/`, and `-`; `all`, absolute paths,
   and `..` are rejected
 
+## Blast radius
+
+Pipelines can affect many folders and accounts. The safeguards below are mandatory:
+
+- preview the whole pipeline before mutation (`tf plan pipeline` / `tf plan --destroy pipeline`)
+- one fresh pinned plan and one single-use confirmation token per folder checkpoint
+- stop fail-closed on any plan, gate, confirmation, mutation, or registry failure
+- destroy runs in deterministic reverse flattened order
+
 ## PR comment syntax
 
 - `tf plan pipeline <name>`
@@ -39,8 +48,10 @@ Limits and rejects:
 - `tf drift pipeline <name>`
 - `tf apply pipeline <name> [step <n>]`
 - `tf apply confirm <token>`
+- `tf destroy pipeline <name> [step <n>]`
+- `tf destroy confirm <token>`
 
-`tf report pipeline <name>` and `tf destroy pipeline <name>` are not supported.
+`tf report pipeline <name>` is not supported.
 
 `tf plan pipeline <name>` and `tf plan --destroy pipeline <name>` run Terraform plan
 only for every pipeline folder. They skip tfsec and Infracost, render one PR comment
@@ -59,22 +70,34 @@ lock every folder up front, then run step by step. `tf plan --destroy pipeline X
 runs the steps in reverse order. A failed step stops later steps and the summary
 marks them `not run`.
 
-Apply is deliberately split into short runs. `tf apply pipeline X` creates the
-normal intent for step 1 only, after checking gates for every folder in the
-pipeline. Step `n > 1` is accepted only after the run registry shows a
-successful apply of step `n-1` for the same trigger, repository, and pipeline.
-If the canonical parsed pipeline changed since that prior step, restart from
-step 1. Applying step `n` after step `n-1`'s run has aged out of the
-run-history retention window (default 90 days, `RUN_HISTORY_RETENTION_DAYS`)
-requires restarting the pipeline from step 1, since the step-order anchor is a
-run-registry record. For step `n > 1`, the preliminary gate checks only folders
-in steps `n` and later. Folders from earlier steps are not re-checked for a
-fresh plan because their successful apply already superseded the pipeline plan
-for that folder. Step `n` still uses the per-folder plan from the original
-pipeline plan run when that folder has not been applied since that plan. After
-`tf apply confirm <token>` succeeds, the comment ends with
-`next: tf apply pipeline X step 2` until the last step. The final step says
-`pipeline X complete (N steps)`. Locks are held only for the current apply step.
+## Mutation checkpoints (apply and destroy)
+
+Mutation uses flattened per-folder checkpoints, not YAML step groups. A pipeline
+with one folder step followed by a parallel pair has three checkpoints in listed
+order.
+
+Apply order:
+
+1. `tf apply pipeline X` starts checkpoint 1 (first folder in apply order).
+2. openci-tf resolves a fresh pinned plan for that folder only, publishes it in
+   the stable aggregate pipeline PR comment, and posts `tf apply confirm <token>`.
+3. After `tf apply confirm <token>` succeeds, the aggregate comment shows the
+   result and the next required command before Metadata:
+   `tf apply pipeline X step 2` (or completion on the last checkpoint).
+4. Each later checkpoint requires a successful apply of the prior checkpoint for the
+   same pipeline definition hash, plus a fresh plan created after that prior apply.
+5. A plan from the original pipeline preview cannot be reused for a later checkpoint.
+
+Destroy uses the same checkpoint model in reverse flattened order:
+
+1. Preview with `tf plan --destroy pipeline X`.
+2. `tf destroy pipeline X` starts at the last folder in destroy order.
+3. Each checkpoint gets its own fresh destroy plan and `tf destroy confirm <token>`.
+4. Ad hoc multi-folder `tf destroy a,b` is rejected; use `tf destroy pipeline <name>`.
+
+Locks are held only for the current mutation checkpoint. One stable aggregate managed
+PR comment is updated after each plan publication and mutation result. Separate
+command-audit and confirmation comments are preserved.
 
 ## User-visible errors
 
@@ -83,11 +106,14 @@ Common messages are:
 - `unknown pipeline: <name>`
 - `invalid pipeline '<name>': <reason>`
 - `report is not supported for pipelines`
-- `destroy pipeline is not supported`
+- `multi-folder destroy is not supported; use tf destroy pipeline <name> for ordered destroy`
 - `pipeline step must be an integer >= 1`
 - `pipeline <name> step <n> is out of range; step_count=<count>`
 - `pipeline <name> step <n> requires a completed apply of step <n-1> first`
+- `pipeline <name> step <n> requires a completed destroy of step <n-1> first`
 - `pipeline <name> changed since step <n-1> was applied; restart from step 1`
+- `pipeline <name> changed since step <n-1> was destroyed; restart from step 1`
+- `plan predates prior pipeline checkpoint — create a fresh plan for this folder`
 - `folder '<folder>' is locked during pipeline resolution`
 
 ## API
@@ -117,4 +143,4 @@ report `step_index: 1` for every folder.
 
 Pipelines do not support scripts, environment variables, passing outputs between
 steps, nested pipelines, per-step refs, read-only resume from a later step,
-`report`, or `destroy`.
+`report`, or automatic hidden approval between checkpoints.

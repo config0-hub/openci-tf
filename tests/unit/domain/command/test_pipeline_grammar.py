@@ -41,6 +41,14 @@ def test_apply_pipeline_grammar_accepts_step_cursor(text: str, step: int) -> Non
     assert command.folders == []
 
 
+def test_destroy_pipeline_grammar_accepts_step_cursor() -> None:
+    command = parse_command("tf destroy pipeline data/primary step 2")
+
+    assert command.action == "destroy"
+    assert command.pipeline == "data/primary"
+    assert command.pipeline_step == 2
+
+
 @pytest.mark.parametrize(
     "text,match",
     [
@@ -52,7 +60,6 @@ def test_apply_pipeline_grammar_accepts_step_cursor(text: str, step: int) -> Non
         ("tf plan pipeline data/primary all", "pipeline <name>"),
         ("tf plan all pipeline data/primary", "expected"),
         ("tf plan infra/vpc pipeline data/primary", "expected"),
-        ("tf destroy pipeline data/primary", "destroy pipeline is not supported"),
         ("tf apply pipeline data/primary step ²", "pipeline step must be an integer"),
         ("tf apply pipeline data/primary step 0", "pipeline step must be an integer"),
         ("tf apply pipeline data/primary step 01", "pipeline step must be an integer"),

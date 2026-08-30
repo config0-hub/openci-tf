@@ -57,7 +57,7 @@ def _run_drift_detected(
     return None
 
 
-def _successful_pipeline_apply_metadata(event: dict[str, Any]) -> dict[str, Any] | None:
+def _successful_pipeline_checkpoint_metadata(event: dict[str, Any]) -> dict[str, Any] | None:
     webhook = event.get("webhook_info")
     if not isinstance(webhook, dict):
         return None
@@ -69,6 +69,9 @@ def _successful_pipeline_apply_metadata(event: dict[str, Any]) -> dict[str, Any]
     pipeline_sha256 = webhook.get("pipeline_sha256")
     trigger_id = webhook.get("trigger_id")
     repo_name = webhook.get("repo_name")
+    action = str(event.get("action") or webhook.get("action") or "")
+    if action not in {"apply", "destroy"}:
+        return None
     if not isinstance(pipeline, str) or not pipeline:
         raise ValueError("pipeline must be a non-empty string")
     if type(step_index) is not int or step_index < 1:
@@ -78,17 +81,25 @@ def _successful_pipeline_apply_metadata(event: dict[str, Any]) -> dict[str, Any]
     if not isinstance(pipeline_sha256, str) or not pipeline_sha256:
         raise ValueError("pipeline_sha256 must be a non-empty string")
     if not isinstance(trigger_id, str) or not trigger_id:
-        raise ValueError("trigger_id is required for pipeline apply registry metadata")
+        raise ValueError("trigger_id is required for pipeline checkpoint registry metadata")
     if not isinstance(repo_name, str) or not repo_name:
-        raise ValueError("repo_name is required for pipeline apply registry metadata")
+        raise ValueError("repo_name is required for pipeline checkpoint registry metadata")
     return {
         "trigger_id": trigger_id,
         "repo_name": repo_name,
         "pipeline": pipeline,
+        "action": action,
         "step_index": step_index,
         "step_count": step_count,
         "pipeline_sha256": pipeline_sha256,
     }
+
+
+def _successful_pipeline_apply_metadata(event: dict[str, Any]) -> dict[str, Any] | None:
+    metadata = _successful_pipeline_checkpoint_metadata(event)
+    if metadata is None or metadata.get("action") != "apply":
+        return None
+    return metadata
 
 
 def _update_run_registry(
@@ -101,7 +112,6 @@ def _update_run_registry(
     if not os.environ.get("RUN_REGISTRY_TABLE_NAME"):
         return
     from src.platform.aws.run_registry import (
-        mark_pipeline_apply_succeeded,
         put_folder_record,
         update_run_status,
     )
@@ -177,7 +187,9 @@ def _update_run_registry(
         terminal,
         drift_detected=_run_drift_detected(outcomes + skipped_items, action),
     )
-    if action == "apply" and terminal == "succeeded":
-        metadata = _successful_pipeline_apply_metadata(event)
+    if action in {"apply", "destroy"} and terminal == "succeeded":
+        metadata = _successful_pipeline_checkpoint_metadata(event)
         if metadata is not None:
-            mark_pipeline_apply_succeeded(run_id, **metadata)
+            from src.platform.aws.run_registry import mark_pipeline_checkpoint_succeeded
+
+            mark_pipeline_checkpoint_succeeded(run_id, **metadata)

@@ -57,15 +57,18 @@ def repo_gsi_sk(created_at: int, run_id: str) -> str:
     return f"{created_at:020d}#{run_id}"
 
 
-def pipeline_apply_gsi_pk(
+def pipeline_checkpoint_gsi_pk(
     *,
     trigger_id: str,
     repo_name: str,
     pipeline: str,
+    action: str,
     step_index: int,
 ) -> str:
     if not trigger_id or not repo_name or not pipeline:
-        raise ValueError("pipeline apply GSI identity fields are required")
+        raise ValueError("pipeline checkpoint GSI identity fields are required")
+    if action not in {"apply", "destroy"}:
+        raise ValueError("pipeline checkpoint action must be apply or destroy")
     if type(step_index) is not int or step_index < 1:
         raise ValueError("step_index must be an integer >= 1")
     identity = "|".join(
@@ -73,10 +76,27 @@ def pipeline_apply_gsi_pk(
             f"trigger={len(trigger_id)}:{trigger_id}",
             f"repo={len(repo_name)}:{repo_name}",
             f"pipeline={len(pipeline)}:{pipeline}",
+            f"action={action}",
             f"step={step_index}",
         )
     )
-    return f"pipeline-apply#{hashlib.sha256(identity.encode('utf-8')).hexdigest()}"
+    return f"pipeline-checkpoint#{hashlib.sha256(identity.encode('utf-8')).hexdigest()}"
+
+
+def pipeline_apply_gsi_pk(
+    *,
+    trigger_id: str,
+    repo_name: str,
+    pipeline: str,
+    step_index: int,
+) -> str:
+    return pipeline_checkpoint_gsi_pk(
+        trigger_id=trigger_id,
+        repo_name=repo_name,
+        pipeline=pipeline,
+        action="apply",
+        step_index=step_index,
+    )
 
 
 def pipeline_apply_gsi_sk(completed_at: int, run_id: str) -> str:

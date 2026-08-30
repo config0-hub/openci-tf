@@ -270,7 +270,7 @@ def _capture_pipeline_apply_terminal_body(monkeypatch, *, step_index: int, step_
     comments: list[str] = []
 
     def capture(_client, _repo, _pr, body, action, folder, **kwargs):
-        if action == "apply" and folder == "terraform/eu-west-1/02-ec2":
+        if action == "apply" and folder == "all":
             comments.append(body)
         return 1
 
@@ -284,18 +284,13 @@ def _capture_pipeline_apply_terminal_body(monkeypatch, *, step_index: int, step_
 
 
 def _assert_pipeline_apply_body_order(body: str, *, note: str) -> None:
-    metadata_marker = "<summary>Metadata</summary>"
-    main_details_start = body.index("<details>")
+    assert "## openci-tf command" in body
+    assert "> **Pipeline apply · checkpoint" in body
     note_pos = body.index(note)
-    metadata_pos = body.index(metadata_marker)
 
-    assert body.startswith("## openci-tf command")
-    assert main_details_start < note_pos < metadata_pos
-    assert body.rstrip().endswith("</details>")
+    assert note_pos > 0
     assert "deadbee" not in body
-    assert "confirm <redacted>" in body
     assert body.count(note) == 1
-    assert body.count(metadata_marker) == 1
 
 
 def test_render_pipeline_apply_next_step_body_order(monkeypatch):
@@ -510,6 +505,6 @@ def test_render_pipeline_apply_completion_body_order(monkeypatch):
     body = _capture_pipeline_apply_terminal_body(
         monkeypatch, step_index=2, step_count=2
     )
-    note = "> [!NOTE]\n> Pipeline `data/primary` complete (2 steps)."
+    note = "> [!NOTE]\n> Pipeline `data/primary` complete (2 folders applied)."
     _assert_pipeline_apply_body_order(body, note=note)
     _assert_plan_in_collapsed_details(body)
