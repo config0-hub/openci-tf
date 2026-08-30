@@ -279,7 +279,7 @@ def test_mutation_infrastructure_error_renders_failed_not_succeeded(monkeypatch)
         pr_number=7,
     )
 
-    assert "config · Apply ❌ failed" in body
+    assert "`config` · Apply failed ❌" in body
     assert "Apply succeeded" not in body
     assert "configuration resolution failed" in body
 

@@ -42,6 +42,12 @@ Limits and rejects:
 
 `tf report pipeline <name>` and `tf destroy pipeline <name>` are not supported.
 
+`tf plan pipeline <name>` and `tf plan --destroy pipeline <name>` run Terraform plan
+only for every pipeline folder. They skip tfsec and Infracost, render one PR comment
+with an ordered plan summary table and collapsible detailed plans per folder (apply
+order for plan, reverse order for destroy-plan). Security and cost analysis remain
+available on a regular single-folder `tf plan`.
+
 Multi-folder `plan`, `report`, and pipeline read-only runs post a summary table on the
 pull request. The third column is **Plan** and shows each folder's plan delta as
 `+add ~change -destroy` counts, or `no changes` when the plan is empty. API

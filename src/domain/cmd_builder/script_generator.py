@@ -232,16 +232,17 @@ class ScriptParams:
     folder: str = "."
     normalize_drift: bool = False
     extra_flags: tuple[str, ...] = ()
+    pipeline_plan_focus: bool = False
 
 
 def _installer_specs(params: ScriptParams) -> tuple[tuple[str, str], ...]:
     specs = ((params.binary, params.binary_version),)
-    if params.verb in {"plan", "report"}:
+    if params.verb in {"plan", "report"} and not params.pipeline_plan_focus:
         return (*specs, ("tfsec", "1.28.10"), ("infracost", "0.10.39"))
     return specs
 
 
-def _artifact_names(verb: str) -> tuple[str, ...]:
+def _artifact_names(verb: str, *, pipeline_plan_focus: bool = False) -> tuple[str, ...]:
     if verb == "plan_destroy":
         return ("init.out", "validate.out", "destroy.plan.out")
     if verb == "apply":
@@ -249,7 +250,7 @@ def _artifact_names(verb: str) -> tuple[str, ...]:
     if verb == "destroy":
         return ("init.out", "validate.out", "plan-show.out", "destroy.out")
     names = ("init.out", "validate.out", "tf/plan.out", "drift.json")
-    if verb in {"plan", "report"}:
+    if verb in {"plan", "report"} and not pipeline_plan_focus:
         return (*names, "tfsec.json", "tfsec.output", "infracost.json", "infracost.output")
     return names
 
@@ -268,7 +269,9 @@ def _render_plan_like(params: ScriptParams) -> str:
         render_installer(binary, version, params.execution_target, require_pinned_installer(binary, version).sha256)
         for binary, version in _installer_specs(params)
     )
-    artifact_names = " ".join(_artifact_names(params.verb))
+    artifact_names = " ".join(
+        _artifact_names(params.verb, pipeline_plan_focus=params.pipeline_plan_focus)
+    )
     if destroy_plan:
         plan_artifact_helper = _DESTROY_PLAN_ARTIFACT_HELPER
         plan_setup = 'plan_dir="${ARTIFACTS_DIR:-/tmp}/binary-plan"\nmkdir -p "$plan_dir"\nplan_file="$plan_dir/destroy.plan.tfplan"'
@@ -326,7 +329,7 @@ if [ -n "${INFRACOST_API_KEY:-}" ]; then
   fi
 else
   printf '%s\\n' '{"skipped":true,"reason":"not configured"}' > "${ARTIFACTS_DIR:-/tmp}/infracost.json"
-fi""" if plan_enabled else ""
+fi""" if plan_enabled and not params.pipeline_plan_focus else ""
     return f'''#!/usr/bin/env bash
 set -euo pipefail
 upload_artifacts() {{
@@ -387,7 +390,9 @@ def _render_apply_like(params: ScriptParams) -> str:
         render_installer(binary, version, params.execution_target, require_pinned_installer(binary, version).sha256)
         for binary, version in _installer_specs(params)
     )
-    artifact_names = " ".join(_artifact_names(params.verb))
+    artifact_names = " ".join(
+        _artifact_names(params.verb, pipeline_plan_focus=params.pipeline_plan_focus)
+    )
     return f'''#!/usr/bin/env bash
 set -euo pipefail
 upload_artifacts() {{

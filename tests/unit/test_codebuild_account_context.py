@@ -85,7 +85,7 @@ def test_codebuild_progress_keeps_placeholder_command_context(monkeypatch) -> No
 
     assert result["updated"] is True
     assert "<summary>Metadata</summary>" in captured[0]
-    assert "requested command: `tf apply infra/ec2`" in captured[0]
+    assert "- Requested comment:" in captured[0]
     assert "## Apply in progress" in captured[0]
 
 
@@ -208,7 +208,7 @@ def test_codebuild_progress_bounds_large_command_context(monkeypatch) -> None:
     assert result["updated"] is True
     assert len(captured[0]) <= 65_536
     assert "<summary>Metadata</summary>" in captured[0]
-    assert "confirmation command:" in captured[0]
+    assert "Confirmation command:" in captured[0]
 
 
 def test_mutation_terminal_labels_codebuild_hub_account() -> None:

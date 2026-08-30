@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.domain.formatters.artifacts import mutation_terminal_comment, summary
+from src.platform.github.client import comment_url
 from src.services.render import handler as render
 
 
@@ -36,7 +37,7 @@ def _mutation_terminal_body(
 
 def _assert_plan_in_collapsed_details(body: str) -> None:
     assert "<details>" in body
-    assert "> <summary>Plan " in body
+    assert "> <summary>Plan</summary>" in body
     assert "<summary>Pinned plan (tofu show)</summary>" not in body
     assert body.index("<details>") < body.index("```")
 
@@ -47,7 +48,7 @@ _PLAN_TRUNCATION_NOTE = "Output truncated. See S3 artifacts for full plan output
 def _assert_plan_truncation_note_outside_fence(body: str) -> None:
     assert body.count(_PLAN_TRUNCATION_NOTE) == 1
     before_note, _, _after_note = body.partition(_PLAN_TRUNCATION_NOTE)
-    plan_start = before_note.index("> <summary>Plan ")
+    plan_start = before_note.index("> <summary>Plan</summary>")
     plan_section = before_note[plan_start:]
     fence_start = plan_section.index("```diff")
     fence_end = plan_section.index("```", fence_start + len("```diff"))
@@ -153,6 +154,7 @@ def test_render_mutation_terminal_comment_is_markerless(monkeypatch):
     assert len(comments) == 1
     body = comments[0]
     assert "#openci-tf:::" not in body
+    assert "## openci-tf command" in body
     _assert_plan_in_collapsed_details(body)
     assert "Apply complete!" not in body
     assert "Destroy complete!" not in body
@@ -287,6 +289,7 @@ def _assert_pipeline_apply_body_order(body: str, *, note: str) -> None:
     note_pos = body.index(note)
     metadata_pos = body.index(metadata_marker)
 
+    assert body.startswith("## openci-tf command")
     assert main_details_start < note_pos < metadata_pos
     assert body.rstrip().endswith("</details>")
     assert "deadbee" not in body
@@ -302,6 +305,205 @@ def test_render_pipeline_apply_next_step_body_order(monkeypatch):
     note = "> [!NOTE]\n> Next step: `tf apply pipeline data/primary step 2`"
     _assert_pipeline_apply_body_order(body, note=note)
     _assert_plan_in_collapsed_details(body)
+
+
+_ACCOUNT = "123456789012"
+_FULL_SHA = "a" * 40
+_REPO = "williaumwu/openci-test-gitops"
+_PR = 10
+_RUN_ID = "1788034054870.538c5fed"
+_FOLDER_A = "terraform/primary/ap-northeast-1/05-s3-bucket"
+_FOLDER_B = "terraform/primary/ap-northeast-1/04-cloudwatch-log-group"
+
+
+def _mutation_outcome(folder: str, **overrides):
+    base = {
+        "folder": folder,
+        "account_id": _ACCOUNT,
+        "execution_id": f"inner.destroy.{folder[-2:]}",
+        "succeeded": True,
+        "status": "succeeded",
+    }
+    base.update(overrides)
+    return base
+
+
+def _folder_urls(comment_ids: dict[str, int]) -> dict[str, str]:
+    return {
+        folder: comment_url(_REPO, _PR, comment_id)
+        for folder, comment_id in comment_ids.items()
+    }
+
+
+@pytest.mark.parametrize("action", ["apply", "destroy"])
+def test_mutation_summary_two_folder_success_golden(action):
+    comment_ids = {_FOLDER_A: 101, _FOLDER_B: 102}
+    rendered = summary(
+        [
+            _mutation_outcome(_FOLDER_A),
+            _mutation_outcome(_FOLDER_B),
+        ],
+        action=action,
+        folder_urls=_folder_urls(comment_ids),
+    )
+    verb = "Apply" if action == "apply" else "Destroy"
+    assert rendered == "\n".join(
+        [
+            f"## openci-tf {action}",
+            "",
+            f"**Type:** {verb}",
+            "",
+            "**2 folders** · **2 succeeded** · **0 failed**",
+            "",
+            "| Folder | Result |",
+            "|--------|--------|",
+            f"| [`{_FOLDER_B}`]({comment_url(_REPO, _PR, 102)}) | {verb} ✅ |",
+            f"| [`{_FOLDER_A}`]({comment_url(_REPO, _PR, 101)}) | {verb} ✅ |",
+        ]
+    )
+
+
+def test_mutation_summary_orders_attention_first_and_counts_honestly():
+    comment_ids = {
+        "folder/succeeded": 1,
+        "folder/failed": 2,
+        "folder/skipped": 3,
+        "folder/unknown": 4,
+    }
+    rendered = summary(
+        [
+            _mutation_outcome("folder/succeeded"),
+            _mutation_outcome(
+                "folder/failed", succeeded=False, status="failed", error="boom"
+            ),
+            _mutation_outcome("folder/skipped", status="skipped", succeeded=None),
+            _mutation_outcome("folder/unknown", status="unknown", succeeded=None),
+        ],
+        action="destroy",
+        folder_urls=_folder_urls(comment_ids),
+    )
+    assert "**4 folders** · **1 succeeded** · **1 failed** · **1 skipped** · **1 other**" in rendered
+    rows = [
+        line
+        for line in rendered.splitlines()
+        if line.startswith("| [`folder/")
+    ]
+    assert [row.split("`", 2)[1] for row in rows] == [
+        "folder/failed",
+        "folder/unknown",
+        "folder/skipped",
+        "folder/succeeded",
+    ]
+    assert "| Destroy ❌ |" in rendered
+    assert "| Destroy ❔ |" in rendered
+    assert "| Destroy ⏭️ |" in rendered
+    assert "| Destroy ✅ |" in rendered
+
+
+def test_mutation_summary_escapes_markdown_and_omits_account_columns():
+    folder = "infra/|pipe|`tick`"
+    rendered = summary(
+        [_mutation_outcome(folder)],
+        action="apply",
+        folder_urls={folder: "https://example.test/comment"},
+    )
+    assert "| Folder | Result |" in rendered
+    assert "| Account |" not in rendered
+    assert "CodeBuild" not in rendered
+    assert "commit:" not in rendered
+    assert "[`infra/\\|pipe\\|tick`](https://example.test/comment)" in rendered
+
+
+def _stub_multi_folder_destroy_render(monkeypatch):
+    _stub_render_mutation_dependencies(monkeypatch)
+    monkeypatch.setattr(
+        render,
+        "get_bounded_json",
+        lambda *_args, **_kwargs: {"source_plan_run_id": "1788032204312.538c5fed"},
+    )
+    cleanup_calls: list[tuple] = []
+    registry_calls: list[tuple] = []
+
+    monkeypatch.setattr(
+        render,
+        "_cleanup_terminal_mutation_comments",
+        lambda *args, **kwargs: cleanup_calls.append((args, kwargs)) or [],
+    )
+    monkeypatch.setattr(
+        render,
+        "_update_run_registry",
+        lambda *args, **kwargs: registry_calls.append((args, kwargs)),
+    )
+    return cleanup_calls, registry_calls
+
+
+def test_render_multi_folder_destroy_posts_summary_and_succeeds(monkeypatch):
+    """Reproduce multi-folder destroy: folder comments, summary, cleanup, succeeded."""
+    cleanup_calls, registry_calls = _stub_multi_folder_destroy_render(monkeypatch)
+    posted: dict[str, str] = {}
+    comment_ids = {_FOLDER_A: 201, _FOLDER_B: 202}
+
+    def capture(_client, _repo, _pr, body, action, folder, **kwargs):
+        if folder == "all":
+            posted["summary"] = body
+            return 999
+        posted[f"folder:{folder}"] = body
+        return comment_ids[folder]
+
+    monkeypatch.setattr(render, "_delete_and_repost", capture)
+
+    result = render.handler(
+        {
+            "action": "destroy",
+            "run_id": _RUN_ID,
+            "webhook_info": {
+                "repo_name": _REPO,
+                "pr_number": _PR,
+                "comment_id": 300,
+                "comment_body": "tf destroy confirm deadbee",
+                "commit_hash": _FULL_SHA,
+            },
+            "requested_comment_id": 299,
+            "requested_comment_body": (
+                f"tf destroy {_FOLDER_A},{_FOLDER_B}"
+            ),
+            "intent_comment_id": 301,
+            "consumed_confirm_token": "deadbee",
+            "settings": {"ssm_openci_tf_github_token": "/token"},
+            "outcomes": [
+                _mutation_outcome(_FOLDER_A),
+                _mutation_outcome(_FOLDER_B),
+            ],
+            "skipped": [],
+        },
+        None,
+    )
+
+    assert result["execution_failed"] is False
+    assert result["rendered"] is True
+    assert f"folder:{_FOLDER_A}" in posted
+    assert f"folder:{_FOLDER_B}" in posted
+    summary_body = posted["summary"]
+    assert "## openci-tf destroy" in summary_body
+    assert "**Type:** Destroy" in summary_body
+    assert "**2 folders** · **2 succeeded** · **0 failed**" in summary_body
+    assert (
+        f"| [`{_FOLDER_A}`]({comment_url(_REPO, _PR, 201)}) | Destroy ✅ |"
+        in summary_body
+    )
+    assert (
+        f"| [`{_FOLDER_B}`]({comment_url(_REPO, _PR, 202)}) | Destroy ✅ |"
+        in summary_body
+    )
+    assert "## openci-tf command" in summary_body
+    assert "<summary>Metadata</summary>" in summary_body
+    assert summary_body.rstrip().endswith("</details>")
+    assert "deadbee" not in summary_body
+    assert "confirm <redacted>" in summary_body
+    assert summary_body.count("<summary>Metadata</summary>") == 1
+    assert "CodeBuild" not in summary_body
+    assert cleanup_calls
+    assert registry_calls
 
 
 def test_render_pipeline_apply_completion_body_order(monkeypatch):

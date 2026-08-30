@@ -53,10 +53,11 @@ def _plan_event(**overrides) -> dict:
 
 def test_with_command_context_appends_metadata_for_github_pr():
     body = _with_command_context(_plan_event(), "## status", run_id="run-1")
-    assert body.startswith("## status")
+    assert body.startswith("## openci-tf command")
+    assert "## status" in body
     assert "<summary>Metadata</summary>" in body
     assert "### openci-tf command" not in body
-    assert "- command: `tf plan infra/a`" in body
+    assert "**Command:** `tf plan infra/a`" in body
 
 
 def _report_event(**overrides) -> dict:
@@ -192,7 +193,7 @@ def test_plan_render_appends_metadata(monkeypatch):
 
     assert posted
     assert any("<summary>Metadata</summary>" in body for body in posted)
-    assert any("- command: `tf plan infra/a`" in body for body in posted)
+    assert any("**Command:** `tf plan infra/a`" in body for body in posted)
     assert all("### openci-tf command" not in body for body in posted)
 
 
@@ -581,7 +582,7 @@ def test_pipeline_failure_deletes_mutation_command_comments_and_sweeps_token(mon
     assert deleted_batches == [[55, 10, 11]]
     assert swept == [("deadbeef", {55, 10, 11})]
     assert posted[0].endswith("</details>") or "<summary>Metadata</summary>" in posted[0]
-    assert "requested command: `tf apply infra/a`" in posted[0]
+    assert "**Requested command:** `tf apply infra/a`" in posted[0]
 
 
 def test_render_pr_list_text_prefix_failure_fallback_posts_and_cleans_mutation_comments(monkeypatch):

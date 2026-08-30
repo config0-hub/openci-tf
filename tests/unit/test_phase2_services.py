@@ -812,7 +812,14 @@ def test_render_placeholder_still_posts_summary_when_all_folders_locked(monkeypa
     result = render.handler({
         "placeholder": True,
         "action": "plan",
-        "webhook_info": {"repo_name": "org/repo", "pr_number": 7, "commit_hash": _FULL_SHA},
+        "run_id": "1700000000000.deadbeef",
+        "webhook_info": {
+            "repo_name": "org/repo",
+            "pr_number": 7,
+            "commit_hash": _FULL_SHA,
+            "comment_id": 42,
+            "comment_body": "tf plan",
+        },
         "settings": {"ssm_openci_tf_github_token": _CLONE_TOKEN},
         "map_items": [],
         "skipped": [{"folder": "infra/a", "account_id": "123456789012", "status": "in_progress", "reply": "Run already in progress."}],

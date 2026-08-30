@@ -58,6 +58,7 @@ OPTIONAL_COMPACT_MAP_ITEM_FIELDS = frozenset(
         "grace_seconds",
         "step_index",
         "command_context",
+        "pipeline_plan_focus",
     }
 )
 

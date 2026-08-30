@@ -24,6 +24,7 @@ from src.domain.formatters.artifacts import (
     mutation_terminal_comment,
     pending_plan_comment,
     pending_summary,
+    pipeline_plan_preview_comment,
     status_comment_in_progress,
     summary,
 )
@@ -330,8 +331,19 @@ def _render_folder_body(
     )
 
 
-def _should_post_final_summary(action: str, render_items: list[dict[str, Any]]) -> bool:
+def _pipeline_plan_focus_enabled(event: dict[str, Any]) -> bool:
+    return event.get("pipeline_plan_focus") is True
+
+
+def _should_post_final_summary(
+    action: str,
+    render_items: list[dict[str, Any]],
+    *,
+    pipeline_plan_focus: bool = False,
+) -> bool:
     """Post a linked multi-folder summary for report and any multi-folder execution (e.g. plan all)."""
+    if pipeline_plan_focus:
+        return False
     return action == "report" or len(render_items) > 1
 
 
@@ -408,6 +420,7 @@ def _render_placeholder(event: dict[str, Any]) -> dict[str, Any]:
         }
     token = get_github_token(event["settings"]["ssm_openci_tf_github_token"])
     client = GitHubClient(token)
+    pipeline_plan_focus = _pipeline_plan_focus_enabled(event)
     for item in folders:
         folder = item["folder"]
         if action in {"apply", "destroy"} and console_url and run_id:
@@ -422,36 +435,62 @@ def _render_placeholder(event: dict[str, Any]) -> dict[str, Any]:
             )
         else:
             body = pending_plan_comment(folder, item["account_id"], commit_hash, action)
+        if not pipeline_plan_focus:
+            _delete_and_repost(
+                client,
+                repo,
+                pr,
+                _with_command_context(
+                    event,
+                    body,
+                    run_id=run_id,
+                    account_id=item.get("account_id")
+                    if isinstance(item.get("account_id"), str)
+                    else None,
+                ),
+                action,
+                folder,
+            )
+    if pipeline_plan_focus:
+        preview_label = (
+            "destroy order" if action == "plan_destroy" else "apply order"
+        )
+        pending_body = (
+            f"> **Pipeline plan preview · {preview_label}**\n\n"
+            f"Planning {len(folders)} folder{'s' if len(folders) != 1 else ''}…"
+        )
         _delete_and_repost(
             client,
             repo,
             pr,
             _with_command_context(
                 event,
-                body,
+                pending_body,
                 run_id=run_id,
-                account_id=item.get("account_id")
-                if isinstance(item.get("account_id"), str)
-                else None,
+                include_account=False,
+                include_source_plan_run_id=False,
+                include_metadata=False,
             ),
             action,
-            folder,
+            "all",
+            report_all=_summary_uses_report_all(action),
         )
-    _delete_and_repost(
-        client,
-        repo,
-        pr,
-        _with_command_context(
-            event,
-            pending_summary(folders, skipped, action=action),
-            run_id=run_id,
-            include_account=False,
-            include_source_plan_run_id=False,
-        ),
-        action,
-        "all",
-        report_all=_summary_uses_report_all(action),
-    )
+    else:
+        _delete_and_repost(
+            client,
+            repo,
+            pr,
+            _with_command_context(
+                event,
+                pending_summary(folders, skipped, action=action),
+                run_id=run_id,
+                include_account=False,
+                include_source_plan_run_id=False,
+            ),
+            action,
+            "all",
+            report_all=_summary_uses_report_all(action),
+        )
     cleanup_warnings: list[str] = []
     if not defer_command_comment_cleanup(action):
         cleanup_warnings.extend(
@@ -915,6 +954,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     artifacts_by_folder: dict[str, dict[str, str]] = {}
     folder_urls: dict[str, str] = {}
     table = cast(Any, boto3.resource("dynamodb")).Table(os.environ["LOCKS_TABLE_NAME"])
+    pipeline_plan_focus = _pipeline_plan_focus_enabled(event)
     for outcome in render_items:
         folder = outcome["folder"]
         execution_id = outcome.get("execution_id", outcome.get("exec_id"))
@@ -958,45 +998,72 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 if action in {"apply", "destroy"}
                 else None
             )
-            comment_id = _delete_and_repost(
-                client,
-                repo,
-                pr,
-                _with_command_context(
-                    event,
-                    _append_footer(
-                        _render_folder_body(
-                            folder,
-                            outcome,
-                            artifacts,
-                            action=action,
-                            commit_hash=commit_hash,
-                            console_url=console_url,
-                            run_id=run_id,
-                            repo=repo,
-                            render_items=render_items,
-                            pr_number=scoped_pr,
-                            existing_names=existing_names,
-                            approved_plan_pointer_key=approved_plan_pointer_key,
+            if not pipeline_plan_focus:
+                comment_id = _delete_and_repost(
+                    client,
+                    repo,
+                    pr,
+                    _with_command_context(
+                        event,
+                        _append_footer(
+                            _render_folder_body(
+                                folder,
+                                outcome,
+                                artifacts,
+                                action=action,
+                                commit_hash=commit_hash,
+                                console_url=console_url,
+                                run_id=run_id,
+                                repo=repo,
+                                render_items=render_items,
+                                pr_number=scoped_pr,
+                                existing_names=existing_names,
+                                approved_plan_pointer_key=approved_plan_pointer_key,
+                            ),
+                            pipeline_footer,
                         ),
-                        pipeline_footer,
+                        run_id=run_id,
+                        comments_removed=True,
+                        account_id=str(outcome.get("account_id") or "")
+                        if isinstance(outcome.get("account_id"), str)
+                        else None,
+                        source_plan_run_id=source_plan_run_id,
                     ),
-                    run_id=run_id,
-                    comments_removed=True,
-                    account_id=str(outcome.get("account_id") or "")
-                    if isinstance(outcome.get("account_id"), str)
-                    else None,
-                    source_plan_run_id=source_plan_run_id,
-                ),
-                action,
-                folder,
-                emit_marker=should_emit_comment_object_marker(action, terminal=True),
-            )
-            folder_urls[folder] = comment_url(repo, pr, comment_id)
+                    action,
+                    folder,
+                    emit_marker=should_emit_comment_object_marker(action, terminal=True),
+                )
+                folder_urls[folder] = comment_url(repo, pr, comment_id)
         finally:
             if isinstance(execution_id, str) and execution_id:
                 run_lock.release(table, repo, folder, execution_id)
-    if _should_post_final_summary(action, render_items):
+    if pipeline_plan_focus:
+        steps = event.get("steps") if isinstance(event.get("steps"), list) else None
+        preview_body = pipeline_plan_preview_comment(
+            outcomes,
+            artifacts_by_folder,
+            action=action,
+            steps=steps,
+        )
+        _delete_and_repost(
+            client,
+            repo,
+            pr,
+            _with_command_context(
+                event,
+                preview_body,
+                run_id=run_id,
+                comments_removed=True,
+                include_account=False,
+                include_source_plan_run_id=False,
+                include_metadata=False,
+            ),
+            action,
+            "all",
+            report_all=_summary_uses_report_all(action),
+            emit_marker=should_emit_comment_object_marker(action, terminal=True),
+        )
+    elif _should_post_final_summary(action, render_items):
         _delete_and_repost(
             client,
             repo,

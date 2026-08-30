@@ -61,6 +61,27 @@ Set `enable_apply` when registering an account (`just register-account ... --ena
 
 Intent creation (`tf apply <folders>` / `tf destroy <folders>`) still enters the read outer machine only. Confirmation (`tf apply confirm <token>`) atomically revalidates token, head SHA, and pinned plan, then starts exactly one mutation outer machine.
 
+## Terminal mutation comment structure
+
+Successful apply and destroy terminal comments follow the same layout as plan
+comments: a prominent `## openci-tf command` block with **Requested command** and
+**Commit**, then one collapsible per folder (or one aggregate collapsible for
+multi-folder pipeline apply). Structural labels use sentence case (`Plan`,
+`Execution`, `Artifacts`, `Metadata`). Mutation Plan headings are neutral (no
+drift/security icons). Outcomes use explicit text such as `Apply succeeded ✅`
+or `Destroy succeeded ✅` in the folder summary line.
+
+Execution links use lowercase `step function` and `codebuild`. Report and plan
+comments may show Step Functions only; apply/destroy show both when present.
+Artifact categories are nested collapsibles (`Run artifacts`, `Plan artifacts`,
+`Apply artifacts` / `Destroy artifacts`). Operational IDs (run ID, source plan
+run ID, triggering and confirmation comment IDs) live only in the collapsed
+Metadata section; confirmation tokens remain redacted.
+
+Multi-folder pipeline apply updates one managed PR comment after each step.
+Aggregate destroy summaries list every folder with `Destroy succeeded ✅` (or
+failed/skipped variants) and no longer raise formatter errors at terminalization.
+
 ## PR comment lifecycle
 
 1. `tf apply <folders>` is recorded as `accepted` in the durable audit comment

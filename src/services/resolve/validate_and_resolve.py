@@ -277,6 +277,9 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         if raw_pipeline is not None and (not isinstance(raw_pipeline, str) or not raw_pipeline):
             raise ConfigResolutionError("pipeline must be a non-empty string")
         pipeline = raw_pipeline if isinstance(raw_pipeline, str) else None
+        pipeline_plan_focus = (
+            pipeline is not None and action in {"plan", "plan_destroy"}
+        )
         if pipeline is None:
             folders = _selected_folders(event, clone_dir, token, commit_hash)
             if not folders:
@@ -314,6 +317,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 settings["upstream_urls"],
                 action,
                 pipeline=pipeline,
+                pipeline_plan_focus=pipeline_plan_focus,
             )
     finally:
         cleanup_clone(clone_dir)
@@ -401,6 +405,8 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             "ssm_openci_tf_github_token": github_token_path,
             "ssm_infracost_api_key": infracost_key_path,
         }
+        if pipeline_plan_focus:
+            item["pipeline_plan_focus"] = True
         grace_seconds = 0
         if action in _MUTATION_ACTIONS:
             source_plan_run_id = event.get("source_plan_run_id")
@@ -431,6 +437,8 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         "deadline_at": deadline_at,
         "no_op_reason": None,
     }
+    if pipeline_plan_focus:
+        resolved_event["pipeline_plan_focus"] = True
     build_compact_resolve_result(
         resolved_event, run_id=run_id, full_items=candidates, skipped=[]
     )

@@ -9,6 +9,7 @@ from typing import Any, Callable, cast
 from src.domain.formatters.artifacts import (
     bound_comment,
     metadata_section,
+    prominent_command_header,
     status_comment_marker_prefix,
 )
 from src.domain.github.comment_object_id import (
@@ -128,21 +129,48 @@ def _with_command_context(
     source_plan_run_id: str | None = None,
     include_account: bool = True,
     include_source_plan_run_id: bool = True,
+    include_metadata: bool = True,
 ) -> str:
     if not _uses_github_pr(event):
         return body
-    context = _command_context_from_event(
-        event,
-        run_id=run_id,
-        comments_removed=comments_removed,
-        account_id=account_id,
-        source_plan_run_id=source_plan_run_id,
-        include_account=include_account,
-        include_source_plan_run_id=include_source_plan_run_id,
-    )
-    if not context:
+    webhook = event.get("webhook_info")
+    if not isinstance(webhook, dict):
         return body
-    return f"{body}\n\n{context}"
+    action = str(event.get("action") or webhook.get("action") or "plan")
+    if action == "report":
+        return body
+    folders = event.get("folders")
+    folder_list = list(folders) if isinstance(folders, list) else []
+    commit_hash = webhook.get("commit_hash")
+    header = prominent_command_header(
+        action=action,
+        folders=folder_list,
+        all_flag=bool(event.get("all_flag")),
+        affected_flag=bool(event.get("affected_flag")),
+        comment_body=webhook.get("comment_body") if isinstance(webhook.get("comment_body"), str) else None,
+        pipeline=webhook.get("pipeline") if isinstance(webhook.get("pipeline"), str) else None,
+        pipeline_step=webhook.get("pipeline_step_index")
+        if isinstance(webhook.get("pipeline_step_index"), int)
+        else None,
+        requested_comment_body=event.get("requested_comment_body")
+        if isinstance(event.get("requested_comment_body"), str)
+        else None,
+        commit_hash=commit_hash if isinstance(commit_hash, str) else None,
+    )
+    parts = [header, body]
+    if include_metadata:
+        metadata = _command_context_from_event(
+            event,
+            run_id=run_id,
+            comments_removed=comments_removed,
+            account_id=account_id,
+            source_plan_run_id=source_plan_run_id,
+            include_account=include_account,
+            include_source_plan_run_id=include_source_plan_run_id,
+        )
+        if metadata:
+            parts.append(metadata)
+    return "\n\n".join(parts)
 
 
 def _with_cleanup_warnings(result: dict[str, Any], warnings: list[str]) -> dict[str, Any]:

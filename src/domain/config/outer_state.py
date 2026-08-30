@@ -34,6 +34,7 @@ def resolve_outer_state(
     action: str,
     *,
     pipeline: str | None = None,
+    pipeline_plan_focus: bool = False,
 ) -> dict[str, Any]:
     """Return validated safe-lane inputs for explicit folders against a pinned clone."""
     if action not in _SAFE_ACTIONS:
@@ -63,7 +64,9 @@ def resolve_outer_state(
     }
     return {
         "folder_configs": configs,
-        "upstream_urls": _validated_upstream_urls(upstream_urls, configs, action),
+        "upstream_urls": _validated_upstream_urls(
+            upstream_urls, configs, action, pipeline_plan_focus=pipeline_plan_focus
+        ),
         "folders": folders,
         "steps": steps,
     }
@@ -104,11 +107,17 @@ def _read_folder_config(root: Path, physical_folder: str, global_settings: Globa
     return compact_folder_config_for_outer_state(asdict(config))
 
 
-def _validated_upstream_urls(raw_urls: object, configs: dict[str, dict[str, Any]], action: str) -> dict[str, str]:
+def _validated_upstream_urls(
+    raw_urls: object,
+    configs: dict[str, dict[str, Any]],
+    action: str,
+    *,
+    pipeline_plan_focus: bool = False,
+) -> dict[str, str]:
     if not isinstance(raw_urls, dict):
         raise ConfigResolutionError("upstream_urls settings must be an object")
     required = {tuple(str(config["tf_runtime"]).split(":", 1)) for config in configs.values()}
-    if action in {"plan", "report", "plan_destroy"}:
+    if action in {"plan", "report", "plan_destroy"} and not pipeline_plan_focus:
         required |= set(_SHARED_INSTALLERS)
     binary_counts: dict[str, int] = {}
     for binary, _version in required:

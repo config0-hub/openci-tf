@@ -27,6 +27,7 @@ from src.domain.formatters.comment_bounds import (  # noqa: F401  (re-exported)
 from src.domain.formatters.command_text import (
     normalized_command_context_line,
     redact_confirm_token,
+    sanitize_command_line,
 )
 from src.domain.formatters.tfsec_findings import (
     _artifact_skipped,
@@ -196,6 +197,48 @@ def _triggering_comment_line(
     return f"- triggering comment: [{comment_id}]({comment_link}){suffix}"
 
 
+def prominent_command_header(
+    *,
+    action: str,
+    folders: list[str] | None = None,
+    all_flag: bool = False,
+    affected_flag: bool = False,
+    comment_body: str | None = None,
+    pipeline: str | None = None,
+    pipeline_step: int | None = None,
+    requested_comment_body: str | None = None,
+    commit_hash: str | None = None,
+) -> str:
+    """Prominent command and commit lines for terminal PR comments."""
+    if action in {"apply", "destroy"}:
+        source = requested_comment_body or comment_body
+        command_line = (
+            normalized_command_context_line(source)
+            if source and source.strip()
+            else f"tf {action}"
+        )
+        label = "Requested command"
+    else:
+        command_line = _describe_command_line(
+            action,
+            folders=folders,
+            all_flag=all_flag,
+            affected_flag=affected_flag,
+            comment_body=comment_body,
+            pipeline=pipeline,
+            pipeline_step=pipeline_step,
+        )
+        label = "Command"
+    lines = [
+        "## openci-tf command",
+        "",
+        f"**{label}:** `{command_line}`",
+    ]
+    if commit_hash:
+        lines.append(f"**Commit:** `{_short_hash(commit_hash)}`")
+    return "\n".join(lines)
+
+
 def command_context_block(
     *,
     action: str,
@@ -248,8 +291,8 @@ def _metadata_comment_line(
     if comment_id is None:
         return None
     if comments_removed or not comment_link:
-        return f"- {label} comment id: `{comment_id}`"
-    return f"- {label} comment: [{comment_id}]({comment_link})"
+        return f"- {label} ID: `{comment_id}`"
+    return f"- {label}: [{comment_id}]({comment_link})"
 
 
 def metadata_section(
@@ -282,18 +325,15 @@ def metadata_section(
         return ""
     lines: list[str] = []
     if action in {"apply", "destroy"}:
-        if requested_comment_body and requested_comment_body.strip():
-            requested_line = normalized_command_context_line(requested_comment_body)
-            lines.append(f"- requested command: `{requested_line}`")
         confirmation_line = (
             normalized_command_context_line(confirmation_comment_body)
             if confirmation_comment_body and confirmation_comment_body.strip()
             else f"tf {action} confirm <redacted>"
         )
-        lines.append(f"- confirmation command: `{confirmation_line}`")
+        lines.append(f"- Confirmation command: `{confirmation_line}`")
         requested_line = _metadata_comment_line(
             requested_comment_id,
-            label="requested",
+            label="Requested comment",
             comment_link=requested_comment_link,
             comments_removed=comments_removed,
         )
@@ -301,36 +341,23 @@ def metadata_section(
             lines.append(requested_line)
         confirmation_line_item = _metadata_comment_line(
             confirmation_comment_id,
-            label="confirmation",
+            label="Confirmation comment",
             comment_link=confirmation_comment_link,
             comments_removed=comments_removed,
         )
         if confirmation_line_item:
             lines.append(confirmation_line_item)
     else:
-        command_line = _describe_command_line(
-            action,
-            folders=folders,
-            all_flag=all_flag,
-            affected_flag=affected_flag,
-            comment_body=comment_body,
-            pipeline=pipeline,
-            pipeline_step=pipeline_step,
-        )
-        lines.append(f"- command: `{command_line}`")
-    if commit_hash:
-        lines.append(f"- commit: `{_short_hash(commit_hash)}`")
-    if run_id:
-        lines.append(f"- run id: `{run_id}`")
-    if action not in {"apply", "destroy"}:
         trigger_line = _metadata_comment_line(
             comment_id,
-            label="triggering",
+            label="Triggering comment",
             comment_link=comment_link,
             comments_removed=comments_removed,
         )
         if trigger_line:
             lines.append(trigger_line)
+    if run_id:
+        lines.append(f"- Run ID: `{run_id}`")
     if include_source_plan_run_id and source_plan_run_id:
         source_label = (
             "source destroy-plan run id"
@@ -364,11 +391,133 @@ def _action_type_line(action: str) -> str:
     }[action]
 
 
-def _mutation_summary_line(folder: str, action: str, *, succeeded: bool) -> str:
+def _mutation_summary_line(
+    folder: str, action: str, *, succeeded: bool, account_id: str = ""
+) -> str:
     verb = "Apply" if action == "apply" else "Destroy"
-    icon = "✅" if succeeded else "❌"
-    status = "succeeded" if succeeded else "failed"
-    return f"{folder} · {verb} {icon} {status}"
+    outcome = f"{verb} succeeded ✅" if succeeded else f"{verb} failed ❌"
+    account_part = f" · `{account_id}`" if account_id else ""
+    return f"`{folder}`{account_part} · {outcome}"
+
+
+def _folder_table_cell(
+    folder: str,
+    *,
+    folder_urls: dict[str, str] | None = None,
+) -> str:
+    """Render one folder label for markdown tables with optional comment links."""
+    label = sanitize_command_line(folder)
+    if folder_urls and folder in folder_urls:
+        return f"[`{label}`]({folder_urls[folder]})"
+    return f"`{label}`"
+
+
+def _mutation_status_icon(outcome: dict[str, Any]) -> str:
+    status = str(outcome.get("status") or "")
+    if (
+        status in {"failed", "infrastructure_error"}
+        or outcome.get("succeeded") is False
+    ):
+        return "❌"
+    if status in {"skipped", "not_applicable"}:
+        return "⏭️"
+    if status == "in_progress":
+        return "⏳"
+    if status == "unknown":
+        return "❔"
+    if outcome.get("succeeded") is True or status == "succeeded":
+        return "✅"
+    return "❔"
+
+
+def _mutation_status_bucket(outcome: dict[str, Any]) -> int:
+    status = str(outcome.get("status") or "")
+    if (
+        status in {"failed", "infrastructure_error"}
+        or outcome.get("succeeded") is False
+    ):
+        return 0
+    if status in {"unknown", "in_progress"}:
+        return 1
+    if status in {"skipped", "not_applicable"}:
+        return 2
+    if outcome.get("succeeded") is True or status == "succeeded":
+        return 3
+    return 1
+
+
+@dataclass(frozen=True)
+class _MutationSummaryRow:
+    folder: str
+    outcome: dict[str, Any]
+
+    @property
+    def sort_key(self) -> tuple[int, str]:
+        return (_mutation_status_bucket(self.outcome), self.folder)
+
+    def result_cell(self, action: str) -> str:
+        verb = "Apply" if action == "apply" else "Destroy"
+        return f"{verb} {_mutation_status_icon(self.outcome)}"
+
+
+def _mutation_summary_counts_line(rows: list[_MutationSummaryRow]) -> str:
+    total = len(rows)
+    succeeded = sum(1 for row in rows if _mutation_status_bucket(row.outcome) == 3)
+    failed = sum(1 for row in rows if _mutation_status_bucket(row.outcome) == 0)
+    skipped = sum(1 for row in rows if _mutation_status_bucket(row.outcome) == 2)
+    other = sum(1 for row in rows if _mutation_status_bucket(row.outcome) == 1)
+    parts = [
+        f"**{total} folders**",
+        f"**{succeeded} succeeded**",
+        f"**{failed} failed**",
+    ]
+    if skipped:
+        parts.append(f"**{skipped} skipped**")
+    if other:
+        parts.append(f"**{other} other**")
+    return " · ".join(parts)
+
+
+def _mutation_summary_row(
+    row: _MutationSummaryRow,
+    action: str,
+    *,
+    folder_urls: dict[str, str] | None = None,
+) -> str:
+    folder_cell = _folder_table_cell(row.folder, folder_urls=folder_urls)
+    return f"| {folder_cell} | {row.result_cell(action)} |"
+
+
+def _mutation_summary(
+    outcomes: list[dict[str, Any]],
+    *,
+    action: str,
+    folder_urls: dict[str, str] | None = None,
+) -> str:
+    rows = sorted(
+        (
+            _MutationSummaryRow(
+                folder=str(outcome.get("folder", "unknown")),
+                outcome=outcome,
+            )
+            for outcome in outcomes
+        ),
+        key=lambda row: row.sort_key,
+    )
+    lines = [
+        _action_heading(action),
+        "",
+        _action_type_line(action),
+        "",
+        _mutation_summary_counts_line(rows),
+        "",
+        "| Folder | Result |",
+        "|--------|--------|",
+    ]
+    lines.extend(
+        _mutation_summary_row(row, action, folder_urls=folder_urls) for row in rows
+    )
+    return "\n".join(lines)
 
 
 def invalid_command_rejection_comment(
@@ -986,8 +1135,93 @@ def _report_artifact_key(
         "tfsec.json": keys.tfsec_json,
         "infracost.output": keys.infracost_output,
         "infracost.json": keys.infracost_json,
+        "apply.out": f"{keys.prefix}/apply.out",
+        "destroy.out": f"{keys.prefix}/destroy.out",
+        "plan-show.out": f"{keys.prefix}/plan-show.out",
     }
     return by_name[storage_name]
+
+
+_MUTATION_APPLY_ARTIFACT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    ("Run", (("manifest.json", "manifest.json"),)),
+    (
+        "Plan",
+        (
+            ("plan.tfplan", "tf/plan.tfplan"),
+            ("plan.tfplan.sha256", "tf/plan.tfplan.sha256"),
+            ("plan.out", "tf/plan.out"),
+        ),
+    ),
+    ("Apply", (("apply.out", "apply.out"),)),
+)
+
+_MUTATION_DESTROY_ARTIFACT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    ("Run", (("manifest.json", "manifest.json"),)),
+    (
+        "Destroy plan",
+        (
+            ("destroy.plan.tfplan", "tf/destroy.plan.tfplan"),
+            ("destroy.plan.tfplan.sha256", "tf/destroy.plan.tfplan.sha256"),
+        ),
+    ),
+    ("Destroy", (("destroy.out", "destroy.out"),)),
+)
+
+
+def _mutation_artifact_groups(action: str) -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
+    if action == "apply":
+        return _MUTATION_APPLY_ARTIFACT_GROUPS
+    return _MUTATION_DESTROY_ARTIFACT_GROUPS
+
+
+def _nested_artifact_groups_collapsible(
+    *,
+    group_specs: tuple[tuple[str, tuple[tuple[str, str], ...]], ...],
+    repo_name: str,
+    run_id: str,
+    folder: str,
+    existing_names: frozenset[str],
+    tmp_bucket: str,
+    region: str,
+    hub_account_id: str | None,
+    identity_center_start_url: str | None,
+    identity_center_role_name: str | None,
+    pr_number: int | None = None,
+    action: str,
+) -> str:
+    nested_parts: list[str] = []
+    for group_name, members in group_specs:
+        group_lines: list[str] = []
+        for display_name, storage_name in members:
+            if storage_name not in existing_names:
+                continue
+            key = _report_artifact_key(
+                repo_name=repo_name,
+                run_id=run_id,
+                folder=folder,
+                storage_name=storage_name,
+                pr_number=pr_number,
+                action=action,
+            )
+            url = s3_object_console_url(
+                tmp_bucket,
+                key,
+                region=region,
+                account_id=hub_account_id,
+                identity_center_start_url=identity_center_start_url,
+                identity_center_role_name=identity_center_role_name,
+            )
+            group_lines.append(f"[{display_name}]({url})")
+        if group_lines:
+            nested_parts.append(
+                _report_child_collapsible(
+                    f"{group_name} artifacts",
+                    "\n".join(group_lines),
+                )
+            )
+    if not nested_parts:
+        return ""
+    return _report_child_collapsible("Artifacts", "\n\n".join(nested_parts))
 
 
 def _report_artifact_link_lines(
@@ -1085,17 +1319,20 @@ def _report_execution_collapsible(
     console_url: str | None,
     codebuild_url: str | None = None,
     codebuild_account_id: str | None = None,
+    lowercase_links: bool = False,
 ) -> str:
     lines: list[str] = []
     if console_url:
-        lines.append(f"[Step Functions execution]({console_url})")
+        label = "step function" if lowercase_links else "Step Functions execution"
+        lines.append(f"[{label}]({console_url})")
     if codebuild_url:
         account_note = (
-            f" — hub account `{codebuild_account_id}`; switch the AWS console to this account first"
+            f" · hub account `{codebuild_account_id}`; switch the AWS console to this account first"
             if codebuild_account_id
             else ""
         )
-        lines.append(f"[CodeBuild job]({codebuild_url}){account_note}")
+        label = "codebuild" if lowercase_links else "CodeBuild job"
+        lines.append(f"[{label}]({codebuild_url}){account_note}")
     if not lines:
         return ""
     return _report_child_collapsible("Execution", "\n".join(lines))
@@ -1166,11 +1403,7 @@ def _report_summary_row(
     *,
     folder_urls: dict[str, str] | None = None,
 ) -> str:
-    folder_cell = (
-        f"[`{folder}`]({folder_urls[folder]})"
-        if folder_urls and folder in folder_urls
-        else f"`{folder}`"
-    )
+    folder_cell = _folder_table_cell(folder, folder_urls=folder_urls)
     return f"| {folder_cell} | {drift_icon} | {security_icon} | {cost} |"
 
 
@@ -1314,25 +1547,29 @@ def _mutation_plan_collapsible(
     plan_show_text: str | None,
     *,
     plan_show_pointer: str | None = None,
+    pinned_plan_artifact: str | None = None,
 ) -> str:
-    """Render bounded pinned-plan output inside a collapsed Plan child."""
+    """Render bounded pinned-plan output inside a neutral collapsed Plan child."""
     if plan_show_pointer and not plan_show_text:
         return _report_child_collapsible(
-            "Plan ❔", f"plan show output: `{plan_show_pointer}`"
+            "Plan", f"plan show output: `{plan_show_pointer}`"
         )
     if not plan_show_text:
         return ""
     stripped = _strip_ansi(plan_show_text)
     bounded = _bound_plan_display_text(stripped)
-    counts = _plan_counts(stripped)
-    icon = "❔" if counts is None else "✅" if counts == (0, 0, 0) else "⚠️"
+    parts: list[str] = []
+    if pinned_plan_artifact:
+        parts.append(f"**Pinned plan:** `{pinned_plan_artifact}`")
+        parts.append("")
     body = _append_plan_truncation_note(
         _fenced_block(_highlight_plan(bounded.text), "diff"),
         truncated=bounded.truncated,
     )
+    parts.append(body)
     if plan_show_pointer:
-        body += f"\n\nplan show output: `{plan_show_pointer}`"
-    return _report_child_collapsible(f"Plan {icon}", body)
+        parts.append(f"\nplan show output: `{plan_show_pointer}`")
+    return _report_child_collapsible("Plan", "\n".join(parts))
 
 
 def _mutation_artifacts_collapsible(
@@ -1350,23 +1587,20 @@ def _mutation_artifacts_collapsible(
     pr_number: int | None = None,
     action: str,
 ) -> str:
-    lines = [f"pinned plan: `{pinned_plan_artifact}`"]
-    lines.extend(
-        _report_artifact_link_lines(
-            repo_name=repo_name,
-            run_id=run_id,
-            folder=folder,
-            existing_names=existing_names,
-            tmp_bucket=tmp_bucket,
-            region=region,
-            hub_account_id=hub_account_id,
-            identity_center_start_url=identity_center_start_url,
-            identity_center_role_name=identity_center_role_name,
-            pr_number=pr_number,
-            action=action,
-        )
+    return _nested_artifact_groups_collapsible(
+        group_specs=_mutation_artifact_groups(action),
+        repo_name=repo_name,
+        run_id=run_id,
+        folder=folder,
+        existing_names=existing_names,
+        tmp_bucket=tmp_bucket,
+        region=region,
+        hub_account_id=hub_account_id,
+        identity_center_start_url=identity_center_start_url,
+        identity_center_role_name=identity_center_role_name,
+        pr_number=pr_number,
+        action=action,
     )
-    return _report_child_collapsible("Artifacts", "\n".join(lines))
 
 
 def mutation_terminal_comment(
@@ -1403,12 +1637,15 @@ def mutation_terminal_comment(
         body_parts.append(_error_block("error", bounded_error))
     child_parts = [
         _mutation_plan_collapsible(
-            plan_show_text, plan_show_pointer=plan_show_pointer
+            plan_show_text,
+            plan_show_pointer=plan_show_pointer,
+            pinned_plan_artifact=pinned_plan_artifact,
         ),
         _report_execution_collapsible(
             console_url=console_url,
             codebuild_url=codebuild_url,
             codebuild_account_id=codebuild_account_id,
+            lowercase_links=True,
         ),
         _mutation_artifacts_collapsible(
             pinned_plan_artifact,
@@ -1427,7 +1664,9 @@ def mutation_terminal_comment(
     ]
     body_parts.extend(part for part in child_parts if part)
     return _wrap_collapsed(
-        _mutation_summary_line(folder, action, succeeded=succeeded),
+        _mutation_summary_line(
+            folder, action, succeeded=succeeded, account_id=account_id
+        ),
         "\n\n".join(body_parts),
     )
 
@@ -1637,6 +1876,156 @@ def _pipeline_step_status(
     return "ok"
 
 
+def _pipeline_plan_preview_note(action: str) -> str:
+    if action == "plan_destroy":
+        return (
+            "> [!CAUTION]\n"
+            "> This preview shows only Terraform destroy plans, in reverse pipeline order. "
+            "Security and cost analysis remain available on a regular single-folder `tf plan`."
+        )
+    return (
+        "> [!IMPORTANT]\n"
+        "> This preview shows only Terraform plans, in the order they interact. "
+        "Security and cost analysis remain available on a regular single-folder `tf plan`."
+    )
+
+
+def _pipeline_preview_order_label(action: str) -> str:
+    return "destroy order" if action == "plan_destroy" else "apply order"
+
+
+def _pipeline_plan_table_cell(counts: tuple[int, int, int] | None, action: str) -> str:
+    if counts is None:
+        return "unavailable"
+    add, change, destroy = counts
+    if action == "plan_destroy":
+        if destroy:
+            return f"0 to add, 0 to change, **{destroy} to destroy**"
+        return "0 to add, 0 to change, 0 to destroy"
+    if add:
+        return f"**{add} to add**, {change} to change, {destroy} to destroy"
+    return f"{add} to add, {change} to change, {destroy} to destroy"
+
+
+def _pipeline_plan_step_summary_line(counts: tuple[int, int, int] | None) -> str:
+    if counts is None:
+        return "Plan unavailable"
+    add, change, destroy = counts
+    return f"**Plan:** {add} to add, {change} to change, {destroy} to destroy."
+
+
+def _pipeline_plan_step_collapsible(
+    *,
+    step_index: int,
+    step_count: int,
+    folder: str,
+    plan_text: str,
+    action: str,
+) -> str:
+    counts = _plan_counts(_strip_ansi(plan_text))
+    if action == "plan_destroy" and counts is not None:
+        title_counts = f"{counts[2]} to destroy"
+    elif counts is not None and counts[0]:
+        title_counts = f"{counts[0]} to add"
+    elif counts is not None:
+        title_counts = f"{counts[2]} to destroy" if action == "plan_destroy" else "no changes"
+    else:
+        title_counts = "plan unavailable"
+    clean = _neutralize_comment_identity_lines(_strip_ansi(plan_text))
+    bounded = _bound_plan_display_text(clean, max_chars=_REPORT_PLAN_CHARS)
+    body_parts = [
+        _append_plan_truncation_note(
+            _fenced_block(_highlight_plan(bounded.text), "diff"),
+            truncated=bounded.truncated,
+        ),
+        "",
+        _pipeline_plan_step_summary_line(counts),
+    ]
+    summary = f"Step {step_index}/{step_count} · `{folder}` · {title_counts}"
+    return _wrap_collapsed(summary, "\n".join(body_parts))
+
+
+def _ordered_pipeline_preview_outcomes(
+    outcomes: list[dict[str, Any]],
+    steps: list[list[str]] | None,
+) -> list[dict[str, Any]]:
+    if not steps:
+        return list(outcomes)
+    by_folder = {str(item.get("folder") or ""): item for item in outcomes}
+    ordered: list[dict[str, Any]] = []
+    for folders in steps:
+        for folder in folders:
+            outcome = by_folder.get(folder)
+            if outcome is not None:
+                ordered.append(outcome)
+    return ordered
+
+
+def pipeline_plan_preview_comment(
+    outcomes: list[dict[str, Any]],
+    artifacts_by_folder: dict[str, dict[str, str]],
+    *,
+    action: str = "plan",
+    steps: list[list[str]] | None = None,
+) -> str:
+    """Focused pipeline plan preview without security, cost, or per-folder report sections."""
+    ordered = _ordered_pipeline_preview_outcomes(outcomes, steps)
+    rows: list[_ReportRow] = []
+    total_add = 0
+    total_change = 0
+    total_destroy = 0
+    for outcome in ordered:
+        folder = str(outcome.get("folder", "unknown"))
+        artifacts = artifacts_by_folder.get(folder, {})
+        row = _report_row(outcome, artifacts, action=action)
+        rows.append(row)
+        if row.plan_counts is not None:
+            add, change, destroy = row.plan_counts
+            total_add += add
+            total_change += change
+            total_destroy += destroy
+    step_count = len(steps) if steps else 1
+    lines = [
+        f"> **Pipeline plan preview · {_pipeline_preview_order_label(action)}**",
+        "",
+        _pipeline_plan_preview_note(action),
+        "",
+        f"**{len(rows)} folders** · **{total_add} resources to add** · "
+        f"**{total_change} to change** · **{total_destroy} to destroy**",
+        "",
+        "| Step | Folder | Plan |",
+        "|---|---|---|",
+    ]
+    step_index = 0
+    for folders in steps or [[]]:
+        for folder in folders:
+            step_index += 1
+            row = next((item for item in rows if item.folder == folder), None)
+            counts = row.plan_counts if row is not None else None
+            lines.append(
+                f"| {step_index}/{step_count} | `{folder}` | "
+                f"{_pipeline_plan_table_cell(counts, action)} |"
+            )
+    lines.append("")
+    step_index = 0
+    for folders in steps or [[]]:
+        for folder in folders:
+            step_index += 1
+            artifacts = artifacts_by_folder.get(folder, {})
+            plan_text = _human_plan_text(action, artifacts)
+            lines.append(
+                _pipeline_plan_step_collapsible(
+                    step_index=step_index,
+                    step_count=step_count,
+                    folder=folder,
+                    plan_text=plan_text,
+                    action=action,
+                )
+            )
+            lines.append("")
+    return "\n".join(lines).rstrip()
+
+
 def summary(
     outcomes: list[dict[str, Any]],
     artifacts_by_folder: dict[str, dict[str, str]] | None = None,
@@ -1654,5 +2043,11 @@ def summary(
             action=action,
             folder_urls=folder_urls,
             steps=steps,
+        )
+    if action in {"apply", "destroy"}:
+        return _mutation_summary(
+            outcomes,
+            action=action,
+            folder_urls=folder_urls,
         )
     raise ValueError(f"unsupported summary action: {action}")

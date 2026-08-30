@@ -156,7 +156,7 @@ def _update_without_collision(
     target.update(incoming)
 
 
-def _artifact_names(action: str) -> tuple[str, ...]:
+def _artifact_names(action: str, *, pipeline_plan_focus: bool = False) -> tuple[str, ...]:
     if action == "plan_destroy":
         return ("init.out", "validate.out", "destroy.plan.out")
     if action == "apply":
@@ -164,14 +164,14 @@ def _artifact_names(action: str) -> tuple[str, ...]:
     if action == "destroy":
         return ("init.out", "validate.out", "plan-show.out", "destroy.out")
     names = ("init.out", "validate.out", "tf/plan.out", "drift.json")
-    if action in {"plan", "report"}:
+    if action in {"plan", "report"} and not pipeline_plan_focus:
         return (*names, "tfsec.json", "tfsec.output", "infracost.json", "infracost.output")
     return names
 
 
-def _installers(action: str, config: FolderConfig) -> tuple[tuple[str, str], ...]:
+def _installers(action: str, config: FolderConfig, *, pipeline_plan_focus: bool = False) -> tuple[tuple[str, str], ...]:
     runtime = ((config.binary, config.runtime_version),)
-    if action in {"plan", "report"}:
+    if action in {"plan", "report"} and not pipeline_plan_focus:
         return (*runtime, *_SHARED_INSTALLERS)
     return runtime
 
@@ -278,6 +278,7 @@ def handler(event: dict, _context: object) -> dict:
         extra={"run_id": event.get("run_id"), "folder": event.get("folder"), "action": event.get("action")},
     )
     action = event["action"]
+    pipeline_plan_focus = bool(event.get("pipeline_plan_focus"))
     lane_mode = _lane_mode()
     _validate_lane_action(action, lane_mode)
     if action not in _SAFE_ACTIONS:
@@ -314,7 +315,7 @@ def handler(event: dict, _context: object) -> dict:
     upstream_urls = event["upstream_urls"]
     if not isinstance(upstream_urls, dict):
         raise TypeError("upstream_urls must be an object")
-    installers = _installers(action, config)
+    installers = _installers(action, config, pipeline_plan_focus=pipeline_plan_focus)
     expiry = execution_budget
     secrets = {"ARTIFACTS_DIR": "/tmp/artifacts"}
     plan_secrets, plan_metadata_uri = _plan_artifact_secrets(
@@ -369,7 +370,7 @@ def handler(event: dict, _context: object) -> dict:
         folder_path=event["folder"],
         action=action,
     ).folder_keys
-    for artifact in _artifact_names(action):
+    for artifact in _artifact_names(action, pipeline_plan_focus=pipeline_plan_focus):
         key = {
             "init.out": folder_keys.init_out,
             "validate.out": folder_keys.validate_out,
@@ -431,11 +432,12 @@ def handler(event: dict, _context: object) -> dict:
         ),
         "target credentials",
     )
-    _update_without_collision(
-        secrets,
-        _infracost_secret(action, event.get("ssm_infracost_api_key"), secrets),
-        "infracost",
-    )
+    if not pipeline_plan_focus:
+        _update_without_collision(
+            secrets,
+            _infracost_secret(action, event.get("ssm_infracost_api_key"), secrets),
+            "infracost",
+        )
     script = render(
         ScriptParams(
             resolved.verb,
@@ -445,6 +447,7 @@ def handler(event: dict, _context: object) -> dict:
             event["folder"],
             resolved.normalize_drift,
             resolved.extra_flags,
+            pipeline_plan_focus=pipeline_plan_focus,
         )
     )
     # CodeBuild environment overrides require strings. The shared engine
