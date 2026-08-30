@@ -284,6 +284,7 @@ def handler(event: dict, _context: object) -> dict:
         if not isinstance(bounded_failure, str):
             raise TypeError("collect terminal error must be a string")
         failure_reason = bounded_failure
+    pipeline_plan_focus = event.get("pipeline_plan_focus") is True
     manifest_object_key = manifest_key_for_layout(
         layout, repo_name=repo_name, run_id=run_id, folder_path=folder
     )
@@ -322,6 +323,7 @@ def handler(event: dict, _context: object) -> dict:
         generated_at_source=_submitted_at(event),
         folder_keys=folder_keys,
         manifest_object_key=manifest_object_key,
+        pipeline_plan_focus=pipeline_plan_focus,
     )
     pointers = dict(pointers)
     pointers["artifacts_prefix"] = f"s3://{tmp_bucket}/{folder_keys.prefix}"

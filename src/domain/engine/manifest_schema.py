@@ -61,6 +61,7 @@ _ALLOWED_TOP_LEVEL_KEYS = frozenset(
         "source_plan_run_id",
         "pr_number",
         "pointer_type",
+        "pipeline_plan_focus",
     }
 )
 _TEXT_ARTIFACTS = {
@@ -85,6 +86,18 @@ _SUCCESS_PLAN_REPORT_ENTRIES = frozenset(
         "tfsec.json",
         "tfsec.output",
         "infracost.json",
+        "done",
+        "package",
+        "plan.tfplan",
+        "plan.tfplan.sha256",
+        "plan-metadata.json",
+    }
+)
+_SUCCESS_PLAN_REPORT_FOCUS_ENTRIES = frozenset(
+    {
+        "init.out",
+        "validate.out",
+        "tf/plan.out",
         "done",
         "package",
         "plan.tfplan",
@@ -144,6 +157,13 @@ _FAILURE_PLAN_REPORT_ALLOWED = frozenset(
         "tfsec.output",
         "infracost.json",
         "infracost.output",
+    }
+)
+_FAILURE_PLAN_REPORT_FOCUS_ALLOWED = frozenset(
+    {
+        "init.out",
+        "validate.out",
+        "tf/plan.out",
     }
 )
 _FAILURE_DRIFT_ALLOWED = frozenset(

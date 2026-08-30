@@ -51,6 +51,7 @@ from src.domain.engine.manifest_schema import (
     _FAILURE_DRIFT_ALLOWED,
     _FAILURE_PLAN_DESTROY_ALLOWED,
     _FAILURE_PLAN_REPORT_ALLOWED,
+    _FAILURE_PLAN_REPORT_FOCUS_ALLOWED,
     _MAX_MANIFEST_ENTRIES,
     _PACKAGE_CONTENT_TYPES,
     _SUCCESS_APPLY_ENTRIES,
@@ -58,6 +59,7 @@ from src.domain.engine.manifest_schema import (
     _SUCCESS_DRIFT_ENTRIES,
     _SUCCESS_PLAN_DESTROY_ENTRIES,
     _SUCCESS_PLAN_REPORT_ENTRIES,
+    _SUCCESS_PLAN_REPORT_FOCUS_ENTRIES,
     _OPTIONAL_PLAN_REPORT_ENTRIES,
     _TEXT_ARTIFACTS,
 )
@@ -157,7 +159,7 @@ def _parse_s3_uri(uri: str) -> tuple[str, str]:
     return match.group(1), match.group(2)
 
 
-def _artifact_names_for_action(action: str) -> tuple[str, ...]:
+def _artifact_names_for_action(action: str, *, pipeline_plan_focus: bool = False) -> tuple[str, ...]:
     if action == "drift":
         return ("init.out", "validate.out", "tf/plan.out", "drift.json")
     if action == "plan_destroy":
@@ -166,15 +168,16 @@ def _artifact_names_for_action(action: str) -> tuple[str, ...]:
         return ("init.out", "validate.out", "plan-show.out", "apply.out")
     if action == "destroy":
         return ("init.out", "validate.out", "plan-show.out", "destroy.out")
-    return (
-        "init.out",
-        "validate.out",
-        "tf/plan.out",
-        "tfsec.json",
-        "tfsec.output",
-        "infracost.json",
-        "infracost.output",
-    )
+    names = ("init.out", "validate.out", "tf/plan.out")
+    if action in {"plan", "report"} and not pipeline_plan_focus:
+        return (
+            *names,
+            "tfsec.json",
+            "tfsec.output",
+            "infracost.json",
+            "infracost.output",
+        )
+    return names
 
 
 def _expected_done_uri(done_bucket: str, execution_id: str) -> str:
@@ -488,6 +491,7 @@ def validate_manifest_schema(
 
 def _validate_required_entry_set(manifest: dict[str, Any]) -> None:
     action = str(manifest.get("action") or "")
+    pipeline_plan_focus = manifest.get("pipeline_plan_focus") is True
     names: set[str] = set()
     for entry in manifest.get("entries", []):
         if not isinstance(entry, dict):
@@ -497,7 +501,11 @@ def _validate_required_entry_set(manifest: dict[str, Any]) -> None:
             names.add(name)
     if manifest.get("failure_reason"):
         if action in {"plan", "report"}:
-            allowed = _FAILURE_PLAN_REPORT_ALLOWED
+            allowed = (
+                _FAILURE_PLAN_REPORT_FOCUS_ALLOWED
+                if pipeline_plan_focus
+                else _FAILURE_PLAN_REPORT_ALLOWED
+            )
         elif action == "drift":
             allowed = _FAILURE_DRIFT_ALLOWED
         elif action == "plan_destroy":
@@ -513,7 +521,11 @@ def _validate_required_entry_set(manifest: dict[str, Any]) -> None:
             raise ValueError(f"manifest has unexpected entries for failed {action}: {', '.join(extra)}")
         return
     if action in {"plan", "report"}:
-        required = _SUCCESS_PLAN_REPORT_ENTRIES
+        required = (
+            _SUCCESS_PLAN_REPORT_FOCUS_ENTRIES
+            if pipeline_plan_focus
+            else _SUCCESS_PLAN_REPORT_ENTRIES
+        )
     elif action == "drift":
         required = _SUCCESS_DRIFT_ENTRIES
     elif action == "plan_destroy":
@@ -596,6 +608,7 @@ def _build_artifact_entries(
     require_complete: bool,
     entries: list[dict[str, Any]],
     generated_timestamps: list[datetime],
+    pipeline_plan_focus: bool = False,
 ) -> None:
     """Append one validated manifest entry per expected per-action tmp artifact."""
     key_by_name = {
@@ -612,7 +625,7 @@ def _build_artifact_entries(
         "plan-show.out": f"{keys.prefix}plan-show.out",
         "destroy.out": f"{keys.prefix}destroy.out",
     }
-    for name in _artifact_names_for_action(action):
+    for name in _artifact_names_for_action(action, pipeline_plan_focus=pipeline_plan_focus):
         key = key_by_name[name]
         uri = f"s3://{tmp_bucket}/{key}"
         meta = head_object(tmp_bucket, key)
@@ -653,6 +666,7 @@ def build_manifest(
     generated_at_source: datetime | None = None,
     folder_keys: FolderArtifactKeys | None = None,
     manifest_object_key: str | None = None,
+    pipeline_plan_focus: bool = False,
 ) -> dict[str, Any]:
     """Build one bounded manifest enumerating validated artifact pointers."""
     tmp_bucket = buckets.tmp_bucket
@@ -690,6 +704,7 @@ def build_manifest(
         require_complete=require_complete,
         entries=entries,
         generated_timestamps=generated_timestamps,
+        pipeline_plan_focus=pipeline_plan_focus,
     )
     expected_done = _expected_done_uri(done_bucket, execution_id)
     if done_uri != expected_done:
@@ -904,6 +919,8 @@ def build_manifest(
         manifest["pr_number"] = pr_number
     if pointer_type is not None:
         manifest["pointer_type"] = pointer_type
+    if pipeline_plan_focus:
+        manifest["pipeline_plan_focus"] = True
     bounded_failure = _bound_failure_reason(failure_reason)
     if bounded_failure:
         manifest["failure_reason"] = bounded_failure
