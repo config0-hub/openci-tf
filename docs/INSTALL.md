@@ -181,12 +181,16 @@ The journey composes four phases:
    applies `infra/deploy` fully. When `api_caller_role_arn` is set, the stage
    writes an `api_caller_policy_json` entry for that role with actions
    `plan|drift|report` only.
-4. **registration** (`install/register_repo.py`) — generates or reuses the
-   webhook HMAC secret in SSM, writes the repository settings row, creates or
-   reconciles the GitHub webhook (the hook id is recorded at
-   `/openci-tf/install/<project>/webhook_hook_id` for clean removal), and
-   proves comment access with a probe on a throwaway branch and PR. Re-runs
+4. **registration** (`install/register_repo.py`) — proves comment access
+   first with a probe on a throwaway branch and PR, then generates or reuses
+   the webhook HMAC secret in SSM, writes the repository settings row, and
+   creates or reconciles the GitHub webhook (the hook id is recorded at
+   `/openci-tf/install/<project>/webhook_hook_id` for clean removal). A
+   failure after partial activation rolls the activation back. Re-runs
    converge. See [docs/GITHUB_WEBHOOK.md](GITHUB_WEBHOOK.md).
+
+The journey stops at the first failed phase; later phases do not run and the
+recipe exits nonzero naming the failed stage.
 
 In config0-addon mode the hub Lambda exec role trusts
 `arn:aws:iam::*:role/<project>-executor-*` by name pattern instead of an

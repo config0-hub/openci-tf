@@ -456,14 +456,23 @@ install-config0-addon:
         --webhook-url "$WEBHOOK_URL" --upstream-urls-json "$UPSTREAM_URLS_JSON" \
         --region "{{OPENCI_TF_REGION}}" --project-name "{{OPENCI_TF_PROJECT}}"
     }
+    run_stage() {
+        local stage="$1"
+        shift
+        local rc=0
+        phase_timing_run "$stage" "$@" || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            phase_timing_total_end install-config0-addon "$rc"
+            echo "ERROR: install-config0-addon stopped at failed stage $stage (rc=$rc); later stages did not run" >&2
+            exit "$rc"
+        fi
+    }
     phase_timing_total_begin
-    journey_rc=0
-    phase_timing_run addon-ecr python3 install/config0_addon.py --stage ecr "${addon_args[@]}" || journey_rc=$?
-    phase_timing_run addon-image-copy ./scripts/copy_ghcr_image.sh --ghcr-image "$GHCR_IMAGE" --region "{{OPENCI_TF_REGION}}" --project "{{OPENCI_TF_PROJECT}}" || journey_rc=$?
-    phase_timing_run addon-deploy python3 install/config0_addon.py --stage deploy "${deploy_args[@]}" || journey_rc=$?
-    phase_timing_run addon-register register_repository || journey_rc=$?
-    phase_timing_total_end install-config0-addon "$journey_rc"
-    [ "$journey_rc" -eq 0 ] || exit "$journey_rc"
+    run_stage addon-ecr python3 install/config0_addon.py --stage ecr "${addon_args[@]}"
+    run_stage addon-image-copy ./scripts/copy_ghcr_image.sh --ghcr-image "$GHCR_IMAGE" --region "{{OPENCI_TF_REGION}}" --project "{{OPENCI_TF_PROJECT}}"
+    run_stage addon-deploy python3 install/config0_addon.py --stage deploy "${deploy_args[@]}"
+    run_stage addon-register register_repository
+    phase_timing_total_end install-config0-addon 0
     echo "config0-addon install complete — webhook registered; see install/register_repo.py output for hook_id"
 
 # Exact reverse of install. Set OPENCI_TF_KEEP_STATE=yes|no to skip the prompt.

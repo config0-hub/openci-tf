@@ -4,15 +4,19 @@
 
 Converging registration flow (safe to re-run):
 
-  1. Generate the webhook secret (reused when it already exists in SSM).
-  2. Apply the repository settings item to the <project>-settings table.
-  3. Create or reconcile the GitHub webhook; the hook id is recorded in SSM
+  1. Comment probe: a throwaway branch and pull request prove the control
+     token can push contents, open PRs, and comment; both are removed again
+     even when the probe fails.
+  2. Generate the webhook secret (reused when it already exists in SSM).
+  3. Apply the repository settings item to the <project>-settings table.
+  4. Create or reconcile the GitHub webhook; the hook id is recorded in SSM
      at /openci-tf/install/<project>/webhook_hook_id and printed.
-  4. Comment probe: a throwaway branch and pull request prove the control
-     token can push contents, open PRs, and comment; both are removed again.
 
-Every failure is fatal; nothing is registered on a failed probe path that
-would leave the repository half-usable without a working token.
+Every failure is fatal. The probe runs before any activation write, so a
+repository is never activated with a token that cannot write. A failure
+after partial activation rolls the activation back (a newly created hook is
+deleted; the settings row is removed or restored) before the error is
+re-raised.
 """
 
 from __future__ import annotations
@@ -133,7 +137,8 @@ def apply_repo_settings(dynamodb, args: argparse.Namespace, webhook_secret_ssm: 
     print(f"applied repo settings for {args.repo} (trigger_id={args.trigger_id}) to {args.table}")
 
 
-def reconcile_webhook(github: GitHub, args: argparse.Namespace, secret: str) -> int:
+def reconcile_webhook(github: GitHub, args: argparse.Namespace, secret: str) -> tuple[int, bool]:
+    """Create or reconcile the webhook; returns (hook_id, created_new_hook)."""
     full_url = f"{args.webhook_url.rstrip('/')}/{args.trigger_id}"
     config = {"url": full_url, "content_type": "json", "secret": secret, "insecure_ssl": "0"}
     hooks = github.request("GET", f"/repos/{args.repo}/hooks?per_page=100")
@@ -146,15 +151,15 @@ def reconcile_webhook(github: GitHub, args: argparse.Namespace, secret: str) -> 
             {"active": True, "events": WEBHOOK_EVENTS, "config": config},
         )
         print(f"reconciled existing webhook hook_id={hook_id} for {full_url}")
-    else:
-        created = github.request(
-            "POST",
-            f"/repos/{args.repo}/hooks",
-            {"name": "web", "active": True, "events": WEBHOOK_EVENTS, "config": config},
-        )
-        hook_id = created["id"]
-        print(f"created webhook hook_id={hook_id} for {full_url}")
-    return hook_id
+        return hook_id, False
+    created = github.request(
+        "POST",
+        f"/repos/{args.repo}/hooks",
+        {"name": "web", "active": True, "events": WEBHOOK_EVENTS, "config": config},
+    )
+    hook_id = created["id"]
+    print(f"created webhook hook_id={hook_id} for {full_url}")
+    return hook_id, True
 
 
 def record_hook_id(ssm, args: argparse.Namespace, hook_id: int) -> str:
@@ -177,37 +182,109 @@ def comment_probe(github: GitHub, args: argparse.Namespace) -> None:
         print(f"removed leftover probe branch {branch}")
     github.request("POST", f"/repos/{repo}/git/refs", {"ref": f"refs/heads/{branch}", "sha": base_sha})
 
-    file_path = f".openci_tf/register-probe-{args.trigger_id}.txt"
-    existing = github.exists(f"/repos/{repo}/contents/{file_path}?ref={branch}")
-    content_body = {
-        "message": "openci-tf registration comment probe",
-        "content": base64.b64encode(f"probe {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n".encode()).decode(),
-        "branch": branch,
-    }
-    if isinstance(existing, dict) and existing.get("sha"):
-        content_body["sha"] = existing["sha"]
-    github.request("PUT", f"/repos/{repo}/contents/{file_path}", content_body)
+    number: int | None = None
+    try:
+        file_path = f".openci_tf/register-probe-{args.trigger_id}.txt"
+        existing = github.exists(f"/repos/{repo}/contents/{file_path}?ref={branch}")
+        content_body = {
+            "message": "openci-tf registration comment probe",
+            "content": base64.b64encode(f"probe {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n".encode()).decode(),
+            "branch": branch,
+        }
+        if isinstance(existing, dict) and existing.get("sha"):
+            content_body["sha"] = existing["sha"]
+        github.request("PUT", f"/repos/{repo}/contents/{file_path}", content_body)
 
-    pull = github.request(
-        "POST",
-        f"/repos/{repo}/pulls",
-        {
-            "title": "openci-tf registration probe (auto-closed)",
-            "head": branch,
-            "base": default_branch,
-            "body": "Throwaway registration probe; closed and deleted by install/register_repo.py.",
-        },
-    )
-    number = pull["number"]
-    comment = github.request(
-        "POST",
-        f"/repos/{repo}/issues/{number}/comments",
-        {"body": "openci-tf registration comment probe: the control token can comment."},
-    )
-    print(f"comment probe passed: PR #{number}, comment id {comment['id']}")
-    github.request("PATCH", f"/repos/{repo}/pulls/{number}", {"state": "closed"})
-    github.request("DELETE", ref_path, ok_status=(204,))
-    print(f"probe cleanup complete: PR #{number} closed, branch {branch} deleted")
+        pull = github.request(
+            "POST",
+            f"/repos/{repo}/pulls",
+            {
+                "title": "openci-tf registration probe (auto-closed)",
+                "head": branch,
+                "base": default_branch,
+                "body": "Throwaway registration probe; closed and deleted by install/register_repo.py.",
+            },
+        )
+        number = pull["number"]
+        comment = github.request(
+            "POST",
+            f"/repos/{repo}/issues/{number}/comments",
+            {"body": "openci-tf registration comment probe: the control token can comment."},
+        )
+        print(f"comment probe passed: PR #{number}, comment id {comment['id']}")
+    except BaseException:
+        _cleanup_probe(github, repo, ref_path, branch, number, raise_errors=False)
+        raise
+    _cleanup_probe(github, repo, ref_path, branch, number, raise_errors=True)
+
+
+def _cleanup_probe(
+    github: GitHub, repo: str, ref_path: str, branch: str, number: int | None, *, raise_errors: bool
+) -> None:
+    """Close the throwaway probe PR and delete its branch.
+
+    With raise_errors=False (used while a probe error is already propagating)
+    each cleanup step is attempted and failures are printed as warnings so
+    the original error stays the one raised.
+    """
+    steps = []
+    if number is not None:
+        steps.append(("close probe PR", "PATCH", f"/repos/{repo}/pulls/{number}", {"state": "closed"}, (200, 201)))
+    steps.append(("delete probe branch", "DELETE", ref_path, None, (204,)))
+    clean = True
+    for label, method, path, body, ok_status in steps:
+        try:
+            github.request(method, path, body, ok_status=ok_status)
+        except Exception as cleanup_error:
+            if raise_errors:
+                raise
+            clean = False
+            print(f"WARNING: probe cleanup step '{label}' failed: {cleanup_error}", file=sys.stderr)
+    if clean:
+        pr_note = f"PR #{number} closed, " if number is not None else ""
+        print(f"probe cleanup complete: {pr_note}branch {branch} deleted")
+
+
+def activate_registration(
+    github: GitHub, ssm, dynamodb, args: argparse.Namespace, secret: str, webhook_secret_ssm: str
+) -> int:
+    """Write the settings row and webhook; roll back both on a late failure.
+
+    Runs only after the comment probe has proven the token. If the webhook
+    create/reconcile or the hook-id record fails after the settings row was
+    written, the partial activation is reconciled back (a newly created hook
+    is deleted; the settings row is removed, or restored to its prior item)
+    and the original error is re-raised.
+    """
+    key = {"pk": {"S": "repo"}, "sk": {"S": args.trigger_id}}
+    prior_item = dynamodb.get_item(TableName=args.table, Key=key).get("Item")
+    apply_repo_settings(dynamodb, args, webhook_secret_ssm)
+    hook_id: int | None = None
+    hook_created = False
+    try:
+        hook_id, hook_created = reconcile_webhook(github, args, secret)
+        record_hook_id(ssm, args, hook_id)
+        return hook_id
+    except BaseException:
+        if hook_created:
+            try:
+                github.request("DELETE", f"/repos/{args.repo}/hooks/{hook_id}", ok_status=(204,))
+                print(f"rolled back newly created webhook hook_id={hook_id} after failed registration", file=sys.stderr)
+            except Exception as cleanup_error:
+                print(
+                    f"WARNING: could not roll back webhook hook_id={hook_id}: {cleanup_error}",
+                    file=sys.stderr,
+                )
+        try:
+            if prior_item is None:
+                dynamodb.delete_item(TableName=args.table, Key=key)
+                print(f"rolled back settings row for trigger_id={args.trigger_id} after failed registration", file=sys.stderr)
+            else:
+                dynamodb.put_item(TableName=args.table, Item=prior_item)
+                print(f"restored prior settings row for trigger_id={args.trigger_id} after failed registration", file=sys.stderr)
+        except Exception as cleanup_error:
+            print(f"WARNING: could not restore settings row: {cleanup_error}", file=sys.stderr)
+        raise
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -258,12 +335,11 @@ def main(argv: list[str] | None = None) -> int:
         raise RegistrationError(f"GitHub control token at {args.github_token_ssm} is empty")
     github = GitHub(token)
 
+    comment_probe(github, args)
+
     webhook_secret_ssm = f"/openci-tf/install/{args.project_name}/webhook_secret"
     secret = get_or_create_secret(ssm, webhook_secret_ssm)
-    apply_repo_settings(dynamodb, args, webhook_secret_ssm)
-    hook_id = reconcile_webhook(github, args, secret)
-    record_hook_id(ssm, args, hook_id)
-    comment_probe(github, args)
+    hook_id = activate_registration(github, ssm, dynamodb, args, secret, webhook_secret_ssm)
     print(f"registered {args.repo} (trigger_id={args.trigger_id}, hook_id={hook_id})")
     return 0
 
