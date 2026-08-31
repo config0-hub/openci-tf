@@ -463,7 +463,7 @@ def test_finalizer_rehydrates_compact_map_items_without_execution_id_mismatch(mo
         {
             "run_id": "1787618846778.538c5fed",
             "map_shared": {
-                "upstream_urls": {"tofu:1.8.0": "https://example.com/tofu"},
+                "upstream_urls": {"tofu:1.10.6": "https://example.com/tofu"},
                 "repo_name": "org/repo",
                 "git_url": "https://github.com/org/repo.git",
                 "commit_hash": "a" * 40,
@@ -485,7 +485,7 @@ def test_finalizer_rehydrates_compact_map_items_without_execution_id_mismatch(mo
                         "openci-tf-0123456789abcdef",
                         3600,
                     ],
-                    "c": {"account_alias": "target", "tf_runtime": "tofu:1.8.0"},
+                    "c": {"account_alias": "target", "tf_runtime": "tofu:1.10.6"},
                     "e": "1787618846778.538c5fed.f445281ac67b.0",
                 }
             ],
@@ -1071,13 +1071,13 @@ def test_discover_folder_paths_maps_nfd_physical_to_nfc_key(tmp_path):
     folder = root / "e\u0301"
     (folder / ".openci_tf").mkdir(parents=True)
     (folder / ".openci_tf" / "config.yaml").write_text(
-        "account_alias: target\ntf_runtime: tofu:1.8.0\n"
+        "account_alias: target\ntf_runtime: tofu:1.10.6\n"
     )
     paths = discover_folder_paths(root)
     assert list(paths.keys()) == ["é"]
     assert paths["é"] == "e\u0301"
     resolved = resolve_outer_state(
-        str(root), ["é"], {"tofu:1.8.0": "https://example.com/tofu"}, "drift"
+        str(root), ["é"], {"tofu:1.10.6": "https://example.com/tofu"}, "drift"
     )
     assert "é" in resolved["folder_configs"]
 
@@ -1113,9 +1113,9 @@ def test_engine_install_script_targets_adjacent_engine_tree():
     assert "init -migrate-state -force-copy -input=false" in script
     assert "state list)" in script
     assert 'delete-object --bucket "$STATE_BUCKET" --key "$LEGACY_STATE_KEY"' in script
-    assert 'delete_checksum_row "$CANONICAL_STATE_KEY"' in script
-    assert 'delete_checksum_row "$LEGACY_STATE_KEY"' in script
-    assert "attribute_not_exists(Info)" in script
+    # Decision 27: no DynamoDB lock/checksum rows remain; S3 native lock file.
+    assert "delete_checksum_row" not in script
+    assert "dynamodb" not in script
     assert "both canonical and legacy engine state objects exist" in script
     assert (
         'upload_source.sh" "$STATE_BUCKET" engine "$ENGINE_ROOT" infra/02-deploy'
@@ -1455,9 +1455,9 @@ def test_terraform_unlock_stale_lock_reports_lock_with_force_unlock_command(
         """#!/usr/bin/env bash
 set -euo pipefail
 case "$*" in
-  *"dynamodb get-item"*)
+  *"s3api get-object"*)
     cat <<'JSON'
-{"Item":{"Info":{"S":"{\\"ID\\":\\"c5bcf01c-1ebf-b1e3-9f3a-55a995eef2cc\\",\\"Created\\":\\"2020-01-01T00:00:00Z\\",\\"Who\\":\\"test@host\\",\\"Operation\\":\\"OperationTypeApply\\"}"}}}
+{"ID":"c5bcf01c-1ebf-b1e3-9f3a-55a995eef2cc","Created":"2020-01-01T00:00:00Z","Who":"test@host","Operation":"OperationTypeApply"}
 JSON
     ;;
   *)
@@ -1484,7 +1484,6 @@ printf '%s\\n' "$*" >>"{unlock_log}"
             "infra/deploy",
             "openci-tf-state-123456789012",
             "deploy",
-            "openci-tf-tf-locks",
         ],
         cwd=repo_root,
         env=env,
@@ -1508,8 +1507,9 @@ def test_terraform_unlock_stale_lock_exits_zero_when_no_lock(tmp_path: Path):
         """#!/usr/bin/env bash
 set -euo pipefail
 case "$*" in
-  *"dynamodb get-item"*)
-    echo null
+  *"s3api get-object"*)
+    echo "An error occurred (NoSuchKey) when calling the GetObject operation" >&2
+    exit 254
     ;;
   *)
     echo "unexpected aws call: $*" >&2
@@ -1528,7 +1528,6 @@ esac
             "infra/deploy",
             "openci-tf-state-123456789012",
             "deploy",
-            "openci-tf-tf-locks",
         ],
         cwd=repo_root,
         env=env,
@@ -1551,9 +1550,9 @@ def test_terraform_unlock_stale_lock_fails_with_exact_command_for_fresh_lock(
         """#!/usr/bin/env bash
 set -euo pipefail
 case "$*" in
-  *"dynamodb get-item"*)
+  *"s3api get-object"*)
     cat <<'JSON'
-{"Item":{"Info":{"S":"{\\"ID\\":\\"fresh-lock-id\\",\\"Created\\":\\"2099-01-01T00:00:00Z\\",\\"Who\\":\\"test@host\\",\\"Operation\\":\\"OperationTypeApply\\"}"}}}
+{"ID":"fresh-lock-id","Created":"2099-01-01T00:00:00Z","Who":"test@host","Operation":"OperationTypeApply"}
 JSON
     ;;
   *)
@@ -1575,7 +1574,6 @@ esac
             "infra/deploy",
             "openci-tf-state-123456789012",
             "deploy",
-            "openci-tf-tf-locks",
         ],
         cwd=repo_root,
         env=env,

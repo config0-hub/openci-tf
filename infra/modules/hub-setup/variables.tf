@@ -28,11 +28,6 @@ variable "state_bucket_arn" {
   type        = string
 }
 
-variable "lock_table_arn" {
-  description = "ARN of the main account Terraform state lock table used by same-account execution; empty string means no DynamoDB lock table exists (config0-addon installs use the S3 native lock file) and every lock-table IAM statement is omitted"
-  type        = string
-  default     = ""
-}
 
 variable "enable_apply" {
   description = "Legacy IAM migration only: when true, attach PowerUserAccess to executor-local; runtime intent gating uses DynamoDB enable_apply"

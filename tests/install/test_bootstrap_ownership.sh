@@ -9,11 +9,11 @@ set -euo pipefail
 #   A) bootstrap: existing bucket with a foreign ManagedBy tag -> abort (rc 1)
 #   B) bootstrap-destroy: foreign-owned bucket -> abort, NO delete-objects call
 #   C) bootstrap-destroy: unreadable tags (AccessDenied) -> abort rc 2
-#   D) bootstrap-destroy: stranded lock table with foreign tag -> abort, NO delete-table
 #   E) bootstrap: surviving LOCAL state + foreign-owned bucket -> abort (no adopt)
 #   F) bootstrap: surviving LOCAL state tracking a DIFFERENT bucket -> abort
 #   G) bootstrap-destroy: local state + foreign bucket -> abort, NO deletes
-#   H) bootstrap-destroy: owned bucket + FOREIGN lock table -> abort, NO deletes
+# No DynamoDB lock table exists (S3 native lock file); no recipe may ever call
+# dynamodb delete-table.
 #
 # Run: tests/install/test_bootstrap_ownership.sh
 
@@ -100,10 +100,6 @@ assert_no_call "B: no delete-table issued on abort" delete-table
 write_mock denied present present
 run_case "C: bootstrap-destroy aborts on unreadable tags" 2 bootstrap-destroy
 
-write_mock foreign absent present
-run_case "D: stranded foreign lock table refused" 1 bootstrap-destroy
-assert_no_call "D: no delete-table issued on refusal" delete-table
-
 # E/F/G: surviving local state scenarios
 write_mock foreign present present
 write_local_state "openci-tf-state-123456789012"
@@ -115,27 +111,6 @@ KEEP_LOCAL_STATE=1 run_case "G: local-state destroy aborts on foreign-owned buck
 assert_no_call "G: no delete-objects issued" delete-objects
 assert_no_call "G: no delete-table issued" delete-table
 rm -f "$REPO/infra/bootstrap/terraform.tfstate"
-
-# H: owned bucket but foreign lock table
-write_mock owned-bucket-foreign-table present present
-run_case "H: owned bucket + foreign lock table aborts" 1 bootstrap-destroy
-assert_no_call "H: no delete-objects issued" delete-objects
-assert_no_call "H: no delete-table issued" delete-table
-
-# I: local state tracking the RIGHT bucket but the WRONG lock table
-write_mock owned-bucket-foreign-table present present
-write_local_state "openci-tf-state-123456789012" "some-other-table"
-KEEP_LOCAL_STATE=1 run_case "I: local state tracking wrong lock table aborts (bootstrap)" 1 bootstrap
-KEEP_LOCAL_STATE=1 run_case "I2: local state tracking wrong lock table aborts (destroy)" 1 bootstrap-destroy
-assert_no_call "I2: no delete-objects issued" delete-objects
-assert_no_call "I2: no delete-table issued" delete-table
-
-# J: local state + owned bucket + FOREIGN live lock table -> abort BEFORE empty
-write_local_state "openci-tf-state-123456789012" "openci-tf-tf-locks"
-KEEP_LOCAL_STATE=1 run_case "J: local-state destroy aborts on foreign table BEFORE emptying" 1 bootstrap-destroy
-assert_no_call "J: no delete-objects issued (bucket NOT emptied)" delete-objects
-assert_no_call "J: no delete-table issued" delete-table
-KEEP_LOCAL_STATE=1 run_case "J2: bootstrap resume aborts on foreign live table" 1 bootstrap
 
 # K/L/M: state-identity address/mode strictness (reviewer counterexamples).
 # Mock 'foreign' tagging would abort anyway on live checks, so use the

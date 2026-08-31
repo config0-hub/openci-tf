@@ -311,10 +311,11 @@ fi
 
 # Bootstrap
 if [ "$STATE_KEPT" = 1 ]; then
-  echo "OK   state bucket kept (skipping bucket/lock-table/source-copy absence checks)"
+  echo "OK   state bucket kept (skipping bucket/source-copy absence checks)"
 else
   check "state bucket ${STATE_BUCKET}" "$WANT" bucket_exists "$STATE_BUCKET"
-  check "lock table ${PROJECT}-tf-locks" "$WANT" table_exists "${PROJECT}-tf-locks"
+  # No DynamoDB lock table exists in any mode (S3 native lock file).
+  check "lock table ${PROJECT}-tf-locks (must never exist)" 0 table_exists "${PROJECT}-tf-locks"
   # engine-00-bootstrap is skipped: in a combined install the engine adopts the
   # shared state bucket and never applies its own bootstrap root.
   for root in bootstrap foundation deploy engine; do

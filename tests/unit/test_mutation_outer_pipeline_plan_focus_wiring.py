@@ -36,7 +36,7 @@ def _folder_pin() -> dict:
         "plan_artifact_name": "plan.tfplan",
         "account_id": "123456789012",
         "account_binding": _binding(),
-        "tf_runtime": "tofu:1.8.0",
+        "tf_runtime": "tofu:1.10.6",
     }
 
 

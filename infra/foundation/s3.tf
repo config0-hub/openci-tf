@@ -8,7 +8,7 @@ locals {
   tmp_bucket_name     = "${var.name_prefix}-tmp-${local.account_id}"
   package_bucket_name = "${var.name_prefix}-package-${local.account_id}"
   done_bucket_name    = "${var.name_prefix}-done-${local.account_id}"
-  openci_tf_prefix       = "openci-tf/"
+  openci_tf_prefix    = "openci-tf/"
   buckets = {
     tmp     = { name = local.tmp_bucket_name, expiration = var.tmp_lifecycle_days, versioned = false, threshold = var.tmp_size_alarm_bytes }
     package = { name = local.package_bucket_name, expiration = var.package_lifecycle_days, versioned = true, threshold = var.package_size_alarm_bytes }

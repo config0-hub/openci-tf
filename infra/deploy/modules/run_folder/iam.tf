@@ -27,10 +27,10 @@ locals {
   )
   installer_cache_objects = [
     for pair in [
-      ["terraform", "1.8.5"],
-      ["terraform", "1.9.8"],
-      ["tofu", "1.8.0"],
-      ["tofu", "1.9.0"],
+      ["terraform", "1.10.5"],
+      ["terraform", "1.12.2"],
+      ["tofu", "1.10.6"],
+      ["tofu", "1.12.6"],
       ["tfsec", "1.28.10"],
       ["infracost", "0.10.39"],
     ] : "${var.package_bucket_arn}/cache/${pair[0]}/${pair[1]}"

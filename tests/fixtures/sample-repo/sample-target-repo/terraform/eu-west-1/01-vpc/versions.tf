@@ -8,12 +8,14 @@ terraform {
     }
   }
 
-  # Checked-in backend for plain `tofu init` (openci-tf does not inject -backend-config).
+  # Checked-in backend for plain `tofu init` (bucket/key/region only, any
+  # version). openci-tf's platform runs pass -backend-config=use_lockfile=true
+  # at init; tofu/terraform >= 1.10 is recommended so manual runs lock too
+  # (older versions run unlocked).
   backend "s3" {
     bucket         = "openci-tf-state-111111111111"
     key            = "targets/<REPO_ORG>/<REPO_NAME>/terraform/eu-west-1/01-vpc.tfstate"
     region         = "us-east-1"
-    dynamodb_table = "openci-tf-tf-locks"
     encrypt        = true
   }
 }

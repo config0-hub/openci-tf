@@ -44,28 +44,6 @@ resource "aws_iam_role_policy" "executor_local" {
           Condition = { StringLike = { "s3:prefix" = "targets/*" } }
         },
       ],
-      [for lock_statement in [
-        {
-          Sid       = "TerraformTargetLockReadWrite"
-          Effect    = "Allow"
-          Action    = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:UpdateItem", "dynamodb:DescribeTable"]
-          Resource  = var.lock_table_arn
-          Condition = { "ForAllValues:StringLike" = { "dynamodb:LeadingKeys" = ["*/targets/*"] } }
-        },
-        {
-          Sid      = "DenyLockTableBroadReads"
-          Effect   = "Deny"
-          Action   = ["dynamodb:Scan", "dynamodb:Query", "dynamodb:BatchGetItem", "dynamodb:PartiQLSelect"]
-          Resource = [var.lock_table_arn, "${var.lock_table_arn}/index/*"]
-        },
-        {
-          Sid       = "DenyLockItemsOutsideTargets"
-          Effect    = "Deny"
-          Action    = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:UpdateItem"]
-          Resource  = var.lock_table_arn
-          Condition = { "ForAllValues:StringNotLike" = { "dynamodb:LeadingKeys" = ["*/targets/*"] } }
-        },
-      ] : lock_statement if local.lock_enabled],
       [
         {
           Sid      = "TerraformPlanTimeIamReadsScoped"
@@ -141,7 +119,7 @@ resource "aws_iam_role_policy" "executor_local" {
           Resource = local.protected_hub_resource_arns
         },
         {
-          Sid    = "DenyInfrastructureMutationOutsideStateAndLock"
+          Sid    = "DenyInfrastructureMutationOutsideState"
           Effect = "Deny"
           Action = concat(
             [
@@ -158,13 +136,10 @@ resource "aws_iam_role_policy" "executor_local" {
               "dynamodb:CreateTable", "dynamodb:DeleteTable", "dynamodb:UpdateTable",
             ],
           )
-          NotResource = concat(
-            [
-              var.state_bucket_arn,
-              "${var.state_bucket_arn}/*",
-            ],
-            local.lock_enabled ? [var.lock_table_arn] : [],
-          )
+          NotResource = [
+            var.state_bucket_arn,
+            "${var.state_bucket_arn}/*",
+          ]
         },
       ],
     )

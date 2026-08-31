@@ -109,7 +109,6 @@ validate_state_bucket
 
 HUB_ROLE_ARN="arn:aws:iam::${HUB_ACCOUNT_ID}:role/${PROJECT}-hub-lambda-exec"
 TARGET_STATE_ARN="arn:aws:s3:::${STATE_BUCKET}"
-LOCK_TABLE="${PROJECT}-tf-locks"
 ENABLE_APPLY="$(./scripts/ssm_config.sh get-or enable_apply false)"
 
 if [ "$ACTION" = "create" ]; then
@@ -121,25 +120,13 @@ if [ "$ACTION" = "create" ]; then
 	0) ;;
 	1)
 		echo "ERROR: state bucket ${STATE_BUCKET} does not exist in account ${TARGET_ACCOUNT_ID}" >&2
+		echo "ERROR: openci-tf does not create per-target state buckets; pass an existing (shared) bucket" >&2
 		exit 1
 		;;
 	*)
 		exit "$probe_rc"
 		;;
 	esac
-
-	set +e
-	LOCK_STATUS="$(aws dynamodb describe-table --table-name "$LOCK_TABLE" --query 'Table.TableStatus' --output text)"
-	lock_probe_rc=$?
-	set -e
-	if [ "$lock_probe_rc" -ne 0 ]; then
-		echo "ERROR: target lock table ${LOCK_TABLE} does not exist or is unreadable in account ${TARGET_ACCOUNT_ID}" >&2
-		exit "$lock_probe_rc"
-	fi
-	if [ "$LOCK_STATUS" != "ACTIVE" ]; then
-		echo "ERROR: target lock table ${LOCK_TABLE} is not ACTIVE (status=${LOCK_STATUS})" >&2
-		exit 1
-	fi
 
 	./scripts/ssm_config.sh set hub_lambda_exec_role_arn "$HUB_ROLE_ARN"
 	./scripts/ssm_config.sh set target_state_bucket_arn "$TARGET_STATE_ARN"
@@ -166,8 +153,8 @@ if [ "$ROLE_KIND" = "readonly" ]; then
 	TFVARS+=("enable_apply=${ENABLE_APPLY}")
 fi
 ./scripts/write_tfvars.sh "$TF_ROOT" "${TFVARS[@]}"
-./scripts/generate_backend.sh "$STATE_BUCKET" "$STATE_KEY" "$AWS_REGION" "$TF_ROOT" "$LOCK_TABLE"
-terraform -chdir="$TF_ROOT" init -reconfigure -input=false
+./scripts/generate_backend.sh "$STATE_BUCKET" "$STATE_KEY" "$AWS_REGION" "$TF_ROOT"
+terraform -chdir="$TF_ROOT" init -reconfigure -input=false -backend-config=use_lockfile=true
 if [ "$ACTION" = "create" ]; then
 	terraform -chdir="$TF_ROOT" apply -input=false -auto-approve
 	if [ "$ROLE_KIND" = "readonly" ]; then

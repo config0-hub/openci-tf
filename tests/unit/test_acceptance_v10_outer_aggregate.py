@@ -96,7 +96,7 @@ def _maximum_folder_config() -> dict:
 
 def _upstream_urls() -> dict[str, str]:
     return {
-        "tofu:1.8.0": "https://example.invalid/" + ("t" * 2000),
+        "tofu:1.10.6": "https://example.invalid/" + ("t" * 2000),
         "tfsec:1.28.10": "https://example.invalid/" + ("s" * 2000),
         "infracost:0.10.39": "https://example.invalid/" + ("i" * 2000),
     }
@@ -530,7 +530,7 @@ def test_legacy_six_folder_forty_five_kib_attack_rejected_before_locks(monkeypat
         parse_folder_config(yaml_text)
     oversized = {
         "account_alias": "a" * 128,
-        "tf_runtime": "tofu:1.8.0",
+        "tf_runtime": "tofu:1.10.6",
         "execution_target": "lambda",
         "timeout": 3600,
         "extra_flags": flags,

@@ -53,7 +53,7 @@ def test_prepare_package_cache_get_put_allows_pinned_installer_keys():
     block = _policy_block("prepare")
     assert "local.installer_cache_objects" in block
     assert "local.package_root_zip_objects" in block
-    assert '["tofu", "1.8.0"]' in _IAM_TF
+    assert '["tofu", "1.10.6"]' in _IAM_TF
     assert "${var.tmp_bucket_arn}/openci-tf/*" in block
     assert '"${var.tmp_bucket_arn}/*"' not in block
     assert '"s3:GetObject"], Resource = "${var.tmp_bucket_arn}/*"' not in block

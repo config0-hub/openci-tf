@@ -31,7 +31,6 @@ module "hub_setup" {
   target_account_ids      = var.target_account_ids
   target_account_wildcard = var.install_mode == "config0-addon"
   state_bucket_arn        = local.state_bucket_arn
-  lock_table_arn          = local.use_lock_table ? data.aws_dynamodb_table.locks[0].arn : ""
   enable_apply            = var.enable_apply
 }
 

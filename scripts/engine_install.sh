@@ -7,7 +7,6 @@ PROJECT_PREFIX="${OPENCI_TF_PROJECT:-openci-tf}"
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 ACCT="$(aws sts get-caller-identity --query Account --output text)"
 STATE_BUCKET="${PROJECT_PREFIX}-state-${ACCT}"
-LOCK_TABLE="${PROJECT_PREFIX}-tf-locks"
 PACKAGE_BUCKET="${PROJECT_PREFIX}-package-${ACCT}"
 DONE_BUCKET="${PROJECT_PREFIX}-done-${ACCT}"
 ENGINE_ZIP_S3_KEY="engine/artifacts/engine.zip"
@@ -76,29 +75,14 @@ state_object_status() {
   return 1
 }
 
-delete_checksum_row() {
-  local key="$1" lock_id key_json
-  lock_id="${STATE_BUCKET}/${key}-md5"
-  key_json="$(python3 - "$lock_id" <<'PY'
-import json
-import sys
-print(json.dumps({"LockID": {"S": sys.argv[1]}}))
-PY
-)"
-  aws dynamodb delete-item \
-    --table-name "$LOCK_TABLE" \
-    --key "$key_json" \
-    --condition-expression 'attribute_not_exists(Info)' >/dev/null
-}
-
 echo "applying engine infra/01-ecr (state key ${ECR_CANONICAL_STATE_KEY})"
-"${ROOT_DIR}/scripts/generate_backend.sh" "$STATE_BUCKET" engine-ecr "$REGION" "$ECR_DIR" "$LOCK_TABLE"
+"${ROOT_DIR}/scripts/generate_backend.sh" "$STATE_BUCKET" engine-ecr "$REGION" "$ECR_DIR"
 (
   cd "$ECR_DIR"
   cat >terraform.tfvars <<EOF
 aws_region = "${REGION}"
 EOF
-  tofu init -reconfigure -input=false
+  tofu init -reconfigure -input=false -backend-config=use_lockfile=true
   tofu apply -input=false -auto-approve
 )
 
@@ -120,24 +104,22 @@ canonical_status="$(state_object_status "$CANONICAL_STATE_KEY")"
 legacy_status="$(state_object_status "$LEGACY_STATE_KEY")"
 if [ "$canonical_status" = absent ] && [ "$legacy_status" = present ]; then
   echo "migrating legacy engine Terraform state to ${CANONICAL_STATE_KEY}"
-  "${ROOT_DIR}/scripts/generate_backend.sh" "$STATE_BUCKET" engine-02-deploy "$REGION" "$DEPLOY_DIR" "$LOCK_TABLE"
-  terraform -chdir="$DEPLOY_DIR" init -reconfigure -input=false
-  "${ROOT_DIR}/scripts/generate_backend.sh" "$STATE_BUCKET" engine "$REGION" "$DEPLOY_DIR" "$LOCK_TABLE"
-  delete_checksum_row "$CANONICAL_STATE_KEY"
-  terraform -chdir="$DEPLOY_DIR" init -migrate-state -force-copy -input=false
+  "${ROOT_DIR}/scripts/generate_backend.sh" "$STATE_BUCKET" engine-02-deploy "$REGION" "$DEPLOY_DIR"
+  terraform -chdir="$DEPLOY_DIR" init -reconfigure -input=false -backend-config=use_lockfile=true
+  "${ROOT_DIR}/scripts/generate_backend.sh" "$STATE_BUCKET" engine "$REGION" "$DEPLOY_DIR"
+  terraform -chdir="$DEPLOY_DIR" init -migrate-state -force-copy -input=false -backend-config=use_lockfile=true
   migrated_resources="$(terraform -chdir="$DEPLOY_DIR" state list)"
   [ -n "$migrated_resources" ] || {
     echo "ERROR: migrated canonical engine state is empty; preserving legacy state" >&2
     exit 1
   }
   aws s3api delete-object --bucket "$STATE_BUCKET" --key "$LEGACY_STATE_KEY" >/dev/null
-  delete_checksum_row "$LEGACY_STATE_KEY"
 elif [ "$canonical_status" = present ] && [ "$legacy_status" = present ]; then
   echo "ERROR: both canonical and legacy engine state objects exist; refusing an ambiguous migration" >&2
   exit 1
 else
-  "${ROOT_DIR}/scripts/generate_backend.sh" "$STATE_BUCKET" engine "$REGION" "$DEPLOY_DIR" "$LOCK_TABLE"
-  terraform -chdir="$DEPLOY_DIR" init -reconfigure -input=false
+  "${ROOT_DIR}/scripts/generate_backend.sh" "$STATE_BUCKET" engine "$REGION" "$DEPLOY_DIR"
+  terraform -chdir="$DEPLOY_DIR" init -reconfigure -input=false -backend-config=use_lockfile=true
 fi
 (
   cd "$DEPLOY_DIR"

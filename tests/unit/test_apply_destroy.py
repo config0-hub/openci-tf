@@ -192,7 +192,7 @@ def test_intent_gate_apply_enabled_account_passes_folder_gate(monkeypatch):
                 "run_id": "plan-run",
                 "plan_sha256": "b" * 64,
                 "plan_artifact_name": "plan.tfplan",
-                "tf_runtime": "tofu:1.8.0",
+                "tf_runtime": "tofu:1.10.6",
                 "created_at": 1_700_000_000_000,
             }
         ),
@@ -388,7 +388,7 @@ def test_plan_lookup_marks_plan_stale_when_newer_mutation_succeeded(monkeypatch)
         mutation_action="destroy",
         commit_hash="a" * 40,
         account_id="123456789012",
-        expected_tf_runtime="tofu:1.8.0",
+        expected_tf_runtime="tofu:1.10.6",
     )
     assert result.match is None
     assert result.stale is True
@@ -2627,7 +2627,7 @@ def test_confirm_intent_carries_the_intents_frozen_account_binding(monkeypatch):
                 "b" * 64,
                 "plan.tfplan",
                 "123456789012",
-                "tofu:1.8.0",
+                "tofu:1.10.6",
                 frozen_binding,
             ),
         ),
@@ -2674,7 +2674,7 @@ def test_token_single_use_race(monkeypatch):
                 "b" * 64,
                 "plan.tfplan",
                 "123456789012",
-                "tofu:1.8.0",
+                "tofu:1.10.6",
                 {
                     "account_id": "123456789012",
                     "readonly_role_name": "openci-tf-executor-readonly",

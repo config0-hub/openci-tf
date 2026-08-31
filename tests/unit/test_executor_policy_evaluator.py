@@ -21,7 +21,6 @@ from tests.unit.iam_policy_evaluator import (
     render_poweruser_inline_policy,
 )
 
-_LOCK_TABLE = "arn:aws:dynamodb:us-east-1:222222222222:table/openci-tf-tf-locks"
 _TARGET_KEY = f"{_STATE_BUCKET}/targets/org/repo/folder.tfstate"
 _NON_TARGET_KEY = f"{_STATE_BUCKET}/deploy/terraform.tfstate"
 _LIST_PREFIX = {"s3:prefix": ["targets/foo"]}
@@ -129,103 +128,28 @@ def _effective(
     )
 
 
-@pytest.mark.parametrize(
-    "action",
-    [
-        "dynamodb:BatchWriteItem",
-        "dynamodb:TransactWriteItems",
-        "dynamodb:PartiQLDelete",
-        "dynamodb:CreateBackup",
-        "dynamodb:ExportTableToPointInTime",
-        "dynamodb:UpdateGlobalTable",
-        "dynamodb:DeleteTable",
-        "dynamodb:UpdateTable",
-    ],
-)
-def test_poweruser_denies_non_backend_lock_mutations(
-    poweruser_inline_policy: dict,
-    poweruser_boundary_policy: dict,
-    action: str,
-) -> None:
-    assert is_explicitly_denied(
-        poweruser_inline_policy,
-        action=action,
-        resource=_LOCK_TABLE,
-    )
-    assert not _effective(
-        poweruser_inline_policy,
-        poweruser_boundary_policy,
-        action=action,
-        resource=_LOCK_TABLE,
-    )
-
-
-@pytest.mark.parametrize(
-    "action",
-    [
-        "dynamodb:GetItem",
-        "dynamodb:PutItem",
-        "dynamodb:DeleteItem",
-        "dynamodb:UpdateItem",
-    ],
-)
-def test_poweruser_allows_backend_primitives_on_target_keys(
-    poweruser_inline_policy: dict,
-    poweruser_boundary_policy: dict,
-    action: str,
-) -> None:
-    assert _effective(
-        poweruser_inline_policy,
-        poweruser_boundary_policy,
-        action=action,
-        resource=_LOCK_TABLE,
-        context={"dynamodb:LeadingKeys": [_TARGET_KEY]},
-    )
-
-
-def test_poweruser_allows_describe_table_on_lock_table(
+def test_poweruser_rendered_policies_carry_no_lock_table_authority(
     poweruser_inline_policy: dict,
     poweruser_boundary_policy: dict,
 ) -> None:
-    assert not is_explicitly_denied(
-        poweruser_inline_policy,
-        action="dynamodb:DescribeTable",
-        resource=_LOCK_TABLE,
-    )
-    assert _effective(
-        poweruser_inline_policy,
-        poweruser_boundary_policy,
-        action="dynamodb:DescribeTable",
-        resource=_LOCK_TABLE,
-    )
+    """Decision 27: no DynamoDB statement remains in rendered executor policies."""
+    import json as _json
 
-
-@pytest.mark.parametrize(
-    "action",
-    [
-        "dynamodb:PutItem",
-        "dynamodb:DeleteItem",
-        "dynamodb:UpdateItem",
-    ],
-)
-def test_poweruser_denies_basic_writes_outside_targets(
-    poweruser_inline_policy: dict,
-    poweruser_boundary_policy: dict,
-    action: str,
-) -> None:
-    assert is_explicitly_denied(
-        poweruser_inline_policy,
-        action=action,
-        resource=_LOCK_TABLE,
-        context={"dynamodb:LeadingKeys": [_NON_TARGET_KEY]},
-    )
-    assert not _effective(
-        poweruser_inline_policy,
-        poweruser_boundary_policy,
-        action=action,
-        resource=_LOCK_TABLE,
-        context={"dynamodb:LeadingKeys": [_NON_TARGET_KEY]},
-    )
+    for policy in (poweruser_inline_policy, poweruser_boundary_policy):
+        rendered = _json.dumps(policy)
+        # The state lock table (<prefix>-tf-locks) is gone; the hub's internal
+        # coordination table (<prefix>-locks) may still appear in deny lists.
+        assert "tf-tf-locks" not in rendered
+        assert "dynamodb:LeadingKeys" not in rendered
+        for statement in policy["Statement"]:
+            if statement.get("Effect") != "Allow":
+                continue
+            actions = statement.get("Action", [])
+            if isinstance(actions, str):
+                actions = [actions]
+            assert not any(
+                action.startswith("dynamodb:") for action in actions
+            ), statement
 
 
 @pytest.mark.parametrize(

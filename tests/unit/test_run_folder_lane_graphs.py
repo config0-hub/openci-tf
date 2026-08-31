@@ -57,7 +57,7 @@ def test_non_pipeline_run_folder_collect_input_includes_step_index() -> None:
         "upstream_urls": {
             "infracost:0.10.39": "https://github.com/infracost/infracost/releases/download/v0.10.39/infracost-linux-amd64.tar.gz",
             "tfsec:1.28.10": "https://github.com/aquasecurity/tfsec/releases/download/v1.28.10/tfsec_1.28.10_linux_amd64.tar.gz",
-            "tofu:1.8.0": "https://github.com/opentofu/opentofu/releases/download/v1.8.0/tofu_1.8.0_linux_amd64.tar.gz",
+            "tofu:1.10.6": "https://github.com/opentofu/opentofu/releases/download/v1.10.6/tofu_1.10.6_linux_amd64.tar.gz",
         },
         "repo_name": "williaumwu/openci-test-gitops",
         "git_url": "https://github.com/williaumwu/openci-test-gitops.git",
@@ -83,7 +83,7 @@ def test_non_pipeline_run_folder_collect_input_includes_step_index() -> None:
         "c": {
             "version": 1,
             "timeout": 900,
-            "tf_runtime": "tofu:1.8.0",
+            "tf_runtime": "tofu:1.10.6",
             "account_alias": "primary",
             "execution_target": "lambda",
             "extra_flags": [],

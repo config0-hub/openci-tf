@@ -28,7 +28,7 @@ _COVERED_FOLDERS = {
     },
 }
 _UPSTREAM_URLS = {
-    "tofu:1.8.0": "https://downloads.example/tofu-1.8.0",
+    "tofu:1.10.6": "https://downloads.example/tofu-1.10.6",
     "tfsec:1.28.10": "https://downloads.example/tfsec-1.28.10",
     "infracost:0.10.39": "https://downloads.example/infracost-0.10.39",
 }
@@ -109,7 +109,7 @@ def test_sample_repo_folders_resolve_through_current_plan_contract():
         config = resolved["folder_configs"][folder]
         assert config["account_alias"] == expected["account_alias"]
         assert config["execution_target"] == "lambda"
-        assert config["tf_runtime"] == "tofu:1.8.0"
+        assert config["tf_runtime"] == "tofu:1.10.6"
         assert config["timeout"] == 900
 
 
@@ -121,7 +121,6 @@ def test_sample_repo_backends_match_scoped_lock_contract():
             "bucket": f"openci-tf-state-{account_id}",
             "key": f"targets/<REPO_ORG>/<REPO_NAME>/{folder}.tfstate",
             "region": "us-east-1",
-            "dynamodb_table": "openci-tf-tf-locks",
             "encrypt": "true",
         }
         terraform = "\n".join(

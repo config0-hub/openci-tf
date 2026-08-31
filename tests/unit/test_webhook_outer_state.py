@@ -56,7 +56,7 @@ def _event(command: str = "tf plan infra/vpc", *, delivery: str | None = _GUID_A
 
 def _repository(tmp_path) -> str:
     (tmp_path / ".openci_tf").mkdir()
-    (tmp_path / ".openci_tf" / "config.yaml").write_text("settings:\n  tf_runtime: tofu:1.8.0\n")
+    (tmp_path / ".openci_tf" / "config.yaml").write_text("settings:\n  tf_runtime: tofu:1.10.6\n")
     folder = tmp_path / "infra" / "vpc" / ".openci_tf"
     folder.mkdir(parents=True)
     (folder / "config.yaml").write_text("account_alias: target\n")
@@ -206,7 +206,7 @@ def test_webhook_starts_thin_safe_lane_and_validate_resolves_it(tmp_path, monkey
             "plan_sha256": "b" * 64,
             "plan_artifact_name": "plan.tfplan",
             "account_id": "123456789012",
-            "tf_runtime": "tofu:1.8.0",
+            "tf_runtime": "tofu:1.10.6",
             "account_binding": {
                 "account_id": "123456789012",
                 "readonly_role_name": "target",

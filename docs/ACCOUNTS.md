@@ -42,8 +42,8 @@ rules.
 Read-only executors attach AWS managed `ReadOnlyAccess` for infrastructure APIs,
 plus scoped permissions for Terraform backend state:
 
-- S3 object access under `targets/*` in the target state bucket.
-- DynamoDB lock access for lock IDs matching `<bucket>/targets/*`.
+- S3 object access under `targets/*` in the target state bucket, including the
+  S3 native lock file (`<key>.tflock`) written beside each state object.
 
 Explicit deny rules block install/control-plane prefixes such as `bootstrap/`,
 `deploy/`, `source/`, and `engine/`. Registered repositories should use backend
@@ -65,8 +65,10 @@ targets/<repo>/<folder>.tfstate
    # optional custom bucket: just target-onboard <hub-account-id> <state-bucket-name>
    ```
 
-   `target-onboard` checks the target state bucket and lock table, stores the hub
-   trust inputs in target-account SSM, and creates the readonly executor role.
+   `target-onboard` checks the backend state bucket (pass `--state-bucket` to
+   use an existing shared bucket; openci-tf creates no per-target bucket),
+   stores the hub trust inputs in target-account SSM, and creates the readonly
+   executor role.
 
 2. **Hub account credentials**
 
@@ -96,8 +98,10 @@ Use lower-level recipes only when the bundled journey cannot run.
 **Target account**
 
 1. Confirm caller identity with `aws sts get-caller-identity`.
-2. Ensure `openci-tf-state-<target-account-id>` and `openci-tf-tf-locks` exist.
-   `just bootstrap` creates both when needed.
+2. Ensure a backend state bucket exists (conventionally
+   `openci-tf-state-<target-account-id>`, or any existing bucket passed
+   explicitly). No lock table exists; state locking is the S3 native lock file
+   (tofu/terraform >= 1.10 pass `use_lockfile=true` at init).
 3. Store target-account install SSM values:
    - `hub_lambda_exec_role_arn`
    - `target_state_bucket_arn`
@@ -125,6 +129,27 @@ arn:aws:iam::<account_id>:role/<role_name>
 ```
 
 For mutation lanes it uses `<poweruser_role_name>` instead.
+
+## Shared state overrides (`state_bucket` / `state_key`)
+
+By default a folder's run session is scoped to the conventional pair
+`<project>-state-<account-id>` / `targets/<repo>/<folder>.tfstate`. A folder
+config may instead name the exact state object another system already writes:
+
+```yaml
+account_alias: primary
+state_bucket: tenant-state-bucket
+state_key: targets/<owner>/<repo>/<alias>/<account-id>/<region>/<project>/<stack>/<execgroup>/<stateful-id>/terraform.tfstate
+```
+
+Both keys must be set together and must mirror the folder's committed
+`backend.s3` block. At run time `prepare-and-submit` resolves the effective
+pair, checks it against the repository's `allowed_state_pairs` settings item
+(`pk=allowed_state_pairs`, `sk=<repo>`, attribute `pairs` holding
+`<bucket>/<key>` strings), and refuses the run when the pair is not
+registered. The rendered session policy is scoped to the effective pair, so an
+unregistered pair also gets AccessDenied at the IAM layer. State locking is the
+S3 native lock file (`<key>.tflock`); no DynamoDB lock table exists.
 
 ## How `tf report` spans accounts
 

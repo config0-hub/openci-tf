@@ -136,8 +136,9 @@ def test_deploy_root_supports_config0_addon_inputs():
     main = (_REPO_ROOT / "infra/deploy/main.tf").read_text(encoding="utf-8")
     for variable in ("install_mode", "state_bucket_name", "engine_name"):
         assert f'variable "{variable}"' in variables
-    assert "count = local.use_lock_table ? 1 : 0" in data
-    assert 'local.use_lock_table ? data.aws_dynamodb_table.locks[0].arn : ""' in main
+    assert "use_lock_table" not in data
+    assert "aws_dynamodb_table" not in data
+    assert "lock_table_arn" not in main
     assert 'target_account_wildcard = var.install_mode == "config0-addon"' in main
     assert "${local.engine_name}-codebuild" in main
     assert "${local.engine_name}-worker" in main
@@ -209,7 +210,7 @@ def test_register_repo_settings_item_matches_shell_registration_shape():
         git_url="https://github.com/owner/sample-target-repo.git",
         github_token_ssm="/openci-tf/clone-token/owner-sample-target-repo-control",
         upstream_urls_json=json.dumps(
-            {"tofu:1.9.0": "https://github.com/opentofu/opentofu/releases/download/v1.9.0/tofu_1.9.0_linux_amd64.tar.gz"}
+            {"tofu:1.12.6": "https://github.com/opentofu/opentofu/releases/download/v1.12.6/tofu_1.12.6_linux_amd64.tar.gz"}
         ),
         region="us-east-1",
         table="openci-tf-settings",
@@ -223,7 +224,7 @@ def test_register_repo_settings_item_matches_shell_registration_shape():
     assert item["pk"] == {"S": "repo"}
     assert item["sk"] == {"S": "trig"}
     assert item["webhook_secret_ssm"] == {"S": "/openci-tf/install/openci-tf/webhook_secret"}
-    assert item["upstream_urls"]["M"]["tofu:1.9.0"]["S"].startswith("https://")
+    assert item["upstream_urls"]["M"]["tofu:1.12.6"]["S"].startswith("https://")
 
 
 def test_register_repo_rejects_unpinned_upstream_urls():

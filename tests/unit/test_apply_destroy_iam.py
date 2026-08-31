@@ -26,7 +26,6 @@ def test_poweruser_module_has_power_user_attachment_only():
     assert 'policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"' not in source
     assert "DenyIamAndCloudFormationUnconditionally" in source
     assert "DenyStateBucketNonBackendPrimitives" in source
-    assert "DenyLockTableNonBackendPrimitives" in source
     assert "permissions_boundary" not in source
     assert "executor_poweruser_permissions_boundary" not in source
     assert "DenyProtectedHubResources" in source

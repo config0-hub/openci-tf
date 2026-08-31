@@ -797,11 +797,11 @@ def test_prepare_uploads_execution_scoped_package_key(monkeypatch, tmp_path):
         "deadline_at": "2099-01-01T00:00:00Z",
         "attempt": 0,
         "upstream_urls": {
-            "tofu:1.8.0": "https://tofu",
+            "tofu:1.10.6": "https://tofu",
             "tfsec:1.28.10": "https://tfsec",
             "infracost:0.10.39": "https://infracost",
         },
-        "folder_config": {"account_alias": "target", "tf_runtime": "tofu:1.8.0"},
+        "folder_config": {"account_alias": "target", "tf_runtime": "tofu:1.10.6"},
         "git_url": "https://github.com/org/repo.git",
         "repo_name": "org/repo",
         "commit_hash": "a" * 40,

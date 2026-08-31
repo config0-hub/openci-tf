@@ -95,26 +95,6 @@ resource "aws_iam_role_policy" "executor_remote" {
         Condition = { StringLike = { "s3:prefix" = "targets/*" } }
       },
       {
-        Sid       = "TerraformTargetLockReadWrite"
-        Effect    = "Allow"
-        Action    = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:UpdateItem", "dynamodb:DescribeTable"]
-        Resource  = var.lock_table_arn
-        Condition = { "ForAllValues:StringLike" = { "dynamodb:LeadingKeys" = ["*/targets/*"] } }
-      },
-      {
-        Sid      = "DenyLockTableBroadReads"
-        Effect   = "Deny"
-        Action   = ["dynamodb:Scan", "dynamodb:Query", "dynamodb:BatchGetItem", "dynamodb:PartiQLSelect"]
-        Resource = [var.lock_table_arn, "${var.lock_table_arn}/index/*"]
-      },
-      {
-        Sid       = "DenyLockItemsOutsideTargets"
-        Effect    = "Deny"
-        Action    = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:UpdateItem"]
-        Resource  = var.lock_table_arn
-        Condition = { "ForAllValues:StringNotLike" = { "dynamodb:LeadingKeys" = ["*/targets/*"] } }
-      },
-      {
         Sid      = "TerraformPlanTimeIamReadsScoped"
         Effect   = "Allow"
         Action   = local.terraform_plan_time_iam_read_scoped_actions
@@ -186,7 +166,7 @@ resource "aws_iam_role_policy" "executor_remote" {
         # apply/destroy), so only the privilege-escalation guards (IAM,
         # CloudFormation) stay denied. Without it, the full read-only-era deny
         # list is preserved bit-for-bit.
-        Sid    = "DenyInfrastructureMutationOutsideStateAndLock"
+        Sid    = "DenyInfrastructureMutationOutsideState"
         Effect = "Deny"
         Action = concat(
           [
@@ -206,7 +186,6 @@ resource "aws_iam_role_policy" "executor_remote" {
         NotResource = [
           var.state_bucket_arn,
           "${var.state_bucket_arn}/*",
-          var.lock_table_arn,
         ]
       },
     ]

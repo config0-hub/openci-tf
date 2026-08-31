@@ -59,14 +59,14 @@ def _plan_map_item() -> dict:
         "action": "plan",
         "attempt": 0,
         "budget": 3600, "deadline_at": "2999-01-01T00:00:00Z",
-        "c": {"account_alias": "target", "tf_runtime": "tofu:1.8.0"},
+        "c": {"account_alias": "target", "tf_runtime": "tofu:1.10.6"},
         "e": f"{'r' * 32}.infra/vpc.0",
     }
 
 
 def _shared_map_context() -> dict:
     return {
-        "upstream_urls": {"tofu:1.8.0": "https://example.com/tofu"},
+        "upstream_urls": {"tofu:1.10.6": "https://example.com/tofu"},
         "repo_name": "org/repo",
         "git_url": "https://github.com/org/repo.git",
         "commit_hash": "a" * 40,
@@ -115,8 +115,8 @@ def test_both_credential_retry_branches_preserve_mutation_pins():
         "folder": "infra/vpc",
         "action": "apply",
         "budget": 3600, "deadline_at": "2999-01-01T00:00:00Z",
-        "folder_config": {"account_alias": "target", "tf_runtime": "tofu:1.8.0"},
-        "upstream_urls": {"tofu:1.8.0": "https://example.com/tofu"},
+        "folder_config": {"account_alias": "target", "tf_runtime": "tofu:1.10.6"},
+        "upstream_urls": {"tofu:1.10.6": "https://example.com/tofu"},
         "repo_name": "org/repo",
         "git_url": "https://github.com/org/repo.git",
         "commit_hash": "a" * 40,
@@ -128,7 +128,7 @@ def test_both_credential_retry_branches_preserve_mutation_pins():
             "plan_sha256": "b" * 64,
             "plan_artifact_name": "plan.tfplan",
             "account_id": "123456789012",
-            "tf_runtime": "tofu:1.8.0",
+            "tf_runtime": "tofu:1.10.6",
         },
         "source_plan_run_id": "plan-run",
         "result": {"attempt": 0, "exec_id": "run.infra.0", "submitted_at": 1.0},
@@ -288,7 +288,7 @@ def test_plan_lookup_destroy_reads_destroy_pointer(monkeypatch):
         mutation_action="destroy",
         commit_hash="a" * 40,
         account_id="222222222222",
-        expected_tf_runtime="tofu:1.8.0",
+        expected_tf_runtime="tofu:1.10.6",
     )
 
     assert result.match == {
@@ -296,7 +296,7 @@ def test_plan_lookup_destroy_reads_destroy_pointer(monkeypatch):
         "folder": "infra/ec2",
         "plan_sha256": "d" * 64,
         "plan_artifact_name": "destroy.plan.tfplan",
-        "tf_runtime": "tofu:1.8.0",
+        "tf_runtime": "tofu:1.10.6",
         "created_at": 1_786_850_065_992,
     }
     assert result.stale is False
@@ -379,7 +379,7 @@ def test_plan_lookup_fallback_uses_pr_scoped_manifest_for_destroy(monkeypatch):
         mutation_action="destroy",
         commit_hash="a" * 40,
         account_id="222222222222",
-        expected_tf_runtime="tofu:1.8.0",
+        expected_tf_runtime="tofu:1.10.6",
     )
 
     assert result.match == {
@@ -387,7 +387,7 @@ def test_plan_lookup_fallback_uses_pr_scoped_manifest_for_destroy(monkeypatch):
         "folder": "infra/ec2",
         "plan_sha256": "e" * 64,
         "plan_artifact_name": "destroy.plan.tfplan",
-        "tf_runtime": "tofu:1.8.0",
+        "tf_runtime": "tofu:1.10.6",
         "created_at": 1_700_000_000_000,
     }
     assert result.stale is False
@@ -398,7 +398,7 @@ def test_plan_lookup_fallback_uses_pr_scoped_manifest_for_destroy(monkeypatch):
         "required_plan_action": "plan_destroy",
         "commit_hash": "a" * 40,
         "account_id": "222222222222",
-        "expected_tf_runtime": "tofu:1.8.0",
+        "expected_tf_runtime": "tofu:1.10.6",
         "repo_name": "org/repo",
         "pr_number": 7,
     }
@@ -460,7 +460,7 @@ def test_plan_lookup_rejects_source_plan_under_different_account(monkeypatch):
             mutation_action="apply",
             commit_hash="a" * 40,
             account_id="222222222222",
-            expected_tf_runtime="tofu:1.8.0",
+            expected_tf_runtime="tofu:1.10.6",
         ).match
         is None
     )
@@ -473,13 +473,13 @@ def test_prepare_and_submit_rejects_folder_pin_account_mismatch():
         "plan_sha256": "b" * 64,
         "plan_artifact_name": "plan.tfplan",
         "account_id": "111111111111",
-        "tf_runtime": "tofu:1.8.0",
+        "tf_runtime": "tofu:1.10.6",
     }
     with pytest.raises(ValueError, match="account_id does not match"):
         prepare_and_submit._validate_folder_pin(
             folder_pin,
             account_id="222222222222",
-            tf_runtime="tofu:1.8.0",
+            tf_runtime="tofu:1.10.6",
         )
 
 
@@ -502,7 +502,7 @@ def test_intent_gate_pins_current_account_and_runtime(monkeypatch):
                 "run_id": "plan-run",
                 "plan_sha256": "b" * 64,
                 "plan_artifact_name": "plan.tfplan",
-                "tf_runtime": "tofu:1.8.0",
+                "tf_runtime": "tofu:1.10.6",
                 "created_at": 1_700_000_000_000,
             }
         ),
@@ -510,7 +510,7 @@ def test_intent_gate_pins_current_account_and_runtime(monkeypatch):
     config = FolderConfig(
         account_alias="target",
         apply=MutationVerbConfig(allow=True),
-        tf_runtime="tofu:1.8.0",
+        tf_runtime="tofu:1.10.6",
     )
     result = evaluate_intent_gates(
         action="apply",
@@ -527,7 +527,7 @@ def test_intent_gate_pins_current_account_and_runtime(monkeypatch):
     assert result.record is not None
     pin = result.record.folder_pins[0]
     assert pin.account_id == "222222222222"
-    assert pin.tf_runtime == "tofu:1.8.0"
+    assert pin.tf_runtime == "tofu:1.10.6"
 
 
 def test_typed_safe_credential_retry_preserves_inputs_without_mutation_pins():
@@ -700,7 +700,7 @@ def test_plan_lookup_rejects_tampered_source_metadata_and_runtime_mismatch(monke
     committed_metadata_body = json.dumps(
         committed_metadata, separators=(",", ":")
     ).encode()
-    tampered_metadata = {**committed_metadata, "opentofu_runtime": "tofu:1.8.0"}
+    tampered_metadata = {**committed_metadata, "opentofu_runtime": "tofu:1.10.6"}
     tampered_metadata_body = json.dumps(
         tampered_metadata, separators=(",", ":")
     ).encode()
@@ -797,7 +797,7 @@ def test_plan_lookup_rejects_tampered_source_metadata_and_runtime_mismatch(monke
             required_plan_action="plan",
             commit_hash=commit_hash,
             account_id=account_id,
-            expected_tf_runtime="tofu:1.8.0",
+            expected_tf_runtime="tofu:1.10.6",
             repo_name="org/repo",
         )
         is None
@@ -842,7 +842,7 @@ def test_plan_lookup_rejects_tampered_source_metadata_and_runtime_mismatch(monke
             required_plan_action="plan",
             commit_hash=commit_hash,
             account_id=account_id,
-            expected_tf_runtime="tofu:1.8.0",
+            expected_tf_runtime="tofu:1.10.6",
             repo_name="org/repo",
         )
         is None

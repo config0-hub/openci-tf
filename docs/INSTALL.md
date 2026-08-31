@@ -88,8 +88,9 @@ allowed for each registered account alias.
 
 What each component does:
 
-1. **bootstrap** — state bucket `openci-tf-state-<account-id>` + DynamoDB lock
-   table `openci-tf-tf-locks`. Chicken-and-egg: the first apply uses LOCAL state
+1. **bootstrap** — state bucket `openci-tf-state-<account-id>`. State locking
+   is the S3 native lock file (`use_lockfile=true` at init; tofu/terraform
+   >= 1.10); no DynamoDB lock table exists. Chicken-and-egg: the first apply uses LOCAL state
    (the backend bucket does not exist yet), then the recipe generates
    `backend.tf` and migrates the state into the bucket it just created. Every
    other root starts on the S3 backend directly.
@@ -106,7 +107,7 @@ What each component does:
 4. **deploy** — the hub stack including same-account `openci-tf-executor-readonly`
    (hub-setup module). Cross-stack values are discovered with data-source lookups
    on deterministic names (foundation KMS alias and buckets, engine `openci-tf-init-job`
-   Lambda, lock table); only true config remains in tfvars. The recipe applies
+   Lambda); only true config remains in tfvars. The recipe applies
    `module.ecr` first, builds and pushes the Lambda container image at the fixed
    version in `IMAGE_VERSION` (`just docker-push`), then applies the rest.
 5. **target-create-aws-readonly** — creates `openci-tf-executor-readonly` in a
@@ -115,9 +116,9 @@ What each component does:
    from target credentials. Terraform derives the required `sts:ExternalId` as
    `openci-tf-` plus the first 16 lowercase hex chars of SHA-256 over
    `openci-tf:<hub-account-id>:<target-account-id>`. Target onboarding requires
-   the existing S3 state bucket and account-local `<project>-tf-locks` DynamoDB
-   table used by repository backends. The target install's own Terraform backend
-   remains S3-only.
+   only an existing S3 bucket for the role stack's own backend (pass
+   `--state-bucket` to use a shared bucket); openci-tf creates no per-target
+   state bucket and no lock table exists.
 6. **target-create-aws-poweruser** — optional mutation IAM for accounts that can
    run confirmed apply/destroy jobs. The role is separate from the readonly role
    and is assumed only by the apply/destroy lanes.
@@ -287,8 +288,7 @@ just verify-clean   # asserts no openci-tf footprint remains
 `uninstall` prompts whether to keep the state bucket + source copies as the
 surviving record (set `OPENCI_TF_KEEP_STATE=yes|no` for non-interactive runs).
 When not kept, the bootstrap destroy first migrates its own state back to
-local, empties the bucket (all versions), then destroys the bucket and lock
-table. SSM install parameters are deleted in both namespaces.
+local, empties the bucket (all versions), then destroys the bucket. SSM install parameters are deleted in both namespaces.
 
 After Terraform teardown, both `just uninstall` and `just bootstrap-destroy` run
 `scripts/cleanup_operator_footprint.sh`, which removes operator-managed resources
@@ -305,9 +305,9 @@ that survive `terraform destroy`:
 or executor-local/executor-remote roles remain.
 
 `just deploy-destroy` (used during `uninstall`) calls
-`scripts/terraform_unlock_stale_lock.sh` before `terraform destroy`. If a
-Terraform state lock exists on the deploy state, the script stops with exit code
-1, prints the lock holder and age, and shows the exact
+`scripts/terraform_unlock_stale_lock.sh` before `terraform destroy`. If an S3
+native lock file exists beside the deploy state object, the script stops with
+exit code 1, prints the lock holder and age, and shows the exact
 `terraform -chdir=infra/deploy force-unlock <lock-id>` command. It never
 unlocks automatically. Confirm no deploy is running, run that command, then
 retry `just uninstall` or `just deploy-destroy`.
@@ -345,12 +345,12 @@ is required.
    just target-onboard <12-digit-hub-account-id> [state-bucket-name]
    ```
 
-   Verifies the caller is the target account, confirms the existing S3 state bucket
-   (default `openci-tf-state-<target-account-id>`) and ACTIVE
-   `openci-tf-tf-locks` DynamoDB table, stores the hub role ARN and target bucket ARN
+   Verifies the caller is the target account, confirms the backend state bucket
+   (default `openci-tf-state-<target-account-id>`; pass a name to use an
+   existing shared bucket), stores the hub role ARN and target bucket ARN
    in install SSM, then runs `just target-create-aws-readonly`. Terraform derives the
-   target-role ExternalId; onboarding creates neither prerequisite. Running
-   `just bootstrap` in the target account provisions both when they do not exist.
+   target-role ExternalId; onboarding creates no bucket. No lock table exists;
+   state locking is the S3 native lock file.
 
 2. **Hub account** — with credentials for the hub account:
 
@@ -372,11 +372,15 @@ available for manual or recovery flows.
 lane binding, and state access rules.
 
 **Executor state contract:** PR-plan execution roles can only read/write Terraform
-state under the `targets/` prefix of the state bucket. Executors scope DynamoDB
-lock items to `LockID` values matching `<bucket>/targets/*`; broad reads and
-non-target lock keys are denied. Registered repositories MUST configure their
-backend state keys as `targets/<repo>/<folder>.tfstate`. Target role installs
-keep an S3-only backend; the lock table is required by repository execution.
+state under the `targets/` prefix of the state bucket, plus the S3 native lock
+file (`<key>.tflock`) beside each state object. Registered repositories keep
+their committed backend to bucket/key/region only (any terraform/tofu version
+can init it); openci-tf's own runs pass `-backend-config=use_lockfile=true` at
+init and pin tofu/terraform >= 1.10, so platform runs always lock. A human on
+an older version runs unlocked (warned, never blocked). By default backend
+state keys are `targets/<repo>/<folder>.tfstate`; a folder config may instead
+pin `state_bucket`/`state_key` to an exact registered state object (see the
+allowed state pairs below).
 The install control-plane state, the `source/` record, and `engine/` artifacts
 in the same bucket are explicitly denied to executors.
 

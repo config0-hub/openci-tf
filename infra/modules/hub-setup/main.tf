@@ -11,7 +11,6 @@ locals {
   executor_remote_role_name    = "${var.role_prefix}-executor-remote"
   executor_local_role_name     = "${var.role_prefix}-executor-local"
   hub_account_id               = data.aws_caller_identity.current.account_id
-  lock_enabled                 = var.lock_table_arn != ""
   prepare_role_arn             = "arn:aws:iam::${local.hub_account_id}:role/${var.role_prefix}-run-folder-prepare-and-submit"
   target_assumable_role_names = [
     local.executor_readonly_role_name,

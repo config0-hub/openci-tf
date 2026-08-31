@@ -76,12 +76,12 @@ Keep these as three separate SSM/KMS-backed credentials:
      --github-token-ssm /openci-tf/clone-token/ORG-REPO-control \
      --github-capability-collaborator KNOWN-DIRECT-COLLABORATOR \
      --github-capability-pr-number 123 \
-     --upstream-urls-json '{"terraform:1.8.5":"https://releases.hashicorp.com/terraform/1.8.5/terraform_1.8.5_linux_amd64.zip","tofu:1.8.0":"https://github.com/opentofu/opentofu/releases/download/v1.8.0/tofu_1.8.0_linux_amd64.tar.gz","tfsec:1.28.10":"https://github.com/aquasecurity/tfsec/releases/download/v1.28.10/tfsec_1.28.10_linux_amd64.tar.gz","infracost:0.10.39":"https://github.com/infracost/infracost/releases/download/v0.10.39/infracost-linux-amd64.tar.gz"}'
+     --upstream-urls-json '{"terraform:1.10.5":"https://releases.hashicorp.com/terraform/1.10.5/terraform_1.10.5_linux_amd64.zip","tofu:1.10.6":"https://github.com/opentofu/opentofu/releases/download/v1.10.6/tofu_1.10.6_linux_amd64.tar.gz","tfsec:1.28.10":"https://github.com/aquasecurity/tfsec/releases/download/v1.28.10/tfsec_1.28.10_linux_amd64.tar.gz","infracost:0.10.39":"https://github.com/infracost/infracost/releases/download/v0.10.39/infracost-linux-amd64.tar.gz"}'
    ```
 
 `upstream_urls` keys are exact pinned `binary:version` values. Include every
-runtime version your repo uses (for example both `terraform:1.8.5` and
-`terraform:1.9.8` when folders use both). Existing rows with a bare `terraform`
+runtime version your repo uses (for example both `terraform:1.10.5` and
+`terraform:1.12.2` when folders use both). Existing rows with a bare `terraform`
 or `tofu` key are accepted only when resolving one version of that binary.
 
 The verifier uses only `GET` endpoints. Required registration checks validate

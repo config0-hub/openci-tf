@@ -10,7 +10,6 @@ variables {
   role_prefix              = "openci-tf"
   hub_lambda_exec_role_arn = "arn:aws:iam::111111111111:role/openci-tf-hub-lambda-exec"
   state_bucket_arn         = "arn:aws:s3:::openci-tf-state-222222222222"
-  lock_table_arn           = "arn:aws:dynamodb:us-east-1:222222222222:table/openci-tf-tf-locks"
 }
 
 override_resource {

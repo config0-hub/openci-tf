@@ -77,7 +77,7 @@ def test_folder_config_from_dict_round_trip():
     raw = {
         "version": 1,
         "timeout": 300,
-        "tf_runtime": "tofu:1.8.0",
+        "tf_runtime": "tofu:1.10.6",
         "account_alias": "target",
         "execution_target": "lambda",
         "extra_flags": (),

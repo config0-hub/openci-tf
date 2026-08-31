@@ -85,7 +85,7 @@ TARGET ACCOUNT (each registered account)
 ├── ***  OPENCI-TF-EXECUTOR-READONLY  ***
 │       created by: just deploy                         (hub account)
 │                or just target-create-aws-readonly <hub-id> (remote account)
-│       permissions: ReadOnlyAccess + state-bucket/lock read-write
+│       permissions: ReadOnlyAccess + state-bucket read-write (S3 lock file)
 │       assumable by: READ lane only
 │
 └── ***  OPENCI-TF-EXECUTOR-POWERUSER  ***

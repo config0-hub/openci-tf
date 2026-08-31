@@ -43,10 +43,6 @@ resource "aws_iam_policy" "executor_readonly_permissions_boundary" {
               var.state_bucket_arn,
               "${var.state_bucket_arn}/*",
             ],
-            [for lock_statement in [
-              var.lock_table_arn,
-              "${var.lock_table_arn}/index/*",
-            ] : lock_statement if local.lock_enabled],
             [
               "${var.state_bucket_arn}/source/*",
               "${var.state_bucket_arn}/engine/*",
@@ -75,21 +71,6 @@ resource "aws_iam_policy" "executor_readonly_permissions_boundary" {
           Condition = { StringLike = { "s3:prefix" = "targets/*" } }
         },
       ],
-      [for lock_statement in [
-        {
-          Sid       = "BoundaryTerraformTargetLockReadWrite"
-          Effect    = "Allow"
-          Action    = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:UpdateItem"]
-          Resource  = var.lock_table_arn
-          Condition = { "ForAllValues:StringLike" = { "dynamodb:LeadingKeys" = ["*/targets/*"] } }
-        },
-        {
-          Sid      = "BoundaryTerraformTargetLockDescribe"
-          Effect   = "Allow"
-          Action   = ["dynamodb:DescribeTable"]
-          Resource = var.lock_table_arn
-        },
-      ] : lock_statement if local.lock_enabled],
       [
         {
           Sid      = "BoundaryTerraformPlanTimeIamReadsScoped"
@@ -151,28 +132,6 @@ resource "aws_iam_role_policy" "executor_readonly" {
           Condition = { StringLike = { "s3:prefix" = "targets/*" } }
         },
       ],
-      [for lock_statement in [
-        {
-          Sid       = "TerraformTargetLockReadWrite"
-          Effect    = "Allow"
-          Action    = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:UpdateItem", "dynamodb:DescribeTable"]
-          Resource  = var.lock_table_arn
-          Condition = { "ForAllValues:StringLike" = { "dynamodb:LeadingKeys" = ["*/targets/*"] } }
-        },
-        {
-          Sid      = "DenyLockTableBroadReads"
-          Effect   = "Deny"
-          Action   = ["dynamodb:Scan", "dynamodb:Query", "dynamodb:BatchGetItem", "dynamodb:PartiQLSelect"]
-          Resource = [var.lock_table_arn, "${var.lock_table_arn}/index/*"]
-        },
-        {
-          Sid       = "DenyLockItemsOutsideTargets"
-          Effect    = "Deny"
-          Action    = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:UpdateItem"]
-          Resource  = var.lock_table_arn
-          Condition = { "ForAllValues:StringNotLike" = { "dynamodb:LeadingKeys" = ["*/targets/*"] } }
-        },
-      ] : lock_statement if local.lock_enabled],
       [
         {
           Sid      = "TerraformPlanTimeIamReadsScoped"
@@ -242,7 +201,7 @@ resource "aws_iam_role_policy" "executor_readonly" {
           ]
         },
         {
-          Sid    = "DenyInfrastructureMutationOutsideStateAndLock"
+          Sid    = "DenyInfrastructureMutationOutsideState"
           Effect = "Deny"
           Action = concat(
             [
@@ -259,13 +218,10 @@ resource "aws_iam_role_policy" "executor_readonly" {
               "dynamodb:CreateTable", "dynamodb:DeleteTable", "dynamodb:UpdateTable",
             ],
           )
-          NotResource = concat(
-            [
-              var.state_bucket_arn,
-              "${var.state_bucket_arn}/*",
-            ],
-            local.lock_enabled ? [var.lock_table_arn] : [],
-          )
+          NotResource = [
+            var.state_bucket_arn,
+            "${var.state_bucket_arn}/*",
+          ]
         },
       ],
     )

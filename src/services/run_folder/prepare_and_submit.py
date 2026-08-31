@@ -25,7 +25,10 @@ from src.domain.accounts.binding import (
 )
 from src.domain.accounts.budget import compute_ttl
 from src.domain.accounts.external_id import derive_external_id
-from src.domain.accounts.target_session import render_target_session_policy
+from src.domain.accounts.target_session import (
+    render_target_session_policy,
+    resolve_effective_state_location,
+)
 from src.domain.cmd_builder.cmd_resolver import resolve_commands
 from src.domain.deadlines import remaining_seconds
 from src.domain.cmd_builder.installers import (
@@ -45,6 +48,7 @@ from src.domain.engine.presign import effective_horizon, validate_presign_budget
 from src.domain.engine.result import has_credential_expiry_signature
 from src.domain.ssm_env.resolve import resolve_ssm_env_vars
 from src.platform.aws import engine, s3, sops, sts
+from src.platform.aws.dynamo import get_allowed_state_pairs
 from src.platform.aws.run_registry import put_folder_submission
 from src.platform.aws.ssm import get_github_token, get_parameter
 from src.platform.git.clone import cleanup_clone, shallow_clone
@@ -117,6 +121,19 @@ def _validated_external_id(stored_external_id: object, target_account_id: str) -
             "account alias external_id does not match canonical derived ExternalId; re-run just register-target"
         )
     return derived
+
+
+def _require_allowed_state_pair(
+    *, repo_name: str, state_bucket: str, state_key: str
+) -> None:
+    """Refuse a folder-config state override that is not registered for the repo."""
+    pair = f"{state_bucket}/{state_key}"
+    allowed = get_allowed_state_pairs(repo_name)
+    if pair not in allowed:
+        raise ValueError(
+            f"state pair {pair!r} is not registered in allowed_state_pairs for "
+            f"repository {repo_name!r}; register the pair before running this folder"
+        )
 
 
 def _folder_config(event: dict) -> FolderConfig:
@@ -304,13 +321,28 @@ def handler(event: dict, _context: object) -> dict:
     binding = _account_binding(event)
     external_id = _validated_external_id(binding.external_id, binding.account_id)
     role_arn = _role_arn_for_lane(binding, lane_mode=lane_mode)
+    effective_state_bucket, effective_state_key = resolve_effective_state_location(
+        account_id=binding.account_id,
+        repo_name=str(event["repo_name"]),
+        folder=str(event["folder"]),
+        project_name=os.environ["PROJECT_NAME"],
+        state_bucket=config.state_bucket,
+        state_key=config.state_key,
+    )
+    if config.state_bucket:
+        _require_allowed_state_pair(
+            repo_name=str(event["repo_name"]),
+            state_bucket=effective_state_bucket,
+            state_key=effective_state_key,
+        )
     session_policy = render_target_session_policy(
         account_id=binding.account_id,
         repo_name=str(event["repo_name"]),
         folder=str(event["folder"]),
         action=str(action),
         project_name=os.environ["PROJECT_NAME"],
-        region=os.environ["AWS_REGION"],
+        state_bucket=config.state_bucket,
+        state_key=config.state_key,
     )
     upstream_urls = event["upstream_urls"]
     if not isinstance(upstream_urls, dict):

@@ -89,7 +89,7 @@ resource "aws_lambda_function" "console" {
     variables = {
       CONSOLE_STATIC_ROOT     = "/var/task/dist"
       CONSOLE_TOKEN_PARAMETER = local.console_token_parameter_name
-      OPENCI_TF_API_BASE         = data.aws_apigatewayv2_api.core.api_endpoint
+      OPENCI_TF_API_BASE      = data.aws_apigatewayv2_api.core.api_endpoint
     }
   }
 

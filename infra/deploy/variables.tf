@@ -24,7 +24,7 @@ variable "tags" {
 }
 
 variable "install_mode" {
-  description = "Install flavor: 'standalone' (own state bucket + DynamoDB lock table + enumerated target accounts) or 'config0-addon' (tenant-provided state bucket, S3 native lock file with no lock table, executor-* assume-role trust by name pattern)"
+  description = "Install flavor: 'standalone' (own state bucket + enumerated target accounts) or 'config0-addon' (tenant-provided state bucket, executor-* assume-role trust by name pattern). Both lock via the S3 native lock file; no DynamoDB lock table exists."
   type        = string
   default     = "standalone"
 

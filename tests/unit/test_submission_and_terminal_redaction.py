@@ -350,7 +350,7 @@ def test_prepare_handler_keeps_engine_acceptance_when_comment_fails(
             "account_binding": ["readonly", "poweruser", "external", 3600],
             "folder_pin": {
                 "account_id": "123456789012",
-                "tf_runtime": "tofu:1.8.0",
+                "tf_runtime": "tofu:1.10.6",
                 "source_run_id": "source",
                 "plan_sha256": "a" * 64,
                 "plan_artifact_name": "plan.tfplan",

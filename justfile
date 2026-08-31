@@ -33,8 +33,10 @@ config action key value="":
 
 # --- component recipes (each: SSM -> tfvars -> init/apply -> source copy) ----
 
-# State bucket + lock table. Chicken-and-egg: first run applies with LOCAL
-# state (the backend bucket does not exist yet), then migrates state into it.
+# State bucket. Chicken-and-egg: first run applies with LOCAL state (the
+# backend bucket does not exist yet), then migrates state into it. Backend
+# locking is the S3 native lock file (use_lockfile at init; tofu/terraform
+# >= 1.10). No DynamoDB lock table exists.
 bootstrap:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -46,33 +48,24 @@ bootstrap:
     ./scripts/write_tfvars.sh infra/bootstrap "aws_region={{OPENCI_TF_REGION}}"
     set +e; ./scripts/bucket_exists.sh "$BUCKET"; probe_rc=$?; set -e
     [ "$probe_rc" = 0 ] || [ "$probe_rc" = 1 ] || exit "$probe_rc"
-    LOCK_TABLE="{{OPENCI_TF_PROJECT}}-tf-locks"
     if [ -s infra/bootstrap/terraform.tfstate ]; then
         # Crash-window recovery: a previous run applied locally but never
         # finished migrating. Resume from LOCAL state ONLY if it provably
-        # tracks OUR bucket name AND OUR lock table name (no foreign resource
-        # may be reachable through this state), and any live bucket/table is
-        # not foreign-owned.
-        ./scripts/state_identity.sh infra/bootstrap/terraform.tfstate "$BUCKET" "$LOCK_TABLE" || exit 1
+        # tracks OUR bucket name (no foreign resource may be reachable
+        # through this state), and any live bucket is not foreign-owned.
+        ./scripts/state_identity.sh infra/bootstrap/terraform.tfstate "$BUCKET" || exit 1
         if [ "$probe_rc" = 0 ]; then
             OWNER="$(./scripts/bucket_owner.sh "$BUCKET")"
             [ "$OWNER" = "openci-tf-bootstrap" ] || [ "$OWNER" = "untagged" ] || {
                 echo "ERROR: bucket ${BUCKET} is owned by '${OWNER}'; refusing to adopt via local-state resume" >&2; exit 1; }
         fi
-        set +e; ./scripts/table_exists.sh "$LOCK_TABLE"; t_rc=$?; set -e
-        [ "$t_rc" = 0 ] || [ "$t_rc" = 1 ] || exit "$t_rc"
-        if [ "$t_rc" = 0 ]; then
-            T_OWNER="$(aws dynamodb list-tags-of-resource --resource-arn "arn:aws:dynamodb:{{OPENCI_TF_REGION}}:${ACCT}:table/${LOCK_TABLE}" --query "Tags[?Key=='ManagedBy'].Value" --output text)"
-            [ "$T_OWNER" = "openci-tf-bootstrap" ] || [ -z "$T_OWNER" ] || [ "$T_OWNER" = "None" ] || {
-                echo "ERROR: lock table ${LOCK_TABLE} is owned by '${T_OWNER}'; refusing local-state resume" >&2; exit 1; }
-        fi
-        echo "local bootstrap state survives and tracks ${BUCKET}/${LOCK_TABLE}: resuming interrupted bootstrap"
+        echo "local bootstrap state survives and tracks ${BUCKET}: resuming interrupted bootstrap"
         rm -f infra/bootstrap/backend.tf
         ./scripts/clear_stale_bootstrap_backend_cache.sh "$BUCKET"
         terraform -chdir=infra/bootstrap init -reconfigure -input=false
         terraform -chdir=infra/bootstrap apply -input=false -auto-approve
-        ./scripts/generate_backend.sh "$BUCKET" bootstrap "{{OPENCI_TF_REGION}}" infra/bootstrap "{{OPENCI_TF_PROJECT}}-tf-locks"
-        terraform -chdir=infra/bootstrap init -migrate-state -force-copy -input=false
+        ./scripts/generate_backend.sh "$BUCKET" bootstrap "{{OPENCI_TF_REGION}}" infra/bootstrap
+        terraform -chdir=infra/bootstrap init -migrate-state -force-copy -input=false -backend-config=use_lockfile=true
         rm -f infra/bootstrap/terraform.tfstate infra/bootstrap/terraform.tfstate.backup
     elif [ "$probe_rc" = 0 ]; then
         # Existing bucket: only proceed against a bucket this installer owns.
@@ -82,26 +75,25 @@ bootstrap:
             echo "Refusing to use a foreign bucket as the state backend. Rename OPENCI_TF_PROJECT or free the name." >&2
             exit 1
         fi
-        ./scripts/generate_backend.sh "$BUCKET" bootstrap "{{OPENCI_TF_REGION}}" infra/bootstrap "{{OPENCI_TF_PROJECT}}-tf-locks"
+        ./scripts/generate_backend.sh "$BUCKET" bootstrap "{{OPENCI_TF_REGION}}" infra/bootstrap
         ./scripts/clear_stale_bootstrap_backend_cache.sh "$BUCKET"
-        terraform -chdir=infra/bootstrap init -reconfigure -input=false
+        terraform -chdir=infra/bootstrap init -reconfigure -input=false -backend-config=use_lockfile=true
         terraform -chdir=infra/bootstrap apply -input=false -auto-approve
     else
         rm -f infra/bootstrap/backend.tf
         ./scripts/clear_stale_bootstrap_backend_cache.sh "$BUCKET"
         terraform -chdir=infra/bootstrap init -reconfigure -input=false
         terraform -chdir=infra/bootstrap apply -input=false -auto-approve
-        ./scripts/generate_backend.sh "$BUCKET" bootstrap "{{OPENCI_TF_REGION}}" infra/bootstrap "{{OPENCI_TF_PROJECT}}-tf-locks"
-        terraform -chdir=infra/bootstrap init -migrate-state -force-copy -input=false
+        ./scripts/generate_backend.sh "$BUCKET" bootstrap "{{OPENCI_TF_REGION}}" infra/bootstrap
+        terraform -chdir=infra/bootstrap init -migrate-state -force-copy -input=false -backend-config=use_lockfile=true
         rm -f infra/bootstrap/terraform.tfstate infra/bootstrap/terraform.tfstate.backup
     fi
     }
     phase_timing_run terraform-apply bootstrap_terraform_apply
     phase_timing_run upload-source ./scripts/upload_source.sh "$BUCKET" bootstrap . infra/bootstrap
 
-# Destroys the state bucket (after emptying it) and the lock table. Handles
-# partial first-install failures: bucket and lock table are recovered
-# independently (local bootstrap state, remote state, or direct table check).
+# Destroys the state bucket (after emptying it). Handles partial
+# first-install failures via local bootstrap state or remote state.
 bootstrap-destroy:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -109,27 +101,16 @@ bootstrap-destroy:
     source ./scripts/phase_timing.sh
     ACCT="$(aws sts get-caller-identity --query Account --output text)"
     BUCKET="{{OPENCI_TF_PROJECT}}-state-${ACCT}"
-    LOCK_TABLE="{{OPENCI_TF_PROJECT}}-tf-locks"
     bootstrap_destroy_terraform() {
     ./scripts/write_tfvars.sh infra/bootstrap "aws_region={{OPENCI_TF_REGION}}"
     set +e; ./scripts/bucket_exists.sh "$BUCKET"; bucket_rc=$?; set -e
     [ "$bucket_rc" = 0 ] || [ "$bucket_rc" = 1 ] || exit "$bucket_rc"
-    set +e; ./scripts/table_exists.sh "$LOCK_TABLE"; table_rc=$?; set -e
-    [ "$table_rc" = 0 ] || [ "$table_rc" = 1 ] || exit "$table_rc"
-    table_owner_ok() {
-        # Destructive work may proceed only when a live lock table is provably
-        # ours. Fail-loud: unreadable tags abort via set -e on the aws call.
-        local owner
-        owner="$(aws dynamodb list-tags-of-resource --resource-arn "arn:aws:dynamodb:{{OPENCI_TF_REGION}}:${ACCT}:table/${LOCK_TABLE}" --query "Tags[?Key=='ManagedBy'].Value" --output text)"
-        [ "$owner" = "openci-tf-bootstrap" ] || { echo "ERROR: lock table ${LOCK_TABLE} is owned by '${owner:-untagged}'; refusing to destroy" >&2; return 1; }
-    }
     if [ -s infra/bootstrap/terraform.tfstate ]; then
         # Crash-window recovery: local state is authoritative (a migrate never
-        # finished). Destroy from it ONLY if it provably tracks OUR bucket AND
-        # OUR lock table, and every live tracked resource passes ownership —
-        # ALL checks run BEFORE any destructive side effect (empty/destroy).
-        ./scripts/state_identity.sh infra/bootstrap/terraform.tfstate "$BUCKET" "$LOCK_TABLE" || exit 1
-        if [ "$table_rc" = 0 ]; then table_owner_ok || exit 1; fi
+        # finished). Destroy from it ONLY if it provably tracks OUR bucket,
+        # and every live tracked resource passes ownership — ALL checks run
+        # BEFORE any destructive side effect (empty/destroy).
+        ./scripts/state_identity.sh infra/bootstrap/terraform.tfstate "$BUCKET" || exit 1
         if [ "$bucket_rc" = 0 ]; then
             OWNER="$(./scripts/bucket_owner.sh "$BUCKET")"
             [ "$OWNER" = "openci-tf-bootstrap" ] || [ "$OWNER" = "untagged" ] || { echo "ERROR: bucket ${BUCKET} owned by '${OWNER}', refusing to destroy" >&2; exit 1; }
@@ -141,45 +122,31 @@ bootstrap-destroy:
         rm -f infra/bootstrap/terraform.tfstate infra/bootstrap/terraform.tfstate.backup
     elif [ "$bucket_rc" = 0 ]; then
         # Destructive teardown only on resources this installer provably owns
-        # (bucket AND lock table).
+        # (the bucket).
         OWNER="$(./scripts/bucket_owner.sh "$BUCKET")"   # aborts on unreadable tags
         if [ "$OWNER" != "openci-tf-bootstrap" ]; then
             echo "ERROR: bucket ${BUCKET} exists but is not owned by openci-tf-bootstrap (owner: ${OWNER})." >&2
             echo "Refusing to empty or destroy a bucket this installer cannot prove it created." >&2
             exit 1
         fi
-        if [ "$table_rc" = 0 ]; then table_owner_ok || exit 1; fi
-        ./scripts/generate_backend.sh "$BUCKET" bootstrap "{{OPENCI_TF_REGION}}" infra/bootstrap "$LOCK_TABLE"
-        terraform -chdir=infra/bootstrap init -reconfigure -input=false
+        ./scripts/generate_backend.sh "$BUCKET" bootstrap "{{OPENCI_TF_REGION}}" infra/bootstrap
+        terraform -chdir=infra/bootstrap init -reconfigure -input=false -backend-config=use_lockfile=true
         # Move state OUT of the bucket being destroyed, then empty and destroy.
         rm -f infra/bootstrap/backend.tf
-        terraform -chdir=infra/bootstrap init -migrate-state -force-copy -input=false
+        terraform -chdir=infra/bootstrap init -migrate-state -force-copy -input=false -backend-config=use_lockfile=true
         ./scripts/empty_bucket.sh "$BUCKET"
         terraform -chdir=infra/bootstrap destroy -input=false -auto-approve
         rm -f infra/bootstrap/terraform.tfstate infra/bootstrap/terraform.tfstate.backup
-    elif [ "$table_rc" = 0 ]; then
-        # No bucket, no local state, but the lock table survived. Delete it
-        # only if it is provably ours (ManagedBy tag).
-        TABLE_OWNER="$(aws dynamodb list-tags-of-resource --resource-arn "arn:aws:dynamodb:{{OPENCI_TF_REGION}}:${ACCT}:table/${LOCK_TABLE}" --query "Tags[?Key=='ManagedBy'].Value" --output text)"
-        if [ "$TABLE_OWNER" != "openci-tf-bootstrap" ]; then
-            echo "ERROR: lock table ${LOCK_TABLE} is not owned by openci-tf-bootstrap (owner: ${TABLE_OWNER:-untagged}); refusing to delete" >&2
-            exit 1
-        fi
-        echo "stranded lock table ${LOCK_TABLE} found without state; deleting directly"
-        aws dynamodb delete-table --table-name "$LOCK_TABLE" >/dev/null
-        aws dynamodb wait table-not-exists --table-name "$LOCK_TABLE"
     else
-        echo "no state bucket, local state, or lock table; nothing to destroy"
+        echo "no state bucket or local state; nothing to destroy"
     fi
     }
     phase_timing_run terraform-destroy bootstrap_destroy_terraform
     phase_timing_run operator-cleanup ./scripts/cleanup_operator_footprint.sh
-    # Post-destroy verification on EVERY path: both resources must be gone,
-    # and an indeterminate probe (403/expired STS) must fail, not pass.
+    # Post-destroy verification on EVERY path: the bucket must be gone, and
+    # an indeterminate probe (403/expired STS) must fail, not pass.
     set +e; ./scripts/bucket_exists.sh "$BUCKET"; post_bucket_rc=$?; set -e
     [ "$post_bucket_rc" = 1 ] || { echo "ERROR: ${BUCKET} still exists or is unverifiable (rc=${post_bucket_rc})" >&2; exit 1; }
-    set +e; ./scripts/table_exists.sh "$LOCK_TABLE"; post_table_rc=$?; set -e
-    [ "$post_table_rc" = 1 ] || { echo "ERROR: ${LOCK_TABLE} still exists or is unverifiable (rc=${post_table_rc})" >&2; exit 1; }
 
 foundation:
     #!/usr/bin/env bash
@@ -194,8 +161,8 @@ foundation:
     DONE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or done_lifecycle_days 365)"
     PLAN_RETENTION_DAYS="$(./scripts/ssm_config.sh get-or plan_retention_days 1)"
     ./scripts/write_tfvars.sh infra/foundation "aws_region={{OPENCI_TF_REGION}}" "name_prefix={{OPENCI_TF_PROJECT}}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_expiration_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}"
-    ./scripts/generate_backend.sh "$BUCKET" foundation "{{OPENCI_TF_REGION}}" infra/foundation "{{OPENCI_TF_PROJECT}}-tf-locks"
-    terraform -chdir=infra/foundation init -reconfigure -input=false
+    ./scripts/generate_backend.sh "$BUCKET" foundation "{{OPENCI_TF_REGION}}" infra/foundation
+    terraform -chdir=infra/foundation init -reconfigure -input=false -backend-config=use_lockfile=true
     terraform -chdir=infra/foundation apply -input=false -auto-approve
     }
     phase_timing_run terraform-apply foundation_apply
@@ -214,8 +181,8 @@ foundation-destroy:
     DONE_LIFECYCLE_DAYS="$(./scripts/ssm_config.sh get-or done_lifecycle_days 365)"
     PLAN_RETENTION_DAYS="$(./scripts/ssm_config.sh get-or plan_retention_days 1)"
     ./scripts/write_tfvars.sh infra/foundation "aws_region={{OPENCI_TF_REGION}}" "name_prefix={{OPENCI_TF_PROJECT}}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_expiration_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}"
-    ./scripts/generate_backend.sh "$BUCKET" foundation "{{OPENCI_TF_REGION}}" infra/foundation "{{OPENCI_TF_PROJECT}}-tf-locks"
-    terraform -chdir=infra/foundation init -reconfigure -input=false
+    ./scripts/generate_backend.sh "$BUCKET" foundation "{{OPENCI_TF_REGION}}" infra/foundation
+    terraform -chdir=infra/foundation init -reconfigure -input=false -backend-config=use_lockfile=true
     terraform -chdir=infra/foundation destroy -input=false -auto-approve
     }
     phase_timing_run terraform-destroy foundation_destroy
@@ -285,8 +252,8 @@ deploy:
     AWS_CONSOLE_ROLE_NAME="$(./scripts/ssm_config.sh get-or aws_console_role_name '')"
     ./scripts/write_tfvars.sh infra/deploy "aws_region={{OPENCI_TF_REGION}}" "image_tag=${IMAGE_TAG}" "target_account_ids=${TARGET_ACCOUNT_IDS}" "run_history_retention_days=${RUN_HISTORY_RETENTION_DAYS}" "run_folder_max_concurrency=${RUN_FOLDER_MAX_CONCURRENCY}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_lifecycle_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}" "api_caller_policy_json=${API_CALLER_POLICY_JSON}" "enable_apply=${ENABLE_APPLY}" "aws_console_start_url=${AWS_CONSOLE_START_URL}" "aws_console_role_name=${AWS_CONSOLE_ROLE_NAME}"
     deploy_terraform_init() {
-    ./scripts/generate_backend.sh "$BUCKET" deploy "{{OPENCI_TF_REGION}}" infra/deploy "{{OPENCI_TF_PROJECT}}-tf-locks"
-    terraform -chdir=infra/deploy init -reconfigure -input=false
+    ./scripts/generate_backend.sh "$BUCKET" deploy "{{OPENCI_TF_REGION}}" infra/deploy
+    terraform -chdir=infra/deploy init -reconfigure -input=false -backend-config=use_lockfile=true
     }
     phase_timing_run terraform-init deploy_terraform_init
     deploy_ecr_bootstrap() {
@@ -331,9 +298,9 @@ deploy-destroy:
     AWS_CONSOLE_ROLE_NAME="$(./scripts/ssm_config.sh get-or aws_console_role_name '')"
     deploy_destroy() {
     ./scripts/write_tfvars.sh infra/deploy "aws_region={{OPENCI_TF_REGION}}" "image_tag=${IMAGE_TAG}" "target_account_ids=${TARGET_ACCOUNT_IDS}" "run_history_retention_days=${RUN_HISTORY_RETENTION_DAYS}" "run_folder_max_concurrency=${RUN_FOLDER_MAX_CONCURRENCY}" "tmp_lifecycle_days=${TMP_LIFECYCLE_DAYS}" "package_lifecycle_days=${PACKAGE_LIFECYCLE_DAYS}" "done_lifecycle_days=${DONE_LIFECYCLE_DAYS}" "plan_retention_days=${PLAN_RETENTION_DAYS}" "api_caller_policy_json=${API_CALLER_POLICY_JSON}" "enable_apply=${ENABLE_APPLY}" "aws_console_start_url=${AWS_CONSOLE_START_URL}" "aws_console_role_name=${AWS_CONSOLE_ROLE_NAME}"
-    ./scripts/generate_backend.sh "$BUCKET" deploy "{{OPENCI_TF_REGION}}" infra/deploy "{{OPENCI_TF_PROJECT}}-tf-locks"
-    terraform -chdir=infra/deploy init -reconfigure -input=false
-    ./scripts/terraform_unlock_stale_lock.sh infra/deploy "$BUCKET" deploy "{{OPENCI_TF_PROJECT}}-tf-locks"
+    ./scripts/generate_backend.sh "$BUCKET" deploy "{{OPENCI_TF_REGION}}" infra/deploy
+    terraform -chdir=infra/deploy init -reconfigure -input=false -backend-config=use_lockfile=true
+    ./scripts/terraform_unlock_stale_lock.sh infra/deploy "$BUCKET" deploy
     terraform -chdir=infra/deploy destroy -input=false -auto-approve
     }
     phase_timing_run terraform-destroy deploy_destroy
@@ -389,10 +356,10 @@ console:
         exit 1
     }
     ./scripts/write_tfvars.sh infra/console "aws_region={{OPENCI_TF_REGION}}"
-    ./scripts/generate_backend.sh "$BUCKET" console "{{OPENCI_TF_REGION}}" infra/console "{{OPENCI_TF_PROJECT}}-tf-locks"
+    ./scripts/generate_backend.sh "$BUCKET" console "{{OPENCI_TF_REGION}}" infra/console
     npm --prefix frontend ci
     npm --prefix frontend run package:lambda
-    terraform -chdir=infra/console init -reconfigure -input=false
+    terraform -chdir=infra/console init -reconfigure -input=false -backend-config=use_lockfile=true
     terraform -chdir=infra/console apply -input=false -auto-approve
     ./scripts/upload_source.sh "$BUCKET" console . infra/console
     terraform -chdir=infra/console output -raw function_url
@@ -408,8 +375,8 @@ console-destroy:
         exit 1
     }
     ./scripts/write_tfvars.sh infra/console "aws_region={{OPENCI_TF_REGION}}"
-    ./scripts/generate_backend.sh "$BUCKET" console "{{OPENCI_TF_REGION}}" infra/console "{{OPENCI_TF_PROJECT}}-tf-locks"
-    terraform -chdir=infra/console init -reconfigure -input=false
+    ./scripts/generate_backend.sh "$BUCKET" console "{{OPENCI_TF_REGION}}" infra/console
+    terraform -chdir=infra/console init -reconfigure -input=false -backend-config=use_lockfile=true
     terraform -chdir=infra/console destroy -input=false -auto-approve
 
 # Same-account target connect; cross-account still uses the module with tfvars.
@@ -537,7 +504,7 @@ uninstall:
     phase_timing_run engine-destroy just engine-destroy || journey_rc=$?
     phase_timing_run foundation-destroy just foundation-destroy || journey_rc=$?
     if [ "$KEEP" = "yes" ]; then
-        echo "keeping state bucket + lock table + source copies as the surviving record"
+        echo "keeping state bucket + source copies as the surviving record"
     else
         phase_timing_run bootstrap-destroy just bootstrap-destroy || journey_rc=$?
     fi

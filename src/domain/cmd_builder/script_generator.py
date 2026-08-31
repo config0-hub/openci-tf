@@ -228,7 +228,7 @@ class ScriptParams:
     verb: str
     execution_target: str
     binary: str = "tofu"
-    binary_version: str = "1.8.0"
+    binary_version: str = "1.10.6"
     folder: str = "."
     normalize_drift: bool = False
     extra_flags: tuple[str, ...] = ()
@@ -363,7 +363,7 @@ cd {workdir}
 mkdir -p "${{ARTIFACTS_DIR:-/tmp}}"
 mkdir -p "${{ARTIFACTS_DIR:-/tmp}}/tf"
 {plan_setup}
-{tool} init -no-color 2>&1 | tee "${{ARTIFACTS_DIR:-/tmp}}/init.out"
+{tool} init -no-color -backend-config=use_lockfile=true 2>&1 | tee "${{ARTIFACTS_DIR:-/tmp}}/init.out"
 {tool} validate -no-color 2>&1 | tee "${{ARTIFACTS_DIR:-/tmp}}/validate.out"
 set +e
 {tool} {command}{out_flag} -no-color{detailed} {flags} 2>&1 | tee "${{ARTIFACTS_DIR:-/tmp}}/{output_path}"
@@ -424,7 +424,7 @@ upload_artifacts() {{
 export PATH={directory}:$PATH
 cd {workdir}
 mkdir -p "${{ARTIFACTS_DIR:-/tmp}}"
-{tool} init -no-color 2>&1 | tee "${{ARTIFACTS_DIR:-/tmp}}/init.out"
+{tool} init -no-color -backend-config=use_lockfile=true 2>&1 | tee "${{ARTIFACTS_DIR:-/tmp}}/init.out"
 {tool} validate -no-color 2>&1 | tee "${{ARTIFACTS_DIR:-/tmp}}/validate.out"
 export PLAN_FILE="${{ARTIFACTS_DIR:-/tmp}}/binary-plan/pinned.plan.tfplan"
 download_and_verify_pinned_plan

@@ -88,7 +88,7 @@ def test_execution_id_and_ttl_boundaries():
     assert compute_ttl(899, 3600) == 900 and compute_ttl(1800, 1800) == 1800
     with pytest.raises(BudgetUnmintableError): compute_ttl(1801, 1800)
     assert compute_budget(1, 2, 3, 4, 5, 6) == 21
-@pytest.mark.parametrize("config", ["account_alias: x\ntf_runtime: bad:1\n", "account_alias: x\nexecution_target: evil\n", "account_alias: x\ntimeout: 2\n", "tf_runtime: tofu:1.8.0\n"])
+@pytest.mark.parametrize("config", ["account_alias: x\ntf_runtime: bad:1\n", "account_alias: x\nexecution_target: evil\n", "account_alias: x\ntimeout: 2\n", "tf_runtime: tofu:1.10.6\n"])
 def test_malicious_config_rejected(config):
     with pytest.raises(ConfigValidationError): parse_folder_config(config)
 def test_folder_config_passes_flags_to_resolver():
@@ -102,3 +102,39 @@ def test_lock_acquire_duplicate_and_release():
     table.put_item.side_effect = ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "PutItem"); table.get_item.return_value = {"Item": {"holder_execution_id": "other"}}
     with pytest.raises(LockHeldError, match="other"): acquire(table, "o/r", "f", "exec", 10, 60)
     table.put_item.side_effect = None; release(table, "o/r", "f", "exec")
+
+def test_folder_config_state_override_requires_both_and_passes_through():
+    config = parse_folder_config(
+        "account_alias: target\n"
+        "state_bucket: tenant-state-bucket\n"
+        "state_key: targets/org/repo/primary/111111111111/us-east-1/p/s/e/i/terraform.tfstate\n"
+    )
+    assert config.state_bucket == "tenant-state-bucket"
+    assert config.state_key == (
+        "targets/org/repo/primary/111111111111/us-east-1/p/s/e/i/terraform.tfstate"
+    )
+    default = parse_folder_config("account_alias: target\n")
+    assert default.state_bucket == "" and default.state_key == ""
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        "account_alias: x\nstate_bucket: tenant-state-bucket\n",
+        "account_alias: x\nstate_key: targets/x/terraform.tfstate\n",
+        "account_alias: x\nstate_bucket: BAD_Bucket\nstate_key: targets/x/terraform.tfstate\n",
+        "account_alias: x\nstate_bucket: tenant-state-bucket\nstate_key: targets/*\n",
+        "account_alias: x\nstate_bucket: tenant-state-bucket\nstate_key: /leading/terraform.tfstate\n",
+        "account_alias: x\nstate_bucket: tenant-state-bucket\nstate_key: a/../b/terraform.tfstate\n",
+    ],
+)
+def test_folder_config_state_override_rejects_invalid_shapes(config):
+    with pytest.raises(ConfigValidationError):
+        parse_folder_config(config)
+
+
+def test_pre_lockfile_runtimes_are_rejected():
+    with pytest.raises(ConfigValidationError):
+        parse_folder_config("account_alias: x\ntf_runtime: tofu:1.8.0\n")
+    with pytest.raises(ConfigValidationError):
+        parse_folder_config("account_alias: x\ntf_runtime: terraform:1.9.8\n")

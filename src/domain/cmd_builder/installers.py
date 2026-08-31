@@ -27,23 +27,30 @@ PINNED_INSTALLERS: dict[tuple[str, str], PinnedInstaller] = {
         url="https://github.com/infracost/infracost/releases/download/v0.10.39/infracost-linux-amd64.tar.gz",
         sha256="4c23dc9de85bd16832a3ab9b2f5b48d24255af3df410ad8aab2609f4b2c47fc6",
     ),
-    ("terraform", "1.8.5"): PinnedInstaller(
-        url="https://releases.hashicorp.com/terraform/1.8.5/terraform_1.8.5_linux_amd64.zip",
-        sha256="bb1ee3e8314da76658002e2e584f2d8854b6def50b7f124e27b957a42ddacfea",
+    # Platform-driven runs pass -backend-config=use_lockfile=true at init, so
+    # every pinned runtime must support the S3 native lock file (>= 1.10).
+    ("terraform", "1.10.5"): PinnedInstaller(
+        url="https://releases.hashicorp.com/terraform/1.10.5/terraform_1.10.5_linux_amd64.zip",
+        sha256="0566a24f5332098b15716ebc394be503f4094acba5ba529bf5eb0698ed5e2a90",
     ),
-    ("terraform", "1.9.8"): PinnedInstaller(
-        url="https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip",
-        sha256="186e0145f5e5f2eb97cbd785bc78f21bae4ef15119349f6ad4fa535b83b10df8",
+    ("terraform", "1.12.2"): PinnedInstaller(
+        url="https://releases.hashicorp.com/terraform/1.12.2/terraform_1.12.2_linux_amd64.zip",
+        sha256="1eaed12ca41fcfe094da3d76a7e9aa0639ad3409c43be0103ee9f5a1ff4b7437",
     ),
-    ("tofu", "1.8.0"): PinnedInstaller(
-        url="https://github.com/opentofu/opentofu/releases/download/v1.8.0/tofu_1.8.0_linux_amd64.tar.gz",
-        sha256="cb54a998eae5dc5890a8d1adacf9b6fe396a57fc6257a9154ccdebb3035b63b8",
+    ("tofu", "1.10.6"): PinnedInstaller(
+        url="https://github.com/opentofu/opentofu/releases/download/v1.10.6/tofu_1.10.6_linux_amd64.tar.gz",
+        sha256="b6b46b4fd8dd0b96e624f2a2d5fbc4efae2fc0174529b37292775c847c2e7d2c",
     ),
-    ("tofu", "1.9.0"): PinnedInstaller(
-        url="https://github.com/opentofu/opentofu/releases/download/v1.9.0/tofu_1.9.0_linux_amd64.tar.gz",
-        sha256="48b1e2ec8dd23c107d350432b8d73a4393ef014f8eaee063bdf1d8f481083a42",
+    ("tofu", "1.12.6"): PinnedInstaller(
+        url="https://github.com/opentofu/opentofu/releases/download/v1.12.6/tofu_1.12.6_linux_amd64.tar.gz",
+        sha256="50a6106fa4de523d09c87af85f3db1dd47535fc005727fdca6852146476b88ec",
     ),
 }
+
+# S3 native lock file support (backend use_lockfile) requires >= 1.10 on both
+# tofu and terraform; platform-driven runs always lock, so older runtimes are
+# rejected outright instead of running unlocked.
+MIN_LOCKFILE_RUNTIME = (1, 10)
 
 def installer_key(binary: str, version: str) -> str:
     return f"{binary}:{version}"
@@ -78,6 +85,12 @@ def require_pinned_runtime(runtime: str) -> tuple[str, str]:
     except ValueError as error:
         supported = ", ".join(supported_runtime_keys())
         raise ValueError(f"unsupported unpinned tf_runtime {runtime}; supported pinned runtimes: {supported}") from error
+    major, minor = (int(part) for part in version.split(".")[:2])
+    if (major, minor) < MIN_LOCKFILE_RUNTIME:
+        raise ValueError(
+            f"tf_runtime {runtime} predates S3 native state locking; "
+            f"platform runs require {'.'.join(str(part) for part in MIN_LOCKFILE_RUNTIME)} or newer"
+        )
     return binary, version
 
 
