@@ -12,7 +12,7 @@ from src.domain.formatters.console_urls import (
     step_functions_execution_url,
 )
 from src.domain.formatters.artifacts import (
-    bound_comment,
+    bound_status_progress_comment,
     ensure_trailing_status_comment_marker,
     metadata_section,
     mutation_status_comment_in_progress,
@@ -183,5 +183,6 @@ def publish_codebuild_link(
     token = get_github_token(ssm_github_token_path)
     client = GitHubClient(token)
     marker = status_comment_marker_prefix(run_id)
-    _replace_bot_progress_comment(client, repo_name, pr_number, bound_comment(body), marker)
+    bounded_body = bound_status_progress_comment(body, run_id)
+    _replace_bot_progress_comment(client, repo_name, pr_number, bounded_body, marker)
     return {"updated": True, "codebuild_url": codebuild_url}

@@ -685,6 +685,27 @@ def _render_placeholder(event: dict[str, Any]) -> dict[str, Any]:
         }
     token = get_github_token(event["settings"]["ssm_openci_tf_github_token"])
     client = GitHubClient(token)
+    if _is_pipeline_mutation(event, action) and action in {"apply", "destroy"}:
+        cleanup_warnings: list[str] = []
+        if not defer_command_comment_cleanup(action):
+            cleanup_warnings.extend(
+                delete_acknowledged_command_comment(
+                    client,
+                    repo,
+                    webhook.get("comment_id")
+                    if isinstance(webhook.get("comment_id"), int)
+                    else None,
+                )
+            )
+        return _with_cleanup_warnings(
+            {
+                "placeholder_rendered": False,
+                "placeholder_skipped": (
+                    "pipeline mutation aggregate is the status surface until CodeBuild progress"
+                ),
+            },
+            cleanup_warnings,
+        )
     pipeline_plan_focus = _pipeline_plan_focus_enabled(event)
     for item in folders:
         folder = item["folder"]

@@ -10,7 +10,9 @@ import pytest
 import requests
 
 from src.domain.formatters.artifacts import (
+    _MAX_COMMENT_CHARS,
     bound_comment,
+    bound_status_progress_comment,
     ensure_trailing_status_comment_marker,
     mutation_status_comment_in_progress,
     pipeline_mutation_aggregate_comment,
@@ -433,3 +435,258 @@ def test_ensure_trailing_status_comment_marker_recenters_buried_marker() -> None
     fixed = ensure_trailing_status_comment_marker(buried, _PR14_RUN_ID)
     prefix = status_comment_marker_prefix(_PR14_RUN_ID)
     assert body_has_status_comment_marker_prefix(fixed, prefix)
+
+
+def test_pipeline_mutation_placeholder_skips_per_folder_and_summary(monkeypatch) -> None:
+    posted: list[tuple[str, str, str]] = []
+    cleanup_calls: list[int | None] = []
+
+    monkeypatch.setattr(render_handler, "get_github_token", lambda _: "token")
+    monkeypatch.setattr(render_handler, "GitHubClient", lambda _: object())
+    monkeypatch.setattr(
+        render_handler,
+        "_delete_and_repost",
+        lambda _client, repo, pr, body, action, folder, **kwargs: (
+            posted.append((repo, action, folder)) or 9100
+        ),
+    )
+    monkeypatch.setattr(
+        render_handler,
+        "delete_acknowledged_command_comment",
+        lambda _client, _repo, comment_id: cleanup_calls.append(comment_id) or [],
+    )
+
+    result = render_handler._render_placeholder(
+        {
+            "placeholder": True,
+            "action": "apply",
+            "run_id": _PR14_RUN_ID,
+            "webhook_info": {
+                "repo_name": "williaumwu/openci-test-gitops",
+                "pr_number": 14,
+                "commit_hash": _PR14_COMMIT,
+                "pipeline": "acceptance-b6be906",
+                "pipeline_step_index": 1,
+                "pipeline_step_count": 2,
+                "comment_id": 5472162844,
+            },
+            "settings": {"ssm_openci_tf_github_token": "/token"},
+            "map_items": [
+                {"folder": _PR14_FOLDER, "account_id": "998038917735"},
+                {"folder": "terraform/primary/ap-northeast-1/03-sqs", "account_id": "998038917735"},
+            ],
+            "skipped": [],
+            "execution_arn": (
+                "arn:aws:states:us-east-1:998038917735:execution:openci-tf-apply:"
+                f"{_PR14_RUN_ID}"
+            ),
+        }
+    )
+
+    assert result["placeholder_rendered"] is False
+    assert "aggregate" in result["placeholder_skipped"]
+    assert posted == []
+    assert cleanup_calls == []
+
+
+def test_single_folder_apply_placeholder_still_posts(monkeypatch) -> None:
+    posted: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(render_handler, "get_github_token", lambda _: "token")
+    monkeypatch.setattr(render_handler, "GitHubClient", lambda _: object())
+    monkeypatch.setattr(
+        render_handler,
+        "_delete_and_repost",
+        lambda _client, _repo, _pr, _body, action, folder, **kwargs: (
+            posted.append((action, folder)) or 9100
+        ),
+    )
+
+    result = render_handler._render_placeholder(
+        {
+            "placeholder": True,
+            "action": "apply",
+            "run_id": _PR14_RUN_ID,
+            "webhook_info": {
+                "repo_name": "williaumwu/openci-test-gitops",
+                "pr_number": 14,
+                "commit_hash": _PR14_COMMIT,
+            },
+            "settings": {"ssm_openci_tf_github_token": "/token"},
+            "map_items": [{"folder": _PR14_FOLDER, "account_id": "998038917735"}],
+            "skipped": [],
+            "execution_arn": (
+                "arn:aws:states:us-east-1:998038917735:execution:openci-tf-apply:"
+                f"{_PR14_RUN_ID}"
+            ),
+        }
+    )
+
+    assert result["placeholder_rendered"] is True
+    assert posted == [("apply", _PR14_FOLDER), ("apply", "all")]
+
+
+def test_pipeline_failure_before_codebuild_leaves_no_in_progress_comment(monkeypatch) -> None:
+    posted: list[str] = []
+    memory_client_holder: dict[str, _MemoryGitHubClient] = {}
+
+    class Client(_MemoryGitHubClient):
+        def __init__(self):
+            super().__init__({})
+
+    memory_client_holder["client"] = Client()
+    monkeypatch.setattr(render_handler, "get_github_token", lambda _: "token")
+    monkeypatch.setattr(
+        render_handler, "GitHubClient", lambda _: memory_client_holder["client"]
+    )
+    monkeypatch.setattr(
+        render_handler,
+        "_delete_and_repost_unmanaged",
+        lambda _client, _repo, _pr, body, *_args: posted.append(body),
+    )
+    monkeypatch.setattr(render_handler, "_cleanup_terminal_mutation_comments", lambda *_args: [])
+
+    placeholder = render_handler._render_placeholder(
+        {
+            "placeholder": True,
+            "action": "apply",
+            "run_id": _PR14_RUN_ID,
+            "webhook_info": {
+                "repo_name": "williaumwu/openci-test-gitops",
+                "pr_number": 14,
+                "commit_hash": _PR14_COMMIT,
+                "pipeline": "acceptance-b6be906",
+                "pipeline_step_index": 1,
+                "pipeline_step_count": 2,
+            },
+            "settings": {"ssm_openci_tf_github_token": "/token"},
+            "map_items": [{"folder": _PR14_FOLDER, "account_id": "998038917735"}],
+            "skipped": [],
+            "execution_arn": (
+                "arn:aws:states:us-east-1:998038917735:execution:openci-tf-apply:"
+                f"{_PR14_RUN_ID}"
+            ),
+        }
+    )
+    assert placeholder["placeholder_rendered"] is False
+
+    failure = render_handler._render_pipeline_failure(
+        {
+            "run_id": _PR14_RUN_ID,
+            "action": "apply",
+            "webhook_info": {
+                "repo_name": "williaumwu/openci-test-gitops",
+                "pr_number": 14,
+                "commit_hash": _PR14_COMMIT,
+                "pipeline": "acceptance-b6be906",
+            },
+            "settings": {"ssm_openci_tf_github_token": "/token"},
+            "pipeline_failure": {
+                "failed_step": _PR14_FOLDER,
+                "action": "apply",
+            },
+        }
+    )
+
+    assert failure["pipeline_failure_rendered"] is True
+    assert memory_client_holder["client"].deleted == []
+    assert len(posted) == 1
+    assert "pipeline failed" in posted[0]
+    assert all("in progress" not in body for body in posted)
+
+
+def test_oversized_progress_body_keeps_exactly_one_trailing_status_marker() -> None:
+    body = _production_progress_body()
+    prefix = status_comment_marker_prefix(_PR14_RUN_ID)
+    marker = status_comment_marker(_PR14_RUN_ID, now=1_788_138_982)
+    padded = f"{body}\n\n{'x' * (_MAX_COMMENT_CHARS + 10_000)}"
+    fixed = ensure_trailing_status_comment_marker(padded, _PR14_RUN_ID)
+    bounded = bound_status_progress_comment(fixed, _PR14_RUN_ID)
+
+    assert len(bounded) <= _MAX_COMMENT_CHARS
+    assert body_has_status_comment_marker_prefix(bounded, prefix)
+    assert bounded.rstrip().endswith(marker)
+    assert bounded.count(marker) == 1
+
+
+def test_pipeline_terminal_render_removes_codebuild_progress_comment(monkeypatch) -> None:
+    progress_body = bound_status_progress_comment(_production_progress_body(), _PR14_RUN_ID)
+    comments = {9500: progress_body}
+    posted: list[str] = []
+    memory_client_holder: dict[str, _MemoryGitHubClient] = {}
+
+    class Client(_MemoryGitHubClient):
+        def create_comment(self, _repo, _pr, body):
+            posted.append(body)
+            return 9600
+
+    memory_client_holder["client"] = Client(comments)
+    monkeypatch.setenv("LOCKS_TABLE_NAME", "locks")
+    monkeypatch.setenv("TMP_BUCKET_NAME", "tmp")
+    monkeypatch.setattr(render_handler, "get_github_token", lambda _: "token")
+    monkeypatch.setattr(
+        render_handler.boto3,
+        "resource",
+        lambda *_: SimpleNamespace(Table=lambda _: object()),
+    )
+    monkeypatch.setattr(
+        render_handler,
+        "list_text_prefix",
+        lambda *_args, **_kwargs: {
+            "plan-show.out": "Plan: 1 to add",
+            "apply.out": "Apply complete!",
+        },
+    )
+    monkeypatch.setattr(render_handler, "_plan_artifact_metadata", lambda *_, **__: None)
+    monkeypatch.setattr(render_handler.run_lock, "release", lambda *_, **__: None)
+    monkeypatch.setattr(render_handler, "_update_run_registry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(render_handler, "_cleanup_terminal_mutation_comments", lambda *_args: [])
+    monkeypatch.setattr(
+        render_handler, "GitHubClient", lambda _: memory_client_holder["client"]
+    )
+    monkeypatch.setattr(
+        "src.platform.aws.run_registry.pipeline_aggregate.get_pipeline_aggregate_state",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "src.platform.aws.run_registry.pipeline_aggregate.save_pipeline_aggregate_state",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        render_handler,
+        "_upsert_managed_comment",
+        lambda *_args, **_kwargs: 9700,
+    )
+
+    result = render_handler.handler(
+        {
+            "run_id": _PR14_RUN_ID,
+            "action": "apply",
+            "webhook_info": {
+                "repo_name": "williaumwu/openci-test-gitops",
+                "pr_number": 14,
+                "commit_hash": _PR14_COMMIT,
+                "pipeline": "acceptance-b6be906",
+                "pipeline_step_index": 1,
+                "pipeline_step_count": 2,
+                "pipeline_sha256": "abc",
+                "trigger_id": "trigger-1",
+            },
+            "settings": {"ssm_openci_tf_github_token": "/token"},
+            "outcomes": [
+                {
+                    "folder": _PR14_FOLDER,
+                    "account_id": "998038917735",
+                    "execution_id": "inner.apply.0",
+                    "status": "succeeded",
+                    "succeeded": True,
+                }
+            ],
+            "skipped": [],
+        },
+        None,
+    )
+
+    assert result["rendered"] is True
+    assert memory_client_holder["client"].deleted == [9500]
+    assert all("in progress" not in body for body in posted)

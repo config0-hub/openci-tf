@@ -24,6 +24,7 @@ from src.domain.formatters.comment_bounds import (  # noqa: F401  (re-exported)
     _MAX_COMMENT_CHARS,
     bound_comment,
 )
+from src.domain.github.comment_object_id import body_has_status_comment_marker_prefix
 from src.domain.formatters.command_text import (
     normalized_command_context_line,
     redact_confirm_token,
@@ -1513,6 +1514,38 @@ def ensure_trailing_status_comment_marker(body: str, run_id: str) -> str:
         kept.pop()
     kept.extend(["", marker])
     return "\n".join(kept)
+
+
+def bound_status_progress_comment(
+    body: str, run_id: str, *, max_chars: int = _MAX_COMMENT_CHARS
+) -> str:
+    """Bound a mutation progress body while preserving the run status marker as a suffix."""
+    prefix = status_comment_marker_prefix(run_id)
+    if not body_has_status_comment_marker_prefix(body, prefix):
+        raise ValueError(
+            f"mutation progress body missing trailing status marker for run {run_id}"
+        )
+    marker: str | None = None
+    kept: list[str] = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(prefix):
+            if marker is not None:
+                raise ValueError(
+                    "mutation progress body must contain exactly one status marker "
+                    f"for run {run_id}"
+                )
+            marker = stripped
+            continue
+        kept.append(line)
+    if marker is None:
+        raise ValueError(
+            f"mutation progress body missing status marker for run {run_id}"
+        )
+    while kept and not kept[-1].strip():
+        kept.pop()
+    visible = "\n".join(kept)
+    return bound_comment(visible, max_chars=max_chars, suffix=f"\n\n{marker}")
 
 
 def status_comment_in_progress(
