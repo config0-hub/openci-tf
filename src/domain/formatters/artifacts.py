@@ -1496,6 +1496,25 @@ def status_comment_marker_prefix(run_id: str) -> str:
     return f"#openci-tf:::status_comment\t{run_id}\t"
 
 
+def ensure_trailing_status_comment_marker(body: str, run_id: str) -> str:
+    """Keep this run's transient status marker as the final non-empty line."""
+    prefix = status_comment_marker_prefix(run_id)
+    marker: str | None = None
+    kept: list[str] = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(prefix):
+            marker = stripped
+            continue
+        kept.append(line)
+    if marker is None:
+        return body
+    while kept and not kept[-1].strip():
+        kept.pop()
+    kept.extend(["", marker])
+    return "\n".join(kept)
+
+
 def status_comment_in_progress(
     commit_hash: str, console_url: str, run_id: str, *, now: int | None = None
 ) -> str:
@@ -2026,6 +2045,15 @@ def pipeline_plan_preview_comment(
     return "\n".join(lines).rstrip()
 
 
+def _pipeline_checkpoint_needs_confirmation_note(checkpoint_rows: list[dict[str, Any]]) -> bool:
+    if not checkpoint_rows:
+        return False
+    last = checkpoint_rows[-1]
+    if last.get("confirmation_status") == "Confirmation required":
+        return True
+    return last.get("result_label") == "Plan ready ⏳"
+
+
 def _pipeline_mutation_note(action: str) -> str:
     if action == "destroy":
         return (
@@ -2085,8 +2113,11 @@ def pipeline_mutation_aggregate_comment(
     lines = [
         f"> **Pipeline {action} · checkpoint {checkpoint_rows[-1]['checkpoint_index']}/{checkpoint_count}**",
         "",
-        _pipeline_mutation_note(action),
-        "",
+    ]
+    if _pipeline_checkpoint_needs_confirmation_note(checkpoint_rows):
+        lines.extend([_pipeline_mutation_note(action), ""])
+    lines.extend(
+        [
         (
             f"**{checkpoint_count} checkpoint{'s' if checkpoint_count != 1 else ''}** · "
             f"**{succeeded} succeeded** · **{failed} failed**"
@@ -2095,7 +2126,8 @@ def pipeline_mutation_aggregate_comment(
         "",
         "| Step | Folder | Plan | Confirmation | Result |",
         "|---|---|---|---|---|",
-    ]
+        ]
+    )
     for row in checkpoint_rows:
         plan_label = row.get("plan_label") or _pipeline_mutation_plan_label(
             action, replanned=bool(row.get("replanned_after_prior"))

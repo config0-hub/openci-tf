@@ -10,6 +10,7 @@ import requests
 
 from src.domain.formatters.artifacts import (
     bound_comment,
+    ensure_trailing_status_comment_marker,
     metadata_section,
     prominent_command_header,
     status_comment_marker_prefix,
@@ -172,7 +173,10 @@ def _with_command_context(
         )
         if metadata:
             parts.append(metadata)
-    return "\n\n".join(parts)
+    composed = "\n\n".join(parts)
+    if run_id and status_comment_marker_prefix(run_id) in composed:
+        composed = ensure_trailing_status_comment_marker(composed, run_id)
+    return composed
 
 
 def _with_cleanup_warnings(result: dict[str, Any], warnings: list[str]) -> dict[str, Any]:

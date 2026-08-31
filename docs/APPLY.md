@@ -28,6 +28,8 @@ CodeBuild runs `tofu show` against the exact pinned plan artifact downloaded fro
 
 Engine acceptance is authoritative. The inner folder service writes create-only run-registry acceptance fields containing the trigger/execution identity before attempting the CodeBuild progress comment. Later notification updates are conditionally bound to that accepted identity and cannot change its `status`. The returned envelope keeps `submission_status: accepted`; a GitHub/API failure is recorded separately as `notification_status: failed`, `notification_failed: true`, and a compact redacted `notification_error`. Notification failure never turns accepted mutation work into a preparation failure.
 
+Apply and destroy progress comments are transient. They include Step Functions and CodeBuild links while the mutation runs. The hidden `#openci-tf:::status_comment` marker for a run must remain the final non-empty line after any command context or Metadata so terminal render can delete the comment. Terminal apply/destroy success or failure requires that transient progress comment to be gone; a structurally invalid marker placement is not deleted silently.
+
 ## Commands
 
 | Command | Step | Behavior |
@@ -87,6 +89,8 @@ Metadata section; confirmation tokens remain redacted.
 Multi-folder pipeline apply and destroy update one stable managed PR comment after
 each checkpoint. The comment shows the fresh pinned plan, confirmation status, and
 the next required `tf apply pipeline` / `tf destroy pipeline` command before Metadata.
+The long IMPORTANT/CAUTION fresh-plan explanation appears only while the current
+checkpoint is waiting for confirmation; terminal checkpoint success or failure omits it.
 Aggregate destroy summaries for ad hoc single-folder destroy still list every folder
 with `Destroy succeeded ✅` (or failed/skipped variants).
 

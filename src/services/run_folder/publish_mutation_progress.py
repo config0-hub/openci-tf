@@ -13,6 +13,7 @@ from src.domain.formatters.console_urls import (
 )
 from src.domain.formatters.artifacts import (
     bound_comment,
+    ensure_trailing_status_comment_marker,
     metadata_section,
     mutation_status_comment_in_progress,
     status_comment_marker_prefix,
@@ -86,7 +87,7 @@ def _progress_body_with_command_context(
             run_id=run_id,
             commit_hash=commit_hash,
         )
-    return f"{body}\n\n{context}"
+    return ensure_trailing_status_comment_marker(f"{body}\n\n{context}", run_id)
 
 
 def _replace_bot_progress_comment(

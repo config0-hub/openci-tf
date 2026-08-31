@@ -68,6 +68,8 @@ Expected behavior:
   `tofu show` against the pinned plan, then applies that exact plan.
 - Terminal comments show success or failure, CodeBuild link, source plan ID, and
   bounded command output.
+- In-progress apply/destroy comments are transient and are removed when the terminal
+  comment is posted.
 
 ## US-04 — Destroy one folder after destroy plan and confirmation
 
@@ -85,6 +87,7 @@ Expected behavior:
 - Confirmation starts the destroy lane, which uses CodeBuild only and applies the
   pinned destroy plan.
 - Destroy output is bounded and attached to the terminal PR comment.
+- The in-progress destroy comment is removed when the terminal comment is posted.
 
 ## US-05 — Block invalid or unauthorized commands
 
@@ -144,6 +147,8 @@ Expected behavior:
 
 - Each step creates its own intent and confirmation token.
 - A successful step comment names the next step command when another step remains.
+- Pipeline aggregate comments show the fresh-plan safety explanation only while a
+  checkpoint is waiting for confirmation, not on terminal success or failure.
 - No later step starts without its own confirmation.
 - The final step reports pipeline completion.
 
