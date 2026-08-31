@@ -26,16 +26,17 @@ data "aws_ecr_image" "openci_tf" {
 }
 
 module "hub_setup" {
-  source             = "../modules/hub-setup"
-  role_prefix        = var.project_name
-  target_account_ids = var.target_account_ids
-  state_bucket_arn   = local.state_bucket_arn
-  lock_table_arn     = data.aws_dynamodb_table.locks.arn
-  enable_apply       = var.enable_apply
+  source                  = "../modules/hub-setup"
+  role_prefix             = var.project_name
+  target_account_ids      = var.target_account_ids
+  target_account_wildcard = var.install_mode == "config0-addon"
+  state_bucket_arn        = local.state_bucket_arn
+  lock_table_arn          = local.use_lock_table ? data.aws_dynamodb_table.locks[0].arn : ""
+  enable_apply            = var.enable_apply
 }
 
 data "aws_sfn_state_machine" "engine_codebuild" {
-  name = "${var.project_name}-codebuild"
+  name = "${local.engine_name}-codebuild"
 }
 
 module "run_folder" {
@@ -77,7 +78,7 @@ module "run_folder_apply" {
   engine_init_lambda_arn             = data.aws_lambda_function.engine_init.arn
   engine_init_lambda_name            = data.aws_lambda_function.engine_init.function_name
   engine_codebuild_state_machine_arn = data.aws_sfn_state_machine.engine_codebuild.arn
-  engine_codebuild_project_name      = "${var.project_name}-worker"
+  engine_codebuild_project_name      = "${local.engine_name}-worker"
   run_history_retention_days         = var.run_history_retention_days
   tmp_lifecycle_days                 = var.tmp_lifecycle_days
   package_lifecycle_days             = var.package_lifecycle_days
@@ -103,7 +104,7 @@ module "run_folder_destroy" {
   engine_init_lambda_arn             = data.aws_lambda_function.engine_init.arn
   engine_init_lambda_name            = data.aws_lambda_function.engine_init.function_name
   engine_codebuild_state_machine_arn = data.aws_sfn_state_machine.engine_codebuild.arn
-  engine_codebuild_project_name      = "${var.project_name}-worker"
+  engine_codebuild_project_name      = "${local.engine_name}-worker"
   run_history_retention_days         = var.run_history_retention_days
   tmp_lifecycle_days                 = var.tmp_lifecycle_days
   package_lifecycle_days             = var.package_lifecycle_days
@@ -122,6 +123,7 @@ module "openci_tf" {
 
   engine_init_lambda_name              = data.aws_lambda_function.engine_init.function_name
   engine_init_lambda_arn               = data.aws_lambda_function.engine_init.arn
+  engine_codebuild_project_name        = "${local.engine_name}-worker"
   tmp_bucket_name                      = data.aws_s3_bucket.tmp.bucket
   tmp_bucket_arn                       = data.aws_s3_bucket.tmp.arn
   done_bucket_name                     = data.aws_s3_bucket.done.bucket

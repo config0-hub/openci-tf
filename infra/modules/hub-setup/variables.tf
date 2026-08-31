@@ -17,14 +17,21 @@ variable "target_account_ids" {
   }
 }
 
+variable "target_account_wildcard" {
+  description = "When true, hub-lambda-exec may assume <role_prefix>-executor-* roles in any account (arn:aws:iam::*:role/<role_prefix>-executor-*) instead of only the enumerated target_account_ids; the target role's own trust policy remains the gate"
+  type        = bool
+  default     = false
+}
+
 variable "state_bucket_arn" {
   description = "ARN of the main account Terraform state bucket used by same-account execution"
   type        = string
 }
 
 variable "lock_table_arn" {
-  description = "ARN of the main account Terraform state lock table used by same-account execution"
+  description = "ARN of the main account Terraform state lock table used by same-account execution; empty string means no DynamoDB lock table exists (config0-addon installs use the S3 native lock file) and every lock-table IAM statement is omitted"
   type        = string
+  default     = ""
 }
 
 variable "enable_apply" {

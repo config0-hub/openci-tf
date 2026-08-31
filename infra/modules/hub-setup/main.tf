@@ -11,6 +11,7 @@ locals {
   executor_remote_role_name    = "${var.role_prefix}-executor-remote"
   executor_local_role_name     = "${var.role_prefix}-executor-local"
   hub_account_id               = data.aws_caller_identity.current.account_id
+  lock_enabled                 = var.lock_table_arn != ""
   prepare_role_arn             = "arn:aws:iam::${local.hub_account_id}:role/${var.role_prefix}-run-folder-prepare-and-submit"
   target_assumable_role_names = [
     local.executor_readonly_role_name,
@@ -85,11 +86,15 @@ resource "aws_iam_role_policy" "hub_lambda_exec" {
           "arn:aws:iam::${local.hub_account_id}:role/${local.executor_poweruser_role_name}",
           "arn:aws:iam::${local.hub_account_id}:role/${local.executor_local_role_name}",
         ],
-        flatten([
-          for account_id in var.target_account_ids : [
-            for role_name in local.target_assumable_role_names :
-            "arn:aws:iam::${account_id}:role/${role_name}"
-          ]
+        # Pattern trust (config0-addon): the target role's own trust policy is
+        # the real gate; the hub side matches the executor-* naming convention.
+        var.target_account_wildcard ? [
+          "arn:aws:iam::*:role/${var.role_prefix}-executor-*",
+          ] : flatten([
+            for account_id in var.target_account_ids : [
+              for role_name in local.target_assumable_role_names :
+              "arn:aws:iam::${account_id}:role/${role_name}"
+            ]
         ]),
       )
     }]

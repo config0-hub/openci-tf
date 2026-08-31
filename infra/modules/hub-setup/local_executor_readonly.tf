@@ -32,67 +32,79 @@ resource "aws_iam_policy" "executor_readonly_permissions_boundary" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "BoundaryBroadWorkloadAllow"
-        Effect = "Allow"
-        Action = "*"
-        NotResource = [
-          var.state_bucket_arn,
-          "${var.state_bucket_arn}/*",
-          var.lock_table_arn,
-          "${var.lock_table_arn}/index/*",
-          "${var.state_bucket_arn}/source/*",
-          "${var.state_bucket_arn}/engine/*",
-          "${var.state_bucket_arn}/bootstrap/*",
-          "${var.state_bucket_arn}/foundation/*",
-          "${var.state_bucket_arn}/deploy/*",
-          "${var.state_bucket_arn}/target-connect/*",
-          "${var.state_bucket_arn}/target-connect-readonly/*",
-          "${var.state_bucket_arn}/target-connect-poweruser/*",
-          "${var.state_bucket_arn}/engine-00-bootstrap/*",
-          "${var.state_bucket_arn}/engine-02-deploy/*",
-        ]
-      },
-      {
-        Sid      = "BoundaryTerraformTargetStateReadWrite"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
-        Resource = "${var.state_bucket_arn}/targets/*"
-      },
-      {
-        Sid       = "BoundaryTerraformTargetStateList"
-        Effect    = "Allow"
-        Action    = ["s3:ListBucket"]
-        Resource  = var.state_bucket_arn
-        Condition = { StringLike = { "s3:prefix" = "targets/*" } }
-      },
-      {
-        Sid       = "BoundaryTerraformTargetLockReadWrite"
-        Effect    = "Allow"
-        Action    = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:UpdateItem"]
-        Resource  = var.lock_table_arn
-        Condition = { "ForAllValues:StringLike" = { "dynamodb:LeadingKeys" = ["*/targets/*"] } }
-      },
-      {
-        Sid      = "BoundaryTerraformTargetLockDescribe"
-        Effect   = "Allow"
-        Action   = ["dynamodb:DescribeTable"]
-        Resource = var.lock_table_arn
-      },
-      {
-        Sid      = "BoundaryTerraformPlanTimeIamReadsScoped"
-        Effect   = "Allow"
-        Action   = local.terraform_plan_time_iam_read_scoped_actions
-        Resource = local.terraform_plan_time_iam_read_scoped_resources
-      },
-      {
-        Sid      = "BoundaryTerraformPlanTimeIamReadsWildcard"
-        Effect   = "Allow"
-        Action   = local.terraform_plan_time_iam_read_wildcard_actions
-        Resource = "*"
-      },
-    ]
+    Statement = concat(
+      [
+        {
+          Sid    = "BoundaryBroadWorkloadAllow"
+          Effect = "Allow"
+          Action = "*"
+          NotResource = concat(
+            [
+              var.state_bucket_arn,
+              "${var.state_bucket_arn}/*",
+            ],
+            [for lock_statement in [
+              var.lock_table_arn,
+              "${var.lock_table_arn}/index/*",
+            ] : lock_statement if local.lock_enabled],
+            [
+              "${var.state_bucket_arn}/source/*",
+              "${var.state_bucket_arn}/engine/*",
+              "${var.state_bucket_arn}/bootstrap/*",
+              "${var.state_bucket_arn}/foundation/*",
+              "${var.state_bucket_arn}/deploy/*",
+              "${var.state_bucket_arn}/target-connect/*",
+              "${var.state_bucket_arn}/target-connect-readonly/*",
+              "${var.state_bucket_arn}/target-connect-poweruser/*",
+              "${var.state_bucket_arn}/engine-00-bootstrap/*",
+              "${var.state_bucket_arn}/engine-02-deploy/*",
+            ],
+          )
+        },
+        {
+          Sid      = "BoundaryTerraformTargetStateReadWrite"
+          Effect   = "Allow"
+          Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+          Resource = "${var.state_bucket_arn}/targets/*"
+        },
+        {
+          Sid       = "BoundaryTerraformTargetStateList"
+          Effect    = "Allow"
+          Action    = ["s3:ListBucket"]
+          Resource  = var.state_bucket_arn
+          Condition = { StringLike = { "s3:prefix" = "targets/*" } }
+        },
+      ],
+      [for lock_statement in [
+        {
+          Sid       = "BoundaryTerraformTargetLockReadWrite"
+          Effect    = "Allow"
+          Action    = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:UpdateItem"]
+          Resource  = var.lock_table_arn
+          Condition = { "ForAllValues:StringLike" = { "dynamodb:LeadingKeys" = ["*/targets/*"] } }
+        },
+        {
+          Sid      = "BoundaryTerraformTargetLockDescribe"
+          Effect   = "Allow"
+          Action   = ["dynamodb:DescribeTable"]
+          Resource = var.lock_table_arn
+        },
+      ] : lock_statement if local.lock_enabled],
+      [
+        {
+          Sid      = "BoundaryTerraformPlanTimeIamReadsScoped"
+          Effect   = "Allow"
+          Action   = local.terraform_plan_time_iam_read_scoped_actions
+          Resource = local.terraform_plan_time_iam_read_scoped_resources
+        },
+        {
+          Sid      = "BoundaryTerraformPlanTimeIamReadsWildcard"
+          Effect   = "Allow"
+          Action   = local.terraform_plan_time_iam_read_wildcard_actions
+          Resource = "*"
+        },
+      ],
+    )
   })
 }
 
@@ -123,132 +135,140 @@ resource "aws_iam_role_policy" "executor_readonly" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "TerraformTargetStateReadWrite"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
-        Resource = "${var.state_bucket_arn}/targets/*"
-      },
-      {
-        Sid       = "TerraformTargetStateList"
-        Effect    = "Allow"
-        Action    = ["s3:ListBucket"]
-        Resource  = var.state_bucket_arn
-        Condition = { StringLike = { "s3:prefix" = "targets/*" } }
-      },
-      {
-        Sid       = "TerraformTargetLockReadWrite"
-        Effect    = "Allow"
-        Action    = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:UpdateItem", "dynamodb:DescribeTable"]
-        Resource  = var.lock_table_arn
-        Condition = { "ForAllValues:StringLike" = { "dynamodb:LeadingKeys" = ["*/targets/*"] } }
-      },
-      {
-        Sid      = "DenyLockTableBroadReads"
-        Effect   = "Deny"
-        Action   = ["dynamodb:Scan", "dynamodb:Query", "dynamodb:BatchGetItem", "dynamodb:PartiQLSelect"]
-        Resource = [var.lock_table_arn, "${var.lock_table_arn}/index/*"]
-      },
-      {
-        Sid       = "DenyLockItemsOutsideTargets"
-        Effect    = "Deny"
-        Action    = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:UpdateItem"]
-        Resource  = var.lock_table_arn
-        Condition = { "ForAllValues:StringNotLike" = { "dynamodb:LeadingKeys" = ["*/targets/*"] } }
-      },
-      {
-        Sid      = "TerraformPlanTimeIamReadsScoped"
-        Effect   = "Allow"
-        Action   = local.terraform_plan_time_iam_read_scoped_actions
-        Resource = local.terraform_plan_time_iam_read_scoped_resources
-      },
-      {
-        Sid      = "TerraformPlanTimeIamReadsWildcard"
-        Effect   = "Allow"
-        Action   = local.terraform_plan_time_iam_read_wildcard_actions
-        Resource = "*"
-      },
-      {
-        Sid      = "DenyListBucketWithoutTargetPrefix"
-        Effect   = "Deny"
-        Action   = ["s3:ListBucket"]
-        Resource = var.state_bucket_arn
-        Condition = {
-          Null = {
-            "s3:prefix" = "true"
+    Statement = concat(
+      [
+        {
+          Sid      = "TerraformTargetStateReadWrite"
+          Effect   = "Allow"
+          Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+          Resource = "${var.state_bucket_arn}/targets/*"
+        },
+        {
+          Sid       = "TerraformTargetStateList"
+          Effect    = "Allow"
+          Action    = ["s3:ListBucket"]
+          Resource  = var.state_bucket_arn
+          Condition = { StringLike = { "s3:prefix" = "targets/*" } }
+        },
+      ],
+      [for lock_statement in [
+        {
+          Sid       = "TerraformTargetLockReadWrite"
+          Effect    = "Allow"
+          Action    = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:UpdateItem", "dynamodb:DescribeTable"]
+          Resource  = var.lock_table_arn
+          Condition = { "ForAllValues:StringLike" = { "dynamodb:LeadingKeys" = ["*/targets/*"] } }
+        },
+        {
+          Sid      = "DenyLockTableBroadReads"
+          Effect   = "Deny"
+          Action   = ["dynamodb:Scan", "dynamodb:Query", "dynamodb:BatchGetItem", "dynamodb:PartiQLSelect"]
+          Resource = [var.lock_table_arn, "${var.lock_table_arn}/index/*"]
+        },
+        {
+          Sid       = "DenyLockItemsOutsideTargets"
+          Effect    = "Deny"
+          Action    = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:UpdateItem"]
+          Resource  = var.lock_table_arn
+          Condition = { "ForAllValues:StringNotLike" = { "dynamodb:LeadingKeys" = ["*/targets/*"] } }
+        },
+      ] : lock_statement if local.lock_enabled],
+      [
+        {
+          Sid      = "TerraformPlanTimeIamReadsScoped"
+          Effect   = "Allow"
+          Action   = local.terraform_plan_time_iam_read_scoped_actions
+          Resource = local.terraform_plan_time_iam_read_scoped_resources
+        },
+        {
+          Sid      = "TerraformPlanTimeIamReadsWildcard"
+          Effect   = "Allow"
+          Action   = local.terraform_plan_time_iam_read_wildcard_actions
+          Resource = "*"
+        },
+        {
+          Sid      = "DenyListBucketWithoutTargetPrefix"
+          Effect   = "Deny"
+          Action   = ["s3:ListBucket"]
+          Resource = var.state_bucket_arn
+          Condition = {
+            Null = {
+              "s3:prefix" = "true"
+            }
           }
-        }
-      },
-      {
-        Sid      = "DenyListBucketOutsideTargetsPrefix"
-        Effect   = "Deny"
-        Action   = ["s3:ListBucket"]
-        Resource = var.state_bucket_arn
-        Condition = {
-          StringNotLike = {
-            "s3:prefix" = "targets/*"
+        },
+        {
+          Sid      = "DenyListBucketOutsideTargetsPrefix"
+          Effect   = "Deny"
+          Action   = ["s3:ListBucket"]
+          Resource = var.state_bucket_arn
+          Condition = {
+            StringNotLike = {
+              "s3:prefix" = "targets/*"
+            }
           }
-        }
-      },
-      {
-        Sid    = "DenyControlPlaneStateAndSourceRecord"
-        Effect = "Deny"
-        Action = ["s3:*"]
-        Resource = [
-          "${var.state_bucket_arn}/source/*",
-          "${var.state_bucket_arn}/engine/*",
-          "${var.state_bucket_arn}/bootstrap/*",
-          "${var.state_bucket_arn}/foundation/*",
-          "${var.state_bucket_arn}/deploy/*",
-          "${var.state_bucket_arn}/target-connect/*",
-          "${var.state_bucket_arn}/target-connect-readonly/*",
-          "${var.state_bucket_arn}/target-connect-poweruser/*",
-          "${var.state_bucket_arn}/engine-00-bootstrap/*",
-          "${var.state_bucket_arn}/engine-02-deploy/*",
-        ]
-      },
-      {
-        Sid    = "DenyStateBucketNonBackendPrimitives"
-        Effect = "Deny"
-        NotAction = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:DeleteObject",
-          "s3:ListBucket",
-          "s3:GetBucketLocation",
-          "s3:GetBucketVersioning",
-        ]
-        Resource = [
-          var.state_bucket_arn,
-          "${var.state_bucket_arn}/*",
-        ]
-      },
-      {
-        Sid    = "DenyInfrastructureMutationOutsideStateAndLock"
-        Effect = "Deny"
-        Action = concat(
-          [
-            "iam:Create*", "iam:Delete*", "iam:Put*", "iam:Update*",
-            "iam:Attach*", "iam:Detach*", "iam:Add*", "iam:Remove*",
-            "iam:Tag*", "iam:Untag*", "iam:PassRole", "iam:CreateServiceLinkedRole",
-            "iam:ChangePassword", "iam:DeactivateMFADevice", "iam:EnableMFADevice",
-            "iam:ResyncMFADevice", "iam:Upload*", "iam:Import*", "iam:Set*",
-            "cloudformation:*",
-          ],
-          [
-            "ec2:Run*", "ec2:Terminate*", "ec2:Create*", "ec2:Delete*", "ec2:Modify*",
-            "s3:CreateBucket", "s3:DeleteBucket", "s3:PutBucket*",
-            "dynamodb:CreateTable", "dynamodb:DeleteTable", "dynamodb:UpdateTable",
-          ],
-        )
-        NotResource = [
-          var.state_bucket_arn,
-          "${var.state_bucket_arn}/*",
-          var.lock_table_arn,
-        ]
-      },
-    ]
+        },
+        {
+          Sid    = "DenyControlPlaneStateAndSourceRecord"
+          Effect = "Deny"
+          Action = ["s3:*"]
+          Resource = [
+            "${var.state_bucket_arn}/source/*",
+            "${var.state_bucket_arn}/engine/*",
+            "${var.state_bucket_arn}/bootstrap/*",
+            "${var.state_bucket_arn}/foundation/*",
+            "${var.state_bucket_arn}/deploy/*",
+            "${var.state_bucket_arn}/target-connect/*",
+            "${var.state_bucket_arn}/target-connect-readonly/*",
+            "${var.state_bucket_arn}/target-connect-poweruser/*",
+            "${var.state_bucket_arn}/engine-00-bootstrap/*",
+            "${var.state_bucket_arn}/engine-02-deploy/*",
+          ]
+        },
+        {
+          Sid    = "DenyStateBucketNonBackendPrimitives"
+          Effect = "Deny"
+          NotAction = [
+            "s3:GetObject",
+            "s3:PutObject",
+            "s3:DeleteObject",
+            "s3:ListBucket",
+            "s3:GetBucketLocation",
+            "s3:GetBucketVersioning",
+          ]
+          Resource = [
+            var.state_bucket_arn,
+            "${var.state_bucket_arn}/*",
+          ]
+        },
+        {
+          Sid    = "DenyInfrastructureMutationOutsideStateAndLock"
+          Effect = "Deny"
+          Action = concat(
+            [
+              "iam:Create*", "iam:Delete*", "iam:Put*", "iam:Update*",
+              "iam:Attach*", "iam:Detach*", "iam:Add*", "iam:Remove*",
+              "iam:Tag*", "iam:Untag*", "iam:PassRole", "iam:CreateServiceLinkedRole",
+              "iam:ChangePassword", "iam:DeactivateMFADevice", "iam:EnableMFADevice",
+              "iam:ResyncMFADevice", "iam:Upload*", "iam:Import*", "iam:Set*",
+              "cloudformation:*",
+            ],
+            [
+              "ec2:Run*", "ec2:Terminate*", "ec2:Create*", "ec2:Delete*", "ec2:Modify*",
+              "s3:CreateBucket", "s3:DeleteBucket", "s3:PutBucket*",
+              "dynamodb:CreateTable", "dynamodb:DeleteTable", "dynamodb:UpdateTable",
+            ],
+          )
+          NotResource = concat(
+            [
+              var.state_bucket_arn,
+              "${var.state_bucket_arn}/*",
+            ],
+            local.lock_enabled ? [var.lock_table_arn] : [],
+          )
+        },
+      ],
+    )
   })
 }
 

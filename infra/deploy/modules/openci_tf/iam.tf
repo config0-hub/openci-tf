@@ -96,7 +96,7 @@ resource "aws_iam_role_policy" "lambda" {
         {
           Effect   = "Allow"
           Action   = ["codebuild:BatchGetBuilds", "codebuild:ListBuildsForProject"]
-          Resource = "arn:aws:codebuild:${local.region}:${local.account_id}:project/${var.project_name}-worker"
+          Resource = "arn:aws:codebuild:${local.region}:${local.account_id}:project/${local.engine_codebuild_project_name}"
         },
         {
           Effect   = "Allow"

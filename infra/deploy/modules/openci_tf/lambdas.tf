@@ -95,7 +95,7 @@ resource "aws_lambda_function" "functions" {
         LOCKS_TABLE_NAME = aws_dynamodb_table.locks.name
       } : {},
       each.key == "render-pr" ? {
-        ENGINE_CODEBUILD_PROJECT_NAME = "${var.project_name}-worker"
+        ENGINE_CODEBUILD_PROJECT_NAME = local.engine_codebuild_project_name
         ENGINE_CODEBUILD_ACCOUNT_ID   = local.account_id
         AWS_CONSOLE_START_URL         = var.aws_console_start_url
         AWS_CONSOLE_ROLE_NAME         = var.aws_console_role_name

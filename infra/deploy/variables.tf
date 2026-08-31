@@ -23,6 +23,29 @@ variable "tags" {
   default     = {}
 }
 
+variable "install_mode" {
+  description = "Install flavor: 'standalone' (own state bucket + DynamoDB lock table + enumerated target accounts) or 'config0-addon' (tenant-provided state bucket, S3 native lock file with no lock table, executor-* assume-role trust by name pattern)"
+  type        = string
+  default     = "standalone"
+
+  validation {
+    condition     = contains(["standalone", "config0-addon"], var.install_mode)
+    error_message = "install_mode must be 'standalone' or 'config0-addon'."
+  }
+}
+
+variable "state_bucket_name" {
+  description = "Terraform state bucket used by executor session policies and same-account execution; empty string derives the standalone default <project_name>-state-<account_id>. config0-addon installs must pass the tenant's existing state bucket."
+  type        = string
+  default     = ""
+}
+
+variable "engine_name" {
+  description = "Name prefix of the AWS execution engine deployment to reuse (<engine_name>-init-job, <engine_name>-codebuild, <engine_name>-worker, <engine_name>-finalizer); empty string derives the standalone default project_name"
+  type        = string
+  default     = ""
+}
+
 variable "target_account_ids" {
   description = "Registered target AWS account IDs whose executor-remote roles the hub may assume"
   type        = set(string)
