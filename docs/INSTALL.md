@@ -1,8 +1,21 @@
 # Install openci-tf
 
-`just` recipes are the canonical operator interface. The standard install and
-removal journey is:
-`just install` → `just verify` → `just uninstall` → `just verify-clean`.
+`just` recipes are the canonical operator interface. There are two install
+modes:
+
+- **standalone** (default, `just install`) — openci-tf provisions its own
+  state bucket and execution engine in the hub account. The standard journey is
+  `just install` → `just verify` → `just uninstall` → `just verify-clean`.
+- **config0-addon** (`just install --mode config0-addon`) — openci-tf is
+  installed into a tenant account that already runs the AWS execution engine
+  and owns a Terraform state bucket. The install reuses both, copies the
+  released GHCR Lambda image into tenant ECR, and registers the GitOps
+  repository and webhook. See
+  [Install as a config0 add-on](#install-as-a-config0-add-on).
+
+Both modes lock Terraform state with the S3 native lock file
+(`use_lockfile=true` at init, tofu/terraform >= 1.10); no DynamoDB lock table
+exists in either mode.
 
 ## Prerequisites
 
@@ -127,6 +140,63 @@ What each component does:
    SigV4-proxies `/api/*`. The Function URL uses `NONE` authorization so a
    browser can load the static login shell and assets; the app checks the shared
    bearer token on every `/api/*` request.
+
+## Install as a config0 add-on
+
+`just install --mode config0-addon` installs openci-tf into a tenant account
+that already runs the AWS execution engine and owns a Terraform state bucket.
+It does not run bootstrap or the engine component; state for every infra root
+lives in the tenant bucket and the deploy reuses the tenant engine by name
+(`install_mode = "config0-addon"` on the deploy root). Requires `tofu` >= 1.10
+on PATH (the installers fail loud below that).
+
+The Lambda image is not built locally. A GitHub release publishes it to GHCR at
+the checked-in `IMAGE_VERSION` tag and records the pushed digest in the release
+notes (`.github/workflows/release.yml`); the install copies that digest-pinned
+image into the tenant ECR repository.
+
+Required SSM install config before running (same `just config set` namespace as
+standalone):
+
+```sh
+just config set state_bucket_name <tenant-state-bucket>
+just config set engine_name <tenant-engine-prefix>
+just config set ghcr_image ghcr.io/<owner>/openci-tf@sha256:<digest>
+just config set gitops_repo <owner/repo>
+just config set trigger_id <trigger-id>
+just config set upstream_urls_json '{...}'          # pinned runtime download URLs
+just config set api_caller_role_arn <role-arn>      # optional: tenant executor role for POST /runs
+just install --mode config0-addon
+```
+
+The journey composes four phases:
+
+1. **ecr** (`install/config0_addon.py --stage ecr`) — targeted `module.ecr`
+   apply on `infra/deploy` with the same backend and tfvars as the full apply,
+   so the repository exists before the image copy.
+2. **image copy** (`scripts/copy_ghcr_image.sh`) — pulls the digest-pinned
+   GHCR image and pushes it to tenant ECR at the `IMAGE_VERSION` tag.
+3. **deploy** (`install/config0_addon.py --stage deploy`) — applies
+   `infra/foundation`, waits for the copied image tag to exist in ECR, then
+   applies `infra/deploy` fully. When `api_caller_role_arn` is set, the stage
+   writes an `api_caller_policy_json` entry for that role with actions
+   `plan|drift|report` only.
+4. **registration** (`install/register_repo.py`) — generates or reuses the
+   webhook HMAC secret in SSM, writes the repository settings row, creates or
+   reconciles the GitHub webhook (the hook id is recorded at
+   `/openci-tf/install/<project>/webhook_hook_id` for clean removal), and
+   proves comment access with a probe on a throwaway branch and PR. Re-runs
+   converge. See [docs/GITHUB_WEBHOOK.md](GITHUB_WEBHOOK.md).
+
+In config0-addon mode the hub Lambda exec role trusts
+`arn:aws:iam::*:role/<project>-executor-*` by name pattern instead of an
+enumerated account list; each target role's own trust policy remains the gate
+(see [docs/ACCOUNTS.md](ACCOUNTS.md)).
+
+After apply, the deploy root exports the values an embedding platform records:
+`project_name`, `ecr_repository_url`, `settings_table_name`,
+`run_registry_table_name`, `api_url`, and `webhook_url`
+(`tofu -chdir=infra/deploy output`).
 
 ## Deploy the console
 

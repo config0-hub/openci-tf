@@ -100,8 +100,12 @@ with `Destroy succeeded ✅` (or failed/skipped variants).
    (see [docs/GITHUB_WEBHOOK.md](GITHUB_WEBHOOK.md)). The request comment is
    not deleted yet.
 2. Intent creation posts the intent comment with `tf <action> confirm <token>`.
-   Its command context links to the still-live request comment and says cleanup
-   is deferred to the terminal comment.
+   The comment also carries a fenced JSON block with `intent_id`,
+   `confirm_token`, `expires_at`, `pipeline`, and `step` so automation can read
+   the token as a field (see the machine-readable intent block in
+   [docs/PIPELINES.md](PIPELINES.md)). Its command context links to the
+   still-live request comment and says cleanup is deferred to the terminal
+   comment.
 3. `tf apply confirm <token>` is recorded as `accepted` with the token redacted.
    `confirm_handler` consumes the token but deletes nothing on success.
 4. The terminal apply/destroy comment is posted with a command context block.

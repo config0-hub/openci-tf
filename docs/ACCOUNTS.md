@@ -37,6 +37,21 @@ account, repository, folder, token, and pinned-plan gates pass.
 See [EXECUTOR_ROLES.md](EXECUTOR_ROLES.md) for role ownership and state-access
 rules.
 
+## Hub trust: enumerated accounts or the executor role pattern
+
+In standalone installs the hub Lambda exec role may assume executor roles only
+in the enumerated `target_account_ids`. In config0-addon installs
+(`install_mode = "config0-addon"` on the deploy root) the hub role instead
+trusts `arn:aws:iam::*:role/<project>-executor-*` by role-name pattern, so
+extending into a new target account does not require a hub redeploy. In both
+modes the target role's own trust policy (hub role principal plus the derived
+ExternalId) remains the gate on who can actually assume it.
+
+Target onboarding creates no per-target state bucket in either mode: the role
+stack's backend needs an existing bucket (conventionally
+`openci-tf-state-<target-account-id>`, or any shared bucket passed with
+`--state-bucket`).
+
 ## Why read-only executors write state
 
 Read-only executors attach AWS managed `ReadOnlyAccess` for infrastructure APIs,

@@ -3,6 +3,8 @@
 """Render intent confirmation comments."""
 from __future__ import annotations
 
+import json
+
 from src.domain.command.grammar import accepted_verbs
 from src.domain.intent.models import IntentGateFailure, IntentRecord
 
@@ -22,9 +24,29 @@ def intent_failure_comment(action: str, failures: list[IntentGateFailure]) -> st
     return "\n".join(lines)
 
 
+def intent_json_block(record: IntentRecord) -> str:
+    """Machine-readable fenced JSON block for the intent comment.
+
+    Automation parses the confirm token out of this block instead of scraping
+    prose. ``pipeline`` and ``step`` are ``null`` for non-pipeline intents.
+    """
+    if not record.intent_id:
+        raise ValueError("intent record has no intent_id; cannot render the intent JSON block")
+    payload = {
+        "intent_id": record.intent_id,
+        "confirm_token": record.token,
+        "expires_at": record.expires_at,
+        "pipeline": record.pipeline,
+        "step": record.step_index,
+    }
+    return f"```json\n{json.dumps(payload)}\n```"
+
+
 def intent_success_comment(record: IntentRecord, *, plan_summaries: list[str]) -> str:
     lines = [f"## tf {record.action} intent created", ""]
     lines.extend(plan_summaries)
     lines.append("")
     lines.append(f"To proceed within 10 min: `tf {record.action} confirm {record.token}`")
+    lines.append("")
+    lines.append(intent_json_block(record))
     return "\n".join(lines)

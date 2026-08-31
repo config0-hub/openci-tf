@@ -1253,6 +1253,7 @@ def test_create_handler_success_keeps_requested_command_until_terminal_render(
             None,
             {
                 "token": "abc123",
+                "intent_id": "intent-0011223344556677",
                 "trigger_id": "t",
                 "pr_number": 1,
                 "action": "apply",
@@ -1332,6 +1333,7 @@ def test_create_handler_success_terminalizes_run_after_comment_metadata(monkeypa
             None,
             {
                 "token": "abc123",
+                "intent_id": "intent-0011223344556677",
                 "trigger_id": "t",
                 "pr_number": 1,
                 "action": "apply",
@@ -1390,6 +1392,7 @@ def test_create_handler_pipeline_success_terminalizes_run_after_comment_metadata
             None,
             {
                 "token": "abc123",
+                "intent_id": "intent-0011223344556677",
                 "trigger_id": "t",
                 "pr_number": 1,
                 "action": "apply",
@@ -1558,6 +1561,7 @@ def test_create_handler_metadata_failure_does_not_terminalize_succeeded(monkeypa
             None,
             {
                 "token": "abc123",
+                "intent_id": "intent-0011223344556677",
                 "trigger_id": "t",
                 "pr_number": 1,
                 "action": "apply",
@@ -1797,6 +1801,7 @@ def test_create_handler_metadata_endpoint_failure_deletes_intent_comment_and_inv
             None,
             {
                 "token": "abc123",
+                "intent_id": "intent-0011223344556677",
                 "trigger_id": "t",
                 "pr_number": 1,
                 "action": "apply",
@@ -1869,6 +1874,7 @@ def test_create_handler_ambiguous_post_sweeps_bot_token_comment_and_invalidates_
             None,
             {
                 "token": "abc123",
+                "intent_id": "intent-0011223344556677",
                 "trigger_id": "t",
                 "pr_number": 1,
                 "action": "apply",

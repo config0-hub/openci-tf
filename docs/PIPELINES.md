@@ -95,6 +95,30 @@ Destroy uses the same checkpoint model in reverse flattened order:
 3. Each checkpoint gets its own fresh destroy plan and `tf destroy confirm <token>`.
 4. Ad hoc multi-folder `tf destroy a,b` is rejected; use `tf destroy pipeline <name>`.
 
+### Machine-readable intent block
+
+Every intent comment (the one carrying the confirmation token) ends with a
+fenced JSON block so automation can parse the token instead of scraping prose.
+The human-readable text stays; the block is additive:
+
+````markdown
+## tf apply intent created
+
+- `infra/vpc`: pinned plan from execution `run-abc`
+
+To proceed within 10 min: `tf apply confirm a1b2c3d4`
+
+```json
+{"intent_id": "intent-0011223344556677", "confirm_token": "a1b2c3d4", "expires_at": 1700000600, "pipeline": "data/primary", "step": 2}
+```
+````
+
+- `intent_id` — non-secret identifier minted with the intent record
+- `confirm_token` — the single-use confirmation token (same value as the prose command)
+- `expires_at` — epoch seconds when the token expires
+- `pipeline` / `step` — the pipeline name and 1-based checkpoint index; both
+  `null` for non-pipeline (ad hoc folder) intents
+
 Locks are held only for the current mutation checkpoint. One stable aggregate managed
 PR comment is updated in place after each plan publication and mutation result. Separate
 command-audit and confirmation comments are preserved.

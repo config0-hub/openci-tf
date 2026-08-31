@@ -18,7 +18,7 @@ from src.domain.intent.models import (
     IntentRecord,
 )
 from src.domain.intent.plan_lookup import find_newest_fresh_plan_run
-from src.domain.intent.token import mint_token
+from src.domain.intent.token import mint_intent_id, mint_token
 
 
 class _ApprovalClient(Protocol):
@@ -209,6 +209,7 @@ def evaluate_intent_gates(
     token = mint_token()
     record = IntentRecord(
         token=token,
+        intent_id=mint_intent_id(),
         trigger_id=settings.trigger_id,
         pr_number=pr_number,
         action=action,
