@@ -21,7 +21,7 @@ def _resource_block(resource_name: str) -> str:
 
 
 def test_mutation_lanes_use_engine_worker_project_not_state_machine_name():
-    assert 'engine_codebuild_project_name      = "${var.project_name}-worker"' in DEPLOY_MAIN
+    assert 'engine_codebuild_project_name      = "${local.engine_name}-worker"' in DEPLOY_MAIN
     assert "data.aws_codebuild_project.engine_worker.name" not in DEPLOY_MAIN
     assert "project/${local.engine_codebuild_project_name}" in RUN_FOLDER_IAM
     assert (
@@ -32,7 +32,7 @@ def test_mutation_lanes_use_engine_worker_project_not_state_machine_name():
         'ENGINE_CODEBUILD_PROJECT_NAME = "${var.project_name}-codebuild"'
         not in RUN_FOLDER_LAMBDAS
     )
-    assert "project/${var.project_name}-worker" in OPENCI_TF_IAM
+    assert "project/${local.engine_codebuild_project_name}" in OPENCI_TF_IAM
     assert "codebuild:BatchGetBuilds" in OPENCI_TF_IAM
     assert "codebuild:ListBuildsForProject" in OPENCI_TF_IAM
 

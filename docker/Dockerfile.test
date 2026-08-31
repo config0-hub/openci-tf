@@ -53,6 +53,8 @@ COPY scripts/ ${LAMBDA_TASK_ROOT}/scripts/
 COPY infra/ ${LAMBDA_TASK_ROOT}/infra/
 COPY justfile ${LAMBDA_TASK_ROOT}/justfile
 COPY IMAGE_VERSION ${LAMBDA_TASK_ROOT}/IMAGE_VERSION
+COPY install/ ${LAMBDA_TASK_ROOT}/install/
+COPY .github/ ${LAMBDA_TASK_ROOT}/.github/
 RUN terraform -chdir=${LAMBDA_TASK_ROOT}/infra/modules/hub-setup init -backend=false -input=false \
     && terraform -chdir=${LAMBDA_TASK_ROOT}/infra/modules/executor-poweruser init -backend=false -input=false
 # Staged by the test recipe from the read-only engine repository; contract tests

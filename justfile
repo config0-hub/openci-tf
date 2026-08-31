@@ -429,8 +429,26 @@ target-connect-destroy:
 
 # --- journeys -----------------------------------------------------------------
 
-# Full install: bootstrap -> foundation -> engine -> deploy (hub readonly via hub-setup)
-install:
+# Full install. Default (standalone): bootstrap -> foundation -> engine -> deploy.
+# `just install --mode config0-addon`: ecr stage -> GHCR image copy -> deploy stage
+# -> repository registration, reusing the tenant engine and state bucket.
+install *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    MODE="standalone"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+        --mode) MODE="${2:?--mode requires a value}"; shift 2 ;;
+        *) echo "ERROR: unknown install argument: $1 (supported: --mode standalone|config0-addon)" >&2; exit 1 ;;
+        esac
+    done
+    case "$MODE" in
+    standalone) exec just install-standalone ;;
+    config0-addon) exec just install-config0-addon ;;
+    *) echo "ERROR: unknown install mode: $MODE (supported: standalone, config0-addon)" >&2; exit 1 ;;
+    esac
+
+install-standalone:
     #!/usr/bin/env bash
     set -euo pipefail
     # shellcheck source=scripts/phase_timing.sh
@@ -444,6 +462,42 @@ install:
     phase_timing_total_end install "$journey_rc"
     [ "$journey_rc" -eq 0 ] || exit "$journey_rc"
     echo "install complete — hub readonly owned by deploy; run 'just verify'"
+
+# config0-addon install into a tenant account. Reads its inputs from the SSM
+# install namespace (just config set <key> <value>); no lock table anywhere —
+# state locking is the S3 native lock file (tofu >= 1.10).
+install-config0-addon:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # shellcheck source=scripts/phase_timing.sh
+    source ./scripts/phase_timing.sh
+    STATE_BUCKET="$(./scripts/ssm_config.sh get state_bucket_name)" || { echo "ERROR: set the tenant state bucket first: just config set state_bucket_name <bucket>" >&2; exit 1; }
+    ENGINE_NAME="$(./scripts/ssm_config.sh get engine_name)" || { echo "ERROR: set the tenant engine prefix first: just config set engine_name <name>" >&2; exit 1; }
+    GHCR_IMAGE="$(./scripts/ssm_config.sh get ghcr_image)" || { echo "ERROR: set the released image first: just config set ghcr_image ghcr.io/<owner>/openci-tf@sha256:<digest>" >&2; exit 1; }
+    GITOPS_REPO="$(./scripts/ssm_config.sh get gitops_repo)" || { echo "ERROR: set the repository first: just config set gitops_repo <owner/repo>" >&2; exit 1; }
+    TRIGGER_ID="$(./scripts/ssm_config.sh get trigger_id)" || { echo "ERROR: set the trigger id first: just config set trigger_id <id>" >&2; exit 1; }
+    UPSTREAM_URLS_JSON="$(./scripts/ssm_config.sh get upstream_urls_json)" || { echo "ERROR: set the pinned runtime URLs first: just config set upstream_urls_json '{...}'" >&2; exit 1; }
+    API_CALLER_ROLE_ARN="$(./scripts/ssm_config.sh get-or api_caller_role_arn '')"
+    addon_args=(--region "{{OPENCI_TF_REGION}}" --project-name "{{OPENCI_TF_PROJECT}}" --state-bucket "$STATE_BUCKET" --engine-name "$ENGINE_NAME")
+    deploy_args=("${addon_args[@]}")
+    if [ -n "$API_CALLER_ROLE_ARN" ]; then
+        deploy_args+=(--trigger-id "$TRIGGER_ID" --api-caller-role-arn "$API_CALLER_ROLE_ARN")
+    fi
+    register_repository() {
+    WEBHOOK_URL="$(tofu -chdir=infra/deploy output -raw webhook_url)"
+    python3 install/register_repo.py --repo "$GITOPS_REPO" --trigger-id "$TRIGGER_ID" \
+        --webhook-url "$WEBHOOK_URL" --upstream-urls-json "$UPSTREAM_URLS_JSON" \
+        --region "{{OPENCI_TF_REGION}}" --project-name "{{OPENCI_TF_PROJECT}}"
+    }
+    phase_timing_total_begin
+    journey_rc=0
+    phase_timing_run addon-ecr python3 install/config0_addon.py --stage ecr "${addon_args[@]}" || journey_rc=$?
+    phase_timing_run addon-image-copy ./scripts/copy_ghcr_image.sh --ghcr-image "$GHCR_IMAGE" --region "{{OPENCI_TF_REGION}}" --project "{{OPENCI_TF_PROJECT}}" || journey_rc=$?
+    phase_timing_run addon-deploy python3 install/config0_addon.py --stage deploy "${deploy_args[@]}" || journey_rc=$?
+    phase_timing_run addon-register register_repository || journey_rc=$?
+    phase_timing_total_end install-config0-addon "$journey_rc"
+    [ "$journey_rc" -eq 0 ] || exit "$journey_rc"
+    echo "config0-addon install complete — webhook registered; see install/register_repo.py output for hook_id"
 
 # Exact reverse of install. Set OPENCI_TF_KEEP_STATE=yes|no to skip the prompt.
 uninstall:
