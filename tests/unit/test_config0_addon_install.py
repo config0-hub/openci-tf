@@ -229,13 +229,26 @@ def test_reconcile_webhook_creates_then_reconciles():
     args = SimpleNamespace(repo="owner/sample-target-repo", trigger_id="trig", webhook_url="https://api.example.com/webhook")
 
     fresh = _FakeGitHub(hooks=[])
-    assert module.reconcile_webhook(fresh, args, "secret") == (4242, True)
+    assert module.reconcile_webhook(fresh, args, "secret") == (4242, True, None)
     created = [call for call in fresh.calls if call[0] == "POST"]
     assert created and created[0][2]["config"]["url"] == "https://api.example.com/webhook/trig"
 
-    existing_hook = {"id": 7, "config": {"url": "https://api.example.com/webhook/trig"}}
+    existing_hook = {
+        "id": 7,
+        "active": False,
+        "events": ["push"],
+        "config": {"url": "https://api.example.com/webhook/trig", "content_type": "form"},
+    }
     existing = _FakeGitHub(hooks=[existing_hook])
-    assert module.reconcile_webhook(existing, args, "secret") == (7, False)
+    assert module.reconcile_webhook(existing, args, "secret") == (
+        7,
+        False,
+        {
+            "active": False,
+            "events": ["push"],
+            "config": {"url": "https://api.example.com/webhook/trig", "content_type": "form"},
+        },
+    )
     patched = [call for call in existing.calls if call[0] == "PATCH"]
     assert patched and patched[0][1].endswith("/hooks/7")
 
@@ -358,7 +371,7 @@ def test_main_runs_comment_probe_before_any_activation(monkeypatch):
     monkeypatch.setattr(module, "comment_probe", lambda github, args: order.append("probe"))
     monkeypatch.setattr(module, "get_or_create_secret", lambda ssm, path: (order.append("secret"), "s")[1])
     monkeypatch.setattr(module, "apply_repo_settings", lambda dynamodb, args, path: order.append("settings"))
-    monkeypatch.setattr(module, "reconcile_webhook", lambda github, args, secret: (order.append("webhook"), (1, True))[1])
+    monkeypatch.setattr(module, "reconcile_webhook", lambda github, args, secret: (order.append("webhook"), (1, True, None))[1])
     monkeypatch.setattr(module, "record_hook_id", lambda ssm, args, hook_id: (order.append("record"), "p")[1])
 
     fake_boto3 = SimpleNamespace(
@@ -438,7 +451,13 @@ def test_activate_registration_restores_prior_settings_row_on_late_failure():
     module = _register_module()
     args = _register_args()
     prior = {"pk": {"S": "repo"}, "sk": {"S": "trig"}, "repo_name": {"S": "owner/old-repo"}}
-    github = _FakeGitHub(hooks=[{"id": 7, "config": {"url": "https://api.example.com/webhook/trig"}}])
+    prior_hook = {
+        "id": 7,
+        "active": False,
+        "events": ["push"],
+        "config": {"url": "https://api.example.com/webhook/trig", "content_type": "form"},
+    }
+    github = _FakeGitHub(hooks=[prior_hook])
     ssm = _FakeSsm(fail_put=True)
     dynamodb = _FakeDynamoDb({("repo", "trig"): prior})
 
@@ -448,7 +467,36 @@ def test_activate_registration_restores_prior_settings_row_on_late_failure():
         )
     # Pre-existing hook is reconciled, never deleted.
     assert not [call for call in github.calls if call[0] == "DELETE"]
+    # The pre-existing hook is patched back to its prior active flag, events, and config.
+    patches = [call for call in github.calls if call[0] == "PATCH" and call[1].endswith("/hooks/7")]
+    assert len(patches) == 2
+    restore_body = patches[-1][2]
+    assert restore_body == {
+        "active": False,
+        "events": ["push"],
+        "config": {"url": "https://api.example.com/webhook/trig", "content_type": "form"},
+    }
     assert dynamodb.items[("repo", "trig")] == prior
+
+
+def test_reconcile_webhook_snapshot_round_trips_prior_state():
+    """Patching the snapshot back yields exactly the hook's pre-reconcile fields."""
+    module = _register_module()
+    args = SimpleNamespace(repo="owner/sample-target-repo", trigger_id="trig", webhook_url="https://api.example.com/webhook")
+    prior_fields = {
+        "active": False,
+        "events": ["push", "release"],
+        "config": {"url": "https://api.example.com/webhook/trig", "content_type": "form", "insecure_ssl": "1"},
+    }
+    github = _FakeGitHub(hooks=[{"id": 7, **prior_fields}])
+
+    hook_id, created, snapshot = module.reconcile_webhook(github, args, "secret")
+    assert (hook_id, created) == (7, False)
+    assert snapshot == prior_fields
+
+    github.request("PATCH", f"/repos/{args.repo}/hooks/{hook_id}", snapshot)
+    restore_body = github.calls[-1][2]
+    assert restore_body == prior_fields
 
 
 class _ProbeGitHub:

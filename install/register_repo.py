@@ -15,8 +15,8 @@ Converging registration flow (safe to re-run):
 Every failure is fatal. The probe runs before any activation write, so a
 repository is never activated with a token that cannot write. A failure
 after partial activation rolls the activation back (a newly created hook is
-deleted; the settings row is removed or restored) before the error is
-re-raised.
+deleted; a pre-existing hook is patched back to its prior state; the
+settings row is removed or restored) before the error is re-raised.
 """
 
 from __future__ import annotations
@@ -137,21 +137,33 @@ def apply_repo_settings(dynamodb, args: argparse.Namespace, webhook_secret_ssm: 
     print(f"applied repo settings for {args.repo} (trigger_id={args.trigger_id}) to {args.table}")
 
 
-def reconcile_webhook(github: GitHub, args: argparse.Namespace, secret: str) -> tuple[int, bool]:
-    """Create or reconcile the webhook; returns (hook_id, created_new_hook)."""
+def reconcile_webhook(github: GitHub, args: argparse.Namespace, secret: str) -> tuple[int, bool, dict | None]:
+    """Create or reconcile the webhook.
+
+    Returns (hook_id, created_new_hook, prior_hook_state). For a pre-existing
+    hook, prior_hook_state snapshots the fields the PATCH changes (active,
+    events, config) so a late registration failure can restore them; for a
+    newly created hook it is None.
+    """
     full_url = f"{args.webhook_url.rstrip('/')}/{args.trigger_id}"
     config = {"url": full_url, "content_type": "json", "secret": secret, "insecure_ssl": "0"}
     hooks = github.request("GET", f"/repos/{args.repo}/hooks?per_page=100")
     matches = [hook for hook in hooks if hook.get("config", {}).get("url") == full_url]
     if matches:
-        hook_id = matches[0]["id"]
+        hook = matches[0]
+        hook_id = hook["id"]
+        prior_state = {
+            "active": hook.get("active"),
+            "events": hook.get("events"),
+            "config": hook.get("config", {}),
+        }
         github.request(
             "PATCH",
             f"/repos/{args.repo}/hooks/{hook_id}",
             {"active": True, "events": WEBHOOK_EVENTS, "config": config},
         )
         print(f"reconciled existing webhook hook_id={hook_id} for {full_url}")
-        return hook_id, False
+        return hook_id, False, prior_state
     created = github.request(
         "POST",
         f"/repos/{args.repo}/hooks",
@@ -159,7 +171,7 @@ def reconcile_webhook(github: GitHub, args: argparse.Namespace, secret: str) -> 
     )
     hook_id = created["id"]
     print(f"created webhook hook_id={hook_id} for {full_url}")
-    return hook_id, True
+    return hook_id, True, None
 
 
 def record_hook_id(ssm, args: argparse.Namespace, hook_id: int) -> str:
@@ -253,16 +265,18 @@ def activate_registration(
     Runs only after the comment probe has proven the token. If the webhook
     create/reconcile or the hook-id record fails after the settings row was
     written, the partial activation is reconciled back (a newly created hook
-    is deleted; the settings row is removed, or restored to its prior item)
-    and the original error is re-raised.
+    is deleted; a pre-existing hook is patched back to its prior active flag,
+    events, and config; the settings row is removed, or restored to its prior
+    item) and the original error is re-raised.
     """
     key = {"pk": {"S": "repo"}, "sk": {"S": args.trigger_id}}
     prior_item = dynamodb.get_item(TableName=args.table, Key=key).get("Item")
     apply_repo_settings(dynamodb, args, webhook_secret_ssm)
     hook_id: int | None = None
     hook_created = False
+    prior_hook_state: dict | None = None
     try:
-        hook_id, hook_created = reconcile_webhook(github, args, secret)
+        hook_id, hook_created, prior_hook_state = reconcile_webhook(github, args, secret)
         record_hook_id(ssm, args, hook_id)
         return hook_id
     except BaseException:
@@ -273,6 +287,18 @@ def activate_registration(
             except Exception as cleanup_error:
                 print(
                     f"WARNING: could not roll back webhook hook_id={hook_id}: {cleanup_error}",
+                    file=sys.stderr,
+                )
+        elif hook_id is not None and prior_hook_state is not None:
+            try:
+                github.request("PATCH", f"/repos/{args.repo}/hooks/{hook_id}", prior_hook_state)
+                print(
+                    f"restored pre-existing webhook hook_id={hook_id} to its prior state after failed registration",
+                    file=sys.stderr,
+                )
+            except Exception as cleanup_error:
+                print(
+                    f"WARNING: could not restore pre-existing webhook hook_id={hook_id}: {cleanup_error}",
                     file=sys.stderr,
                 )
         try:
