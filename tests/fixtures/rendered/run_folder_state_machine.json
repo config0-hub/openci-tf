@@ -51,6 +51,7 @@
         "error.$": "$.probe.error",
         "exec_id.$": "$.probe.exec_id",
         "folder.$": "$.folder",
+        "pipeline_plan_focus.$": "$.pipeline_plan_focus",
         "pointers.$": "$.probe.pointers",
         "repo_name.$": "$.repo_name",
         "run_id.$": "$.run_id",
