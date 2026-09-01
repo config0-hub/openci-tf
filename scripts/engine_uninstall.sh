@@ -7,7 +7,6 @@ PROJECT_PREFIX="${OPENCI_TF_PROJECT:-openci-tf}"
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 ACCT="$(aws sts get-caller-identity --query Account --output text)"
 STATE_BUCKET="${PROJECT_PREFIX}-state-${ACCT}"
-LOCK_TABLE="${PROJECT_PREFIX}-tf-locks"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENGINE_ROOT="$(cd "$ENGINE_ROOT" && pwd)"
@@ -24,11 +23,11 @@ if [ ! -d "$DEPLOY_DIR" ]; then
   exit 1
 fi
 
-"${ROOT_DIR}/scripts/generate_backend.sh" "$STATE_BUCKET" engine "$REGION" "$DEPLOY_DIR" "$LOCK_TABLE"
+"${ROOT_DIR}/scripts/generate_backend.sh" "$STATE_BUCKET" engine "$REGION" "$DEPLOY_DIR"
 (
   cd "$DEPLOY_DIR"
   if [ -f terraform.tfvars ]; then
-    terraform init -reconfigure -input=false
+    terraform init -reconfigure -input=false -backend-config=use_lockfile=true
     terraform destroy -input=false -auto-approve
   else
     echo "no engine terraform.tfvars; skipping destroy"
@@ -40,11 +39,11 @@ if [ ! -d "$ECR_DIR" ]; then
   exit 1
 fi
 
-"${ROOT_DIR}/scripts/generate_backend.sh" "$STATE_BUCKET" engine-ecr "$REGION" "$ECR_DIR" "$LOCK_TABLE"
+"${ROOT_DIR}/scripts/generate_backend.sh" "$STATE_BUCKET" engine-ecr "$REGION" "$ECR_DIR"
 (
   cd "$ECR_DIR"
   if [ -f terraform.tfvars ]; then
-    tofu init -reconfigure -input=false
+    tofu init -reconfigure -input=false -backend-config=use_lockfile=true
     tofu destroy -input=false -auto-approve
   else
     echo "no engine ecr terraform.tfvars; skipping destroy"

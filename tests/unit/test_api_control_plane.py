@@ -314,7 +314,7 @@ def test_build_manifest_uses_existing_objects_only():
         "account_id": "123456789012",
         "folder": "infra/a",
         "action": "plan",
-        "opentofu_runtime": "tofu:1.8.0",
+        "opentofu_runtime": "tofu:1.10.6",
         "created_at": "2026-08-10T00:00:00Z",
         "expires_at": "2026-08-11T00:00:00Z",
         "expires_after_days": 1,

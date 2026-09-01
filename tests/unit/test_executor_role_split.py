@@ -81,7 +81,6 @@ def test_poweruser_denies_iam_cloudformation_with_unconditional_resource_star():
     poweruser = _POWERUSER_MODULE.read_text(encoding="utf-8")
     assert "DenyIamAndCloudFormationUnconditionally" in poweruser
     assert "DenyStateBucketNonBackendPrimitives" in poweruser
-    assert "DenyLockTableNonBackendPrimitives" in poweruser
     assert "DenyInfrastructureMutationOutsideStateAndLock" not in poweruser
     block = poweruser.split("DenyIamAndCloudFormationUnconditionally", 1)[1].split(
         "},", 1

@@ -11,3 +11,8 @@ def mint_token(*, nbytes: int = 4) -> str:
     if nbytes not in {3, 4}:
         raise ValueError("token length must be 6 or 8 hex characters")
     return secrets.token_hex(nbytes)
+
+
+def mint_intent_id() -> str:
+    """Return a non-secret intent identifier, distinct from the confirm token."""
+    return f"intent-{secrets.token_hex(8)}"

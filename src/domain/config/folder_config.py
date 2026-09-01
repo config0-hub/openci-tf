@@ -28,6 +28,34 @@ from src.domain.ssm_env.paths import validate_ssm_env_paths
 
 _RUNTIME = re.compile(r"^(tofu|terraform):\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 _TARGETS = {"lambda", "codebuild"}
+_STATE_BUCKET = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
+_STATE_KEY_GLOB_CHARS = frozenset("*?[]")
+MAX_STATE_KEY_CHARS = 1024
+
+
+def _validate_state_override(bucket: object, key: object) -> tuple[str, str]:
+    """Validate the optional exact state object override (both-or-neither)."""
+    if bucket is None and key is None:
+        return "", ""
+    if bucket is None or key is None:
+        raise ConfigValidationError(
+            "state_bucket and state_key must be set together"
+        )
+    if not isinstance(bucket, str) or not _STATE_BUCKET.fullmatch(bucket):
+        raise ConfigValidationError("state_bucket must be a valid S3 bucket name")
+    if not isinstance(key, str) or not key or key != key.strip():
+        raise ConfigValidationError("state_key must be a non-empty object key")
+    if len(key) > MAX_STATE_KEY_CHARS:
+        raise ConfigValidationError(
+            f"state_key exceeds {MAX_STATE_KEY_CHARS} characters"
+        )
+    if key.startswith("/") or ".." in key.split("/"):
+        raise ConfigValidationError("state_key must be a plain object key")
+    if any(character in key for character in _STATE_KEY_GLOB_CHARS):
+        raise ConfigValidationError(
+            "state_key contains IAM wildcard characters"
+        )
+    return bucket, key
 
 
 def _validate_extra_flags(extra_flags: object) -> tuple[str, ...]:
@@ -97,6 +125,9 @@ _MUTATION_VERB_KEYS = frozenset({"allow", "grace_seconds"})
 def compact_folder_config_for_outer_state(config: dict[str, Any]) -> dict[str, Any]:
     """Strip disabled mutation blocks while retaining enabled grace periods."""
     compact = dict(config)
+    for key in ("state_bucket", "state_key"):
+        if not compact.get(key):
+            compact.pop(key, None)
     for verb, default_grace in (
         ("apply", DEFAULT_APPLY_GRACE_SECONDS),
         ("destroy", DEFAULT_DESTROY_GRACE_SECONDS),
@@ -180,6 +211,9 @@ def parse_folder_config(
         data.get("extra_flags", []),
     )
     ssm_env_paths = validate_ssm_env_paths(data.get("ssm_env_paths"))
+    state_bucket, state_key = _validate_state_override(
+        data.get("state_bucket"), data.get("state_key")
+    )
     account_alias, validated_flags = _validate(
         runtime, target, timeout, alias, extra_flags
     )
@@ -198,6 +232,8 @@ def parse_folder_config(
         timeout=timeout,
         tf_runtime=runtime,
         account_alias=account_alias,
+        state_bucket=state_bucket,
+        state_key=state_key,
         execution_target=target,
         extra_flags=validated_flags,
         ssm_env_paths=ssm_env_paths,

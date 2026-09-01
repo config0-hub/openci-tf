@@ -361,16 +361,16 @@ esac
     assert key == {"pk": {"S": "account"}, "sk": {"S": alias_payload}}
 
 
-def test_target_onboard_requires_active_lock_table_before_mutation():
+def test_target_onboard_verifies_bucket_before_mutation_without_lock_table():
     text = (_REPO_ROOT / "scripts/target_onboard.sh").read_text()
     identity_pos = text.index("aws sts get-caller-identity")
     bucket_pos = text.index("bucket_exists.sh")
-    lock_pos = text.index("aws dynamodb describe-table")
     ssm_pos = text.index("ssm_config.sh set")
     connect_pos = text.index("just target-create-aws-readonly")
-    assert identity_pos < bucket_pos < lock_pos < ssm_pos < connect_pos
-    assert 'LOCK_TABLE="${PROJECT}-tf-locks"' in text
-    assert 'if [ "$LOCK_STATUS" != "ACTIVE" ]' in text
+    assert identity_pos < bucket_pos < ssm_pos < connect_pos
+    # Decision 27: no lock table exists or is probed anywhere.
+    assert "dynamodb" not in text
+    assert "tf-locks" not in text
 
 
 def test_target_role_recipes_delegate_to_target_aws_role_script():

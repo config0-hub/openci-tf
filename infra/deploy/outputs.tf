@@ -1,6 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Config0, Inc.
 # SPDX-License-Identifier: AGPL-3.0-or-later
-output "ecr_repo_url" {
+output "project_name" {
+  description = "Project name prefixing every resource in this installation"
+  value       = var.project_name
+}
+
+output "ecr_repository_url" {
   description = "ECR repository URL"
   value       = module.ecr.repository_url
 }

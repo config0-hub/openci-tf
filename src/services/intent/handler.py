@@ -457,6 +457,9 @@ def create_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             pipeline_sha256=record.get("pipeline_sha256")
             if isinstance(record.get("pipeline_sha256"), str)
             else None,
+            intent_id=record.get("intent_id")
+            if isinstance(record.get("intent_id"), str)
+            else None,
         ),
         plan_summaries=summaries,
     )

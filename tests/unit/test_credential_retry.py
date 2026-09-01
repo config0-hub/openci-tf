@@ -21,7 +21,7 @@ def _state(*, action: str = "plan", attempt: int = 0) -> dict:
         "attempt": attempt,
         "budget": 60,
         "folder_config": {"account_alias": "target"},
-        "upstream_urls": {"tofu:1.8.0": "https://example.invalid/tofu"},
+        "upstream_urls": {"tofu:1.10.6": "https://example.invalid/tofu"},
         "repo_name": "org/repo",
         "git_url": "https://github.com/org/repo.git",
         "commit_hash": "a" * 40,

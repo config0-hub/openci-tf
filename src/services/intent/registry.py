@@ -53,6 +53,8 @@ def _record_to_dict(record: IntentRecord) -> dict:
         payload["requested_comment_body"] = record.requested_comment_body
     if record.intent_comment_id is not None:
         payload["intent_comment_id"] = record.intent_comment_id
+    if record.intent_id is not None:
+        payload["intent_id"] = record.intent_id
     return payload
 
 
@@ -103,6 +105,7 @@ def _dict_to_record(item: dict) -> IntentRecord:
             if item.get("intent_comment_id") is not None
             else None
         ),
+        intent_id=str(item["intent_id"]) if item.get("intent_id") is not None else None,
     )
 
 

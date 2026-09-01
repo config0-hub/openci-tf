@@ -87,7 +87,7 @@ def test_plan_artifact_metadata_validation_binds_all_run_dimensions() -> None:
         "account_id": _ACCOUNT,
         "folder": "infra/app",
         "action": "plan",
-        "opentofu_runtime": "tofu:1.8.0",
+        "opentofu_runtime": "tofu:1.10.6",
         "created_at": "2026-08-10T00:00:00Z",
         "expires_at": "2026-08-11T00:00:00Z",
         "expires_after_days": 1,
@@ -120,7 +120,7 @@ def test_renderer_requires_exact_expected_metadata_pointer_before_loading(monkey
         "account_id": _ACCOUNT,
         "folder": "infra/app",
         "action": "plan",
-        "opentofu_runtime": "tofu:1.8.0",
+        "opentofu_runtime": "tofu:1.10.6",
         "created_at": "2026-08-10T00:00:00Z",
         "expires_at": "2026-08-11T00:00:00Z",
         "expires_after_days": 1,
@@ -159,7 +159,7 @@ def test_renderer_metadata_required_only_for_successful_plan_and_report(monkeypa
 
 def test_tmp_bucket_has_openci_tf_lifecycle_rule() -> None:
     source = Path("infra/foundation/s3.tf").read_text()
-    assert 'openci_tf_prefix       = "openci-tf/"' in source
+    assert 'openci_tf_prefix    = "openci-tf/"' in source
     assert 'id     = "openci-tf-artifact-retention"' in source
     assert 'filter { prefix = local.openci_tf_prefix }' in source
 

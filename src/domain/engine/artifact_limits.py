@@ -29,15 +29,17 @@ MAX_EXTRA_FLAGS_COUNT = 3
 MAX_EXTRA_FLAGS_SERIALIZED_BYTES = 1_024
 """Maximum serialized size of repository extra_flags in folder configuration."""
 
-MAX_OUTER_POST_MAP_STATE_BYTES = 261_000
+MAX_OUTER_POST_MAP_STATE_BYTES = 261_100
 """Complete outer state budget after Map ``ResultPath`` with fifty maximum outcomes.
 
 Rebrand arithmetic: the longer ``openci-tf`` artifact prefixes add bytes to
-worst-case post-map output. Keeping the original 261,000-byte soft budget
-preserves 1,144 bytes below the Step Functions 262,144-byte hard limit. With
-that budget, the largest accepted repository name is 251 characters: 252 chars
-serializes the fifty-folder worst failure shape to 261,102 bytes, while 251
-chars serializes to 260,951 bytes.
+worst-case post-map output, and the ``tofu:1.10.6`` default runtime (S3 native
+lock file baseline) is one character longer than the previous ``tofu:1.8.0``
+across all fifty folder configs. The 261,100-byte soft budget preserves 1,044
+bytes below the Step Functions 262,144-byte hard limit. With that budget, the
+largest accepted repository name is 251 characters: 252 chars serializes the
+fifty-folder worst failure shape to roughly 261,154 bytes, while 251 chars
+serializes to 261,003 bytes.
 """
 
 MAX_OUTER_MAP_AGGREGATE_OUTCOMES_BYTES = 215_000

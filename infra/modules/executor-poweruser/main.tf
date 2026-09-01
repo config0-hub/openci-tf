@@ -150,29 +150,6 @@ resource "aws_iam_role_policy" "executor_poweruser" {
         Condition = { StringLike = { "s3:prefix" = "targets/*" } }
       },
       {
-        Sid       = "TerraformTargetLockReadWrite"
-        Effect    = "Allow"
-        Action    = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:UpdateItem", "dynamodb:DescribeTable"]
-        Resource  = var.lock_table_arn
-        Condition = { "ForAllValues:StringLike" = { "dynamodb:LeadingKeys" = ["*/targets/*"] } }
-      },
-      {
-        Sid    = "DenyLockTableNonBackendPrimitives"
-        Effect = "Deny"
-        NotAction = [
-          "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem",
-          "dynamodb:UpdateItem", "dynamodb:DescribeTable",
-        ]
-        Resource = [var.lock_table_arn, "${var.lock_table_arn}/index/*"]
-      },
-      {
-        Sid       = "DenyLockItemsOutsideTargets"
-        Effect    = "Deny"
-        Action    = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:UpdateItem"]
-        Resource  = var.lock_table_arn
-        Condition = { "ForAllValues:StringNotLike" = { "dynamodb:LeadingKeys" = ["*/targets/*"] } }
-      },
-      {
         Sid      = "TerraformPlanTimeIamReadsScoped"
         Effect   = "Allow"
         Action   = local.terraform_plan_time_iam_read_scoped_actions

@@ -17,7 +17,6 @@ from tests.unit.iam_policy_evaluator import (
     render_readonly_inline_policy,
 )
 
-_LOCK_TABLE = "arn:aws:dynamodb:us-east-1:222222222222:table/openci-tf-tf-locks"
 _ACCOUNT_ID = "222222222222"
 _FOREIGN_ROLE_ARN = "arn:aws:iam::999999999999:role/example"
 _TRACER_ROLE_ARN = f"arn:aws:iam::{_ACCOUNT_ID}:role/openci-tf-tracer-apne1-role"

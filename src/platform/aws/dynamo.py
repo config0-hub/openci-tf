@@ -49,3 +49,29 @@ def get_account_alias(alias: str, table_name: str = os.environ.get("SETTINGS_TAB
     if not item:
         raise ValueError(f"Unknown account alias: {alias!r}")
     return item
+
+
+def get_allowed_state_pairs(
+    repo_name: str,
+    table_name: str = os.environ.get("SETTINGS_TABLE_NAME", "openci-tf-settings"),
+) -> frozenset[str]:
+    """Return the registered ``bucket/key`` state pairs for one repository.
+
+    Folder configs overriding ``state_bucket``/``state_key`` may only use pairs
+    registered here; an absent item means no overrides are registered.
+    """
+    item = (
+        _table(table_name)
+        .get_item(Key={"pk": "allowed_state_pairs", "sk": repo_name})
+        .get("Item")
+    )
+    if not item:
+        return frozenset()
+    pairs = item.get("pairs")
+    if not isinstance(pairs, (list, set, frozenset)) or not all(
+        isinstance(pair, str) and pair for pair in pairs
+    ):
+        raise ValueError(
+            f"allowed_state_pairs item for {repo_name!r} must hold a non-empty string pair list"
+        )
+    return frozenset(pairs)

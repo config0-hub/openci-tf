@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Target-account onboarding: verify identity, existing state bucket, SSM tfvars, target-connect.
+# Target-account onboarding: verify identity, backend state bucket, SSM tfvars, target-connect.
+# No per-target state bucket is created and no lock table exists; state locking
+# is the S3 native lock file.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -44,8 +46,6 @@ if [ -z "$STATE_BUCKET" ]; then
   STATE_BUCKET="${PROJECT}-state-${TARGET_ACCOUNT_ID}"
 fi
 
-LOCK_TABLE="${PROJECT}-tf-locks"
-
 verify_prerequisites() {
 set +e
 ./scripts/bucket_exists.sh "$STATE_BUCKET"
@@ -55,25 +55,13 @@ case "$probe_rc" in
   0) ;;
   1)
     echo "ERROR: state bucket ${STATE_BUCKET} does not exist in account ${TARGET_ACCOUNT_ID}" >&2
+    echo "ERROR: openci-tf does not create per-target state buckets; pass --state-bucket NAME to use an existing (shared) bucket" >&2
     exit 1
     ;;
   *)
     exit "$probe_rc"
     ;;
 esac
-
-set +e
-LOCK_STATUS="$(aws dynamodb describe-table --table-name "$LOCK_TABLE" --query 'Table.TableStatus' --output text)"
-lock_probe_rc=$?
-set -e
-if [ "$lock_probe_rc" -ne 0 ]; then
-  echo "ERROR: target lock table ${LOCK_TABLE} does not exist or is unreadable in account ${TARGET_ACCOUNT_ID}" >&2
-  exit "$lock_probe_rc"
-fi
-if [ "$LOCK_STATUS" != "ACTIVE" ]; then
-  echo "ERROR: target lock table ${LOCK_TABLE} is not ACTIVE (status=${LOCK_STATUS})" >&2
-  exit 1
-fi
 }
 phase_timing_run verify-prerequisites verify_prerequisites
 
@@ -86,7 +74,7 @@ onboard_ssm_config() {
 }
 phase_timing_run ssm-config onboard_ssm_config
 
-echo "target onboard: account=${TARGET_ACCOUNT_ID} bucket=${STATE_BUCKET} lock_table=${LOCK_TABLE} hub=${HUB_ACCOUNT_ID}"
+echo "target onboard: account=${TARGET_ACCOUNT_ID} bucket=${STATE_BUCKET} hub=${HUB_ACCOUNT_ID}"
 onboard_readonly_role() {
 if [ -n "${STATE_BUCKET_ARG:-}" ]; then
   just target-create-aws-readonly "$HUB_ACCOUNT_ID" "$STATE_BUCKET"

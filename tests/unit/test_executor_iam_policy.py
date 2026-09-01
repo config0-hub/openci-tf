@@ -19,7 +19,7 @@ _HUB_LEGACY_LOCAL = _REPO_ROOT / "infra/modules/hub-setup/local_executor.tf"
 _LEGACY_REMOTE_MODULE = _REPO_ROOT / "infra/modules/target-connect/main.tf"
 _HUB_SETUP_IAM_FILES = (_HUB_READONLY, _HUB_LEGACY_LOCAL)
 _POLICY_MODULES = (_READONLY_MODULE, _HUB_READONLY)
-_DENY_SID = "DenyInfrastructureMutationOutsideStateAndLock"
+_DENY_SID = "DenyInfrastructureMutationOutsideState"
 _ACTION_BLOCK_RE = re.compile(
     rf'Sid\s*=\s*"{_DENY_SID}"[\s\S]*?Action\s*=\s*(?:concat\(|\[)([\s\S]*?)NotResource',
     re.MULTILINE,
@@ -67,13 +67,6 @@ _STATE_BUCKET_NON_BACKEND_ACTIONS = (
     "s3:PutBucketPolicy",
     "s3:DeleteBucket",
 )
-_LOCK_TABLE_CONTROL_ACTIONS = (
-    "dynamodb:UpdateTable",
-    "dynamodb:DeleteTable",
-    "dynamodb:CreateTable",
-)
-
-
 def _extract_deny_actions(tf_text: str, sid: str = _DENY_SID) -> list[str]:
     if sid == _DENY_SID:
         match = _ACTION_BLOCK_RE.search(tf_text)
@@ -324,7 +317,7 @@ def test_readonly_denies_state_bucket_non_backend_primitives(control_action: str
     for module in (_READONLY_MODULE, _HUB_READONLY):
         source = module.read_text()
         block = source.split("DenyStateBucketNonBackendPrimitives", 1)[1].split(
-            "DenyInfrastructureMutationOutsideStateAndLock", 1
+            "DenyInfrastructureMutationOutsideState", 1
         )[0]
         assert "NotAction" in block
         assert '"s3:GetObject"' in block
@@ -344,34 +337,10 @@ def test_poweruser_denies_state_bucket_non_backend_primitives(control_action: st
     assert control_action not in block.split("NotAction", 1)[1]
 
 
-def test_poweruser_role_uses_notaction_lock_guard():
-    source = _POWERUSER_MODULE.read_text()
-    assert "DenyLockTableNonBackendPrimitives" in source
-    assert (
-        "NotAction"
-        in source.split("DenyLockTableNonBackendPrimitives", 1)[1].split(
-            "DenyLockItemsOutsideTargets", 1
-        )[0]
-    )
-    assert "DenyLockTableControlPlane" not in source
-
-
-@pytest.mark.parametrize("control_action", _LOCK_TABLE_CONTROL_ACTIONS)
-def test_poweruser_denies_lock_table_control_plane_via_notaction(control_action: str):
-    source = _POWERUSER_MODULE.read_text()
-    block = source.split("DenyLockTableNonBackendPrimitives", 1)[1].split(
-        "DenyLockItemsOutsideTargets", 1
-    )[0]
-    assert "NotAction" in block
-    assert '"dynamodb:DescribeTable"' in block
-    assert control_action not in block.split("NotAction", 1)[1]
-
-
 def test_poweruser_preserves_target_state_data_path_allowance():
     source = _POWERUSER_MODULE.read_text()
     assert 'Sid      = "TerraformTargetStateReadWrite"' in source
     assert "${var.state_bucket_arn}/targets/*" in source
-    assert '"dynamodb:UpdateItem"' in source
 
 
 def test_poweruser_denies_iam_reset_mutations():
@@ -384,24 +353,19 @@ def test_poweruser_denies_iam_reset_mutations():
 @pytest.mark.parametrize(
     "module", (*_POLICY_MODULES, _POWERUSER_MODULE), ids=lambda path: path.parent.name
 )
-def test_executor_lock_access_is_scoped_to_target_state_keys(module: Path):
+def test_executor_modules_carry_no_dynamodb_lock_iam(module: Path):
+    """Decision 27: locking is the S3 native lock file; no lock-table IAM remains."""
     source = module.read_text()
-    assert 'Sid       = "TerraformTargetLockReadWrite"' in source
-    for action in ("GetItem", "PutItem", "DeleteItem", "UpdateItem", "DescribeTable"):
-        assert f'"dynamodb:{action}"' in source
-    assert '"dynamodb:LeadingKeys" = ["*/targets/*"]' in source
-    if module == _POWERUSER_MODULE:
-        assert "DenyLockTableNonBackendPrimitives" in source
-    else:
-        assert 'Sid      = "DenyLockTableBroadReads"' in source
-    assert 'Sid       = "DenyLockItemsOutsideTargets"' in source
-    assert "var.lock_table_arn" in source or "lock_table_arn" in source
+    assert "lock_table_arn" not in source
+    assert "tf-locks" not in source
+    assert "dynamodb:LeadingKeys" not in source
+    assert "TerraformTargetLockReadWrite" not in source
+    assert "DenyLockTableBroadReads" not in source
+    assert "DenyLockItemsOutsideTargets" not in source
 
 
-def test_target_connect_wires_account_local_lock_table_arn():
-    source = (_REPO_ROOT / "infra/target-connect/main.tf").read_text()
-    assert (
-        'lock_table_arn           = "arn:aws:dynamodb:${var.aws_region}:${local.account_id}:table/${var.project_name}-tf-locks"'
-        in source
-    )
-    assert "lock_table_arn           = local.lock_table_arn" in source
+def test_target_connect_root_has_no_lock_table_wiring():
+    for root in ("infra/target-connect/main.tf", "infra/target-connect-poweruser/main.tf"):
+        source = (_REPO_ROOT / root).read_text()
+        assert "lock_table_arn" not in source
+        assert "tf-locks" not in source

@@ -97,7 +97,7 @@ def _full_item(folder: str, step_index: int) -> dict[str, object]:
         "deadline_at": "2099-01-01T00:00:00Z",
         "step_index": step_index,
         "folder_config": compact_folder_config_for_outer_state(asdict(parse_folder_config("account_alias: target\n"))),
-        "upstream_urls": {"tofu:1.8.0": "https://example.invalid/tofu"},
+        "upstream_urls": {"tofu:1.10.6": "https://example.invalid/tofu"},
         "execution_id": compose_execution_id(run_id, folder, 0),
         "repo_name": "org/repo",
         "git_url": "https://github.com/org/repo.git",

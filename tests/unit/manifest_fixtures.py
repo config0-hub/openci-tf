@@ -56,7 +56,7 @@ def plan_metadata_dict(
         "account_id": account_id,
         "folder": folder,
         "action": action,
-        "opentofu_runtime": "tofu:1.8.0",
+        "opentofu_runtime": "tofu:1.10.6",
         "created_at": "2026-08-10T00:00:00Z",
         "expires_at": "2026-08-11T00:00:00Z",
         "expires_after_days": configured_retention,

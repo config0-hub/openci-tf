@@ -8,8 +8,9 @@ data "aws_caller_identity" "current" {}
 locals {
   account_id = data.aws_caller_identity.current.account_id
   # ref 4353245 - openci-tf remote executor consistency naming
-  state_bucket_name = "${var.project_name}-state-${local.account_id}"
+  state_bucket_name = var.state_bucket_name != "" ? var.state_bucket_name : "${var.project_name}-state-${local.account_id}"
   state_bucket_arn  = "arn:aws:s3:::${local.state_bucket_name}"
+  engine_name       = var.engine_name != "" ? var.engine_name : var.project_name
 }
 
 # Foundation KMS key (alias/<project>-foundation)
@@ -30,12 +31,7 @@ data "aws_s3_bucket" "done" {
   bucket = "${var.project_name}-done-${local.account_id}"
 }
 
-# Engine init_job Lambda (deployed by the engine repo with project prefix <project>)
+# Engine init_job Lambda (deployed by the engine repo with prefix <engine_name>)
 data "aws_lambda_function" "engine_init" {
-  function_name = "${var.project_name}-init-job"
-}
-
-# Bootstrap lock table
-data "aws_dynamodb_table" "locks" {
-  name = "${var.project_name}-tf-locks"
+  function_name = "${local.engine_name}-init-job"
 }

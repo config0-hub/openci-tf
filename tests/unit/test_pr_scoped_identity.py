@@ -367,7 +367,7 @@ def test_pr_plan_collect_to_apply_presign_uses_scoped_plan_key(monkeypatch):
         mutation_action="apply",
         commit_hash="a" * 40,
         account_id="123456789012",
-        expected_tf_runtime="tofu:1.8.0",
+        expected_tf_runtime="tofu:1.10.6",
     )
     assert pointer_match is not None
     assert pointer_match["run_id"] == run_id

@@ -1,0 +1,94 @@
+name: Release
+
+# Publishes the openci-tf Lambda container image to GHCR at the checked-in
+# IMAGE_VERSION tag and records the pushed image digest in the GitHub release.
+# config0-addon installs copy this exact digest into the tenant ECR repository
+# (see install/config0_addon.py and scripts/copy_ghcr_image.sh).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - IMAGE_VERSION
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/openci-tf
+
+jobs:
+  publish-image:
+    name: Build, push to GHCR, and record the digest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Record the exact release source
+        id: source
+        run: |
+          source_sha="$(git rev-parse HEAD)"
+          test "$source_sha" = "$GITHUB_SHA"
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Read the checked-in image version
+        id: version
+        run: |
+          tag="$(./scripts/image_tag.sh)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+
+      - name: Build the Lambda container image
+        run: |
+          # --provenance=false: Lambda cannot pull OCI attestation manifest lists.
+          docker build --platform linux/amd64 --provenance=false \
+            -f docker/Dockerfile \
+            -t "${GHCR_IMAGE}:${{ steps.version.outputs.tag }}" .
+
+      - name: Push and capture the image digest
+        id: push
+        run: |
+          docker push "${GHCR_IMAGE}:${{ steps.version.outputs.tag }}"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "${GHCR_IMAGE}:${{ steps.version.outputs.tag }}")"
+          case "$digest" in
+            "${GHCR_IMAGE}@sha256:"*) ;;
+            *) echo "ERROR: could not resolve pushed GHCR digest (got: $digest)" >&2; exit 1 ;;
+          esac
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the image is anonymously pullable
+        run: |
+          # GHCR package visibility must already be Public. Use an empty Docker
+          # config and the installer's real pull path so cached workflow
+          # credentials cannot make a private package pass this release gate.
+          anonymous_docker_config="$(mktemp -d)"
+          trap 'rm -rf "$anonymous_docker_config"' EXIT
+          DOCKER_CONFIG="$anonymous_docker_config" ./scripts/copy_ghcr_image.sh \
+            --ghcr-image "${{ steps.push.outputs.digest }}" --verify-public-only
+
+      - name: Create or update the release with the digest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="v${{ steps.version.outputs.tag }}"
+          notes="$(cat <<'EOF'
+          OpenCI-TF image: `${{ steps.push.outputs.digest }}`
+          OpenCI-TF tag: `${{ steps.version.outputs.tag }}`
+          OpenCI-TF source commit: `${{ steps.source.outputs.sha }}`
+          EOF
+          )"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" \
+              --target "${{ steps.source.outputs.sha }}" --notes "$notes"
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --target "${{ steps.source.outputs.sha }}" \
+              --title "openci-tf ${{ steps.version.outputs.tag }}" --notes "$notes"
+          fi

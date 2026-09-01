@@ -7,6 +7,29 @@ and the GitHub control token. The endpoint is the deploy output plus
 signatures are verified. Raw Terraform is fallback; the `just` recipe is
 canonical.
 
+## Registration in config0-addon installs
+
+`just install --mode config0-addon` registers the repository and webhook with
+`install/register_repo.py` instead of the manual recipes above. It:
+
+1. proves the control token first with a probe on a throwaway branch and
+   pull request (push contents, open a PR, comment); the branch and PR are
+   removed again even when the probe fails,
+2. generates the webhook HMAC secret at
+   `/openci-tf/install/<project>/webhook_secret` (reused when it already
+   exists),
+3. writes the repository settings row (trigger id, repo, token SSM path,
+   pinned runtime URLs), and
+4. creates or reconciles the GitHub webhook against the deploy's
+   `webhook_url`, recording the hook id at
+   `/openci-tf/install/<project>/webhook_hook_id` so removal can delete the
+   exact hook.
+
+Re-runs converge; every failure is fatal. Nothing is activated before the
+probe passes, and a failure after the settings row is written rolls the
+partial activation back (a newly created hook is deleted; the settings row
+is removed or restored) before the error is re-raised.
+
 ## Command set
 
 Only these issue comments start work on an open, non-fork pull request from a

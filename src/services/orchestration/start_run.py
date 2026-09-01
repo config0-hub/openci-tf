@@ -168,6 +168,11 @@ def start_run_from_request(request: RunRequest) -> tuple[str, bool]:
         run_record["pipeline"] = request.pipeline
     if request.pipeline_step is not None:
         run_record["pipeline_step"] = request.pipeline_step
+    github_metadata = getattr(request, "github_metadata", None)
+    if isinstance(github_metadata, dict) and github_metadata.get("comment_id") is not None:
+        # Exact correlation between the originating command comment and its
+        # run: readers reconcile runs by this id, never by timestamp windows.
+        run_record["command_comment_id"] = github_metadata["comment_id"]
     run_id, created = claim_idempotent_run(
         request.trigger_id,
         request.idempotency_key,

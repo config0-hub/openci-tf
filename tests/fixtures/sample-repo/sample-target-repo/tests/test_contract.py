@@ -35,7 +35,6 @@ TARGET_ALIAS = "remote"
 TARGET_STATE_BUCKET = "openci-tf-state-222222222222"
 REPO_SLUG = "<REPO_ORG>/<REPO_NAME>"
 STATE_BUCKET = "openci-tf-state-111111111111"
-LOCK_TABLE = "openci-tf-tf-locks"
 BACKEND_REGION = "us-east-1"
 OPENCI_TF_SAFE_ACTIONS = frozenset({"plan", "drift", "validate", "report"})
 OPENCI_TF_FOLDER_CONFIG_KEYS = frozenset(
@@ -50,7 +49,6 @@ OPENCI_TF_FOLDER_CONFIG_KEYS = frozenset(
 )
 BACKEND_REQUIRED_FIELDS = {
     "bucket": STATE_BUCKET,
-    "dynamodb_table": LOCK_TABLE,
     "region": BACKEND_REGION,
     "encrypt": "true",
 }
@@ -271,7 +269,6 @@ class TerraformContractTests(unittest.TestCase):
                         f"{root} backend {key}",
                     )
                 self.assertEqual(fields.get("bucket"), TARGET_STATE_BUCKET, root)
-                self.assertEqual(fields.get("dynamodb_table"), LOCK_TABLE, root)
                 expected_key = f"targets/{REPO_SLUG}/terraform/{root}.tfstate"
             else:
                 for key, expected in BACKEND_REQUIRED_FIELDS.items():

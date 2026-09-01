@@ -4,8 +4,9 @@ data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
 locals {
-  account_id = data.aws_caller_identity.current.account_id
-  region     = data.aws_region.current.name
+  account_id                    = data.aws_caller_identity.current.account_id
+  region                        = data.aws_region.current.name
+  engine_codebuild_project_name = var.engine_codebuild_project_name != "" ? var.engine_codebuild_project_name : "${var.project_name}-worker"
   foundation_kms_context = {
     StringLike = {
       "kms:EncryptionContext:aws:s3:arn" = [

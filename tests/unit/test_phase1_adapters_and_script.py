@@ -76,6 +76,16 @@ def test_drift_exit_two_is_normalized_and_adversarial_flags_are_quoted_through_r
     assert "'-var=x; rm -rf /'" in script
 
 
+@pytest.mark.parametrize(
+    "verb", ["plan", "plan_destroy", "drift", "report", "apply", "destroy"]
+)
+def test_every_runner_init_passes_s3_native_lockfile_flag(verb):
+    """Decision 27: platform-driven runs always lock via the S3 lock file."""
+    script = render(ScriptParams(verb=verb, execution_target="lambda"))
+    assert "init -no-color -backend-config=use_lockfile=true" in script
+    assert "dynamodb" not in script.lower()
+
+
 def test_drift_script_is_runtime_only_without_tfsec_or_infracost():
     script = render(ScriptParams(verb="drift", execution_target="lambda"))
     assert "tofu init -no-color" in script
@@ -109,7 +119,7 @@ def _write_folder_config(root: Path, runtime: str) -> None:
 
 @pytest.mark.parametrize(
     ("runtime", "key"),
-    [("tofu:1.8.0", "tofu:1.8.0"), ("terraform:1.8.5", "terraform:1.8.5")],
+    [("tofu:1.10.6", "tofu:1.10.6"), ("terraform:1.10.5", "terraform:1.10.5")],
 )
 def test_drift_outer_state_requires_only_configured_runtime_url(tmp_path, runtime, key):
     _write_folder_config(tmp_path, runtime)
@@ -123,9 +133,9 @@ def test_drift_outer_state_requires_only_configured_runtime_url(tmp_path, runtim
 
 
 def test_outer_state_allows_legacy_single_runtime_url_key(tmp_path):
-    _write_folder_config(tmp_path, "tofu:1.8.0")
+    _write_folder_config(tmp_path, "tofu:1.10.6")
     result = resolve_outer_state(str(tmp_path), ["infra/app"], {"tofu": "https://downloads.example/tofu"}, "drift")
-    assert result["upstream_urls"] == {"tofu:1.8.0": "https://downloads.example/tofu"}
+    assert result["upstream_urls"] == {"tofu:1.10.6": "https://downloads.example/tofu"}
 
 
 def test_outer_state_rejects_unpinned_runtime_clearly(tmp_path):
@@ -142,10 +152,10 @@ def test_outer_state_rejects_unpinned_runtime_clearly(tmp_path):
 def test_outer_state_resolves_mixed_terraform_and_tofu_versions(tmp_path):
     folders = []
     for folder, runtime in {
-        "infra/tf185": "terraform:1.8.5",
-        "infra/tf198": "terraform:1.9.8",
-        "infra/tofu180": "tofu:1.8.0",
-        "infra/tofu190": "tofu:1.9.0",
+        "infra/tf185": "terraform:1.10.5",
+        "infra/tf198": "terraform:1.12.2",
+        "infra/tofu180": "tofu:1.10.6",
+        "infra/tofu190": "tofu:1.12.6",
     }.items():
         config_dir = tmp_path / folder / ".openci_tf"
         config_dir.mkdir(parents=True)
@@ -155,10 +165,10 @@ def test_outer_state_resolves_mixed_terraform_and_tofu_versions(tmp_path):
         folders.append(folder)
 
     upstream_urls = {runtime: f"https://downloads.example/{runtime}" for runtime in (
-        "terraform:1.8.5",
-        "terraform:1.9.8",
-        "tofu:1.8.0",
-        "tofu:1.9.0",
+        "terraform:1.10.5",
+        "terraform:1.12.2",
+        "tofu:1.10.6",
+        "tofu:1.12.6",
     )}
     result = resolve_outer_state(str(tmp_path), folders, upstream_urls, "drift")
 
@@ -167,21 +177,21 @@ def test_outer_state_resolves_mixed_terraform_and_tofu_versions(tmp_path):
 
 @pytest.mark.parametrize("action", ["plan", "report"])
 def test_plan_and_report_outer_state_still_require_shared_installer_urls(tmp_path, action):
-    _write_folder_config(tmp_path, "tofu:1.8.0")
+    _write_folder_config(tmp_path, "tofu:1.10.6")
     with pytest.raises(ConfigResolutionError, match="infracost:0.10.39"):
-        resolve_outer_state(str(tmp_path), ["infra/app"], {"tofu:1.8.0": "https://downloads.example/tofu"}, action)
+        resolve_outer_state(str(tmp_path), ["infra/app"], {"tofu:1.10.6": "https://downloads.example/tofu"}, action)
 
     result = resolve_outer_state(
         str(tmp_path),
         ["infra/app"],
         {
-            "tofu:1.8.0": "https://downloads.example/tofu",
+            "tofu:1.10.6": "https://downloads.example/tofu",
             "tfsec:1.28.10": "https://downloads.example/tfsec",
             "infracost:0.10.39": "https://downloads.example/infracost",
         },
         action,
     )
-    assert set(result["upstream_urls"]) == {"tofu:1.8.0", "tfsec:1.28.10", "infracost:0.10.39"}
+    assert set(result["upstream_urls"]) == {"tofu:1.10.6", "tfsec:1.28.10", "infracost:0.10.39"}
 
 
 def test_sops_uses_minimal_environment_and_wipes_plaintext(tmp_path, monkeypatch):

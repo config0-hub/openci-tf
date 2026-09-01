@@ -17,10 +17,6 @@ variable "state_bucket_arn" {
   type        = string
 }
 
-variable "lock_table_arn" {
-  description = "ARN of the target account Terraform state lock table"
-  type        = string
-}
 
 variable "enable_apply" {
   description = "When true, attach PowerUserAccess to executor-remote; runtime intent gating uses DynamoDB enable_apply"

@@ -23,6 +23,12 @@ variable "engine_init_lambda_arn" {
   default     = ""
 }
 
+variable "engine_codebuild_project_name" {
+  description = "Name of the engine worker CodeBuild project read by mutation-lane status checks; empty string derives <project_name>-worker"
+  type        = string
+  default     = ""
+}
+
 variable "assume_role_arns" {
   description = "IAM role ARNs that openci-tf Lambdas can assume for cross-account access"
   type        = list(string)

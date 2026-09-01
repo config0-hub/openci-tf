@@ -48,7 +48,7 @@ def _build_settings(data: dict[str, Any]) -> GlobalSettings:
         default_timeout=data.get("default_timeout", 300),
         job_timeout=data.get("job_timeout", 1800),
         poll_interval=data.get("poll_interval", 30),
-        tf_runtime=data.get("tf_runtime", "tofu:1.8.0"),
+        tf_runtime=data.get("tf_runtime", "tofu:1.10.6"),
     )
 
 

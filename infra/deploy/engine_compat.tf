@@ -4,15 +4,15 @@
 # the openci-tf KMS key, so engine roles that touch foundation SSE-KMS objects need
 # narrowly scoped foundation-key permissions in addition to their engine defaults.
 data "aws_iam_role" "engine_worker" {
-  name = "${var.project_name}-worker"
+  name = "${local.engine_name}-worker"
 }
 
 data "aws_iam_role" "engine_codebuild" {
-  name = "${var.project_name}-codebuild"
+  name = "${local.engine_name}-codebuild"
 }
 
 data "aws_iam_role" "engine_finalizer" {
-  name = "${var.project_name}-finalizer"
+  name = "${local.engine_name}-finalizer"
 }
 
 resource "aws_iam_role_policy" "engine_worker_foundation_kms" {

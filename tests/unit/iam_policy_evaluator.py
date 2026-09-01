@@ -17,7 +17,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _POWERUSER_MODULE = _REPO_ROOT / "infra/modules/executor-poweruser"
 _READONLY_MODULE = _REPO_ROOT / "infra/modules/executor-readonly"
 _LEGACY_REMOTE_MODULE = _REPO_ROOT / "infra/modules/target-connect"
-_LOCK_TABLE = "arn:aws:dynamodb:us-east-1:222222222222:table/openci-tf-tf-locks"
 _STATE_BUCKET = "arn:aws:s3:::openci-tf-state-222222222222"
 _HUB_ACCOUNT_ID = "111111111111"
 _PROTECTED_HUB_RESOURCES = [
@@ -571,7 +570,6 @@ _IAM_WORKLOAD_INSTANCE_PROFILE_LIFECYCLE_ACTIONS = [
 
 
 def _substitute_policy_vars(block: str) -> str:
-    block = block.replace("var.lock_table_arn", json.dumps(_LOCK_TABLE))
     block = block.replace("var.state_bucket_arn", json.dumps(_STATE_BUCKET))
     block = block.replace("var.enable_apply", "true")
     block = block.replace(
@@ -605,10 +603,6 @@ def _substitute_policy_vars(block: str) -> str:
     block = block.replace(
         "local.target_iam_instance_profile_arns",
         json.dumps(f"arn:aws:iam::{_ACCOUNT_ID}:instance-profile/*"),
-    )
-    block = block.replace(
-        "${var.lock_table_arn}/index/*",
-        json.dumps(f"{_LOCK_TABLE}/index/*"),
     )
     block = block.replace(
         "${var.state_bucket_arn}/targets/*",

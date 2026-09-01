@@ -34,8 +34,10 @@ targets.
 ## State access contract
 
 Executor roles can read and write Terraform backend state only under the
-`targets/` prefix of the state bucket. DynamoDB lock access is scoped to `LockID`
-values matching `<bucket>/targets/*`.
+`targets/` prefix of the state bucket. State locking is the S3 native lock file
+(`<key>.tflock`, written beside the state object); no DynamoDB lock table
+exists. A folder config with `state_bucket`/`state_key` narrows the run session
+policy to that exact registered state object instead.
 
 Registered repositories must configure backend keys as:
 

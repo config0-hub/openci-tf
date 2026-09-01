@@ -117,7 +117,7 @@ def _maximum_map_item(*, include_max_extra_flags: bool = True) -> dict:
     config = parse_folder_config(f"account_alias: target\n{flag_line}")
     exec_id = "r" * 32 + ".0123456789ab.0"
     upstream = {
-        "tofu:1.8.0": "https://example.invalid/tofu",
+        "tofu:1.10.6": "https://example.invalid/tofu",
         "tfsec:1.28.10": "https://example.invalid/tfsec",
         "infracost:0.10.39": "https://example.invalid/infracost",
     }

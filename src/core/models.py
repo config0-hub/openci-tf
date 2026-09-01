@@ -76,8 +76,13 @@ class FolderConfig:
 
     version: int = 1
     timeout: int = 300
-    tf_runtime: str = "tofu:1.8.0"
+    tf_runtime: str = "tofu:1.10.6"
     account_alias: str = ""
+    # Optional exact state object override (shared-state repos). When empty the
+    # conventional <project>-state-<account-id> bucket and targets/<repo>/<folder>.tfstate
+    # key apply. Both must be set together; enforced by parse_folder_config.
+    state_bucket: str = ""
+    state_key: str = ""
     execution_target: str = "lambda"
     extra_flags: tuple[str, ...] = ()
     ssm_env_paths: tuple[str, ...] = ()
@@ -130,7 +135,7 @@ class GlobalSettings:
     default_timeout: int = 300
     job_timeout: int = 1800
     poll_interval: int = 30
-    tf_runtime: str = "tofu:1.8.0"
+    tf_runtime: str = "tofu:1.10.6"
 
 
 @dataclass

@@ -1,8 +1,21 @@
 # Install openci-tf
 
-`just` recipes are the canonical operator interface. The standard install and
-removal journey is:
-`just install` → `just verify` → `just uninstall` → `just verify-clean`.
+`just` recipes are the canonical operator interface. There are two install
+modes:
+
+- **standalone** (default, `just install`) — openci-tf provisions its own
+  state bucket and execution engine in the hub account. The standard journey is
+  `just install` → `just verify` → `just uninstall` → `just verify-clean`.
+- **config0-addon** (`just install --mode config0-addon`) — openci-tf is
+  installed into a tenant account that already runs the AWS execution engine
+  and owns a Terraform state bucket. The install reuses both, copies the
+  released GHCR Lambda image into tenant ECR, and registers the GitOps
+  repository and webhook. See
+  [Install as a config0 add-on](#install-as-a-config0-add-on).
+
+Both modes lock Terraform state with the S3 native lock file
+(`use_lockfile=true` at init, tofu/terraform >= 1.10); no DynamoDB lock table
+exists in either mode.
 
 ## Prerequisites
 
@@ -88,8 +101,9 @@ allowed for each registered account alias.
 
 What each component does:
 
-1. **bootstrap** — state bucket `openci-tf-state-<account-id>` + DynamoDB lock
-   table `openci-tf-tf-locks`. Chicken-and-egg: the first apply uses LOCAL state
+1. **bootstrap** — state bucket `openci-tf-state-<account-id>`. State locking
+   is the S3 native lock file (`use_lockfile=true` at init; tofu/terraform
+   >= 1.10); no DynamoDB lock table exists. Chicken-and-egg: the first apply uses LOCAL state
    (the backend bucket does not exist yet), then the recipe generates
    `backend.tf` and migrates the state into the bucket it just created. Every
    other root starts on the S3 backend directly.
@@ -106,7 +120,7 @@ What each component does:
 4. **deploy** — the hub stack including same-account `openci-tf-executor-readonly`
    (hub-setup module). Cross-stack values are discovered with data-source lookups
    on deterministic names (foundation KMS alias and buckets, engine `openci-tf-init-job`
-   Lambda, lock table); only true config remains in tfvars. The recipe applies
+   Lambda); only true config remains in tfvars. The recipe applies
    `module.ecr` first, builds and pushes the Lambda container image at the fixed
    version in `IMAGE_VERSION` (`just docker-push`), then applies the rest.
 5. **target-create-aws-readonly** — creates `openci-tf-executor-readonly` in a
@@ -115,9 +129,9 @@ What each component does:
    from target credentials. Terraform derives the required `sts:ExternalId` as
    `openci-tf-` plus the first 16 lowercase hex chars of SHA-256 over
    `openci-tf:<hub-account-id>:<target-account-id>`. Target onboarding requires
-   the existing S3 state bucket and account-local `<project>-tf-locks` DynamoDB
-   table used by repository backends. The target install's own Terraform backend
-   remains S3-only.
+   only an existing S3 bucket for the role stack's own backend (pass
+   `--state-bucket` to use a shared bucket); openci-tf creates no per-target
+   state bucket and no lock table exists.
 6. **target-create-aws-poweruser** — optional mutation IAM for accounts that can
    run confirmed apply/destroy jobs. The role is separate from the readonly role
    and is assumed only by the apply/destroy lanes.
@@ -126,6 +140,111 @@ What each component does:
    SigV4-proxies `/api/*`. The Function URL uses `NONE` authorization so a
    browser can load the static login shell and assets; the app checks the shared
    bearer token on every `/api/*` request.
+
+## Install as a config0 add-on
+
+`just install --mode config0-addon` installs openci-tf into a tenant account
+that already runs the AWS execution engine and owns a Terraform state bucket.
+It does not run bootstrap or the engine component; state for every infra root
+lives in the tenant bucket and the deploy reuses the tenant engine by name
+(`install_mode = "config0-addon"` on the deploy root). Requires `tofu` >= 1.10
+on PATH (the installers fail loud below that).
+
+The Lambda image is not built locally. A GitHub release publishes it to GHCR at
+the checked-in `IMAGE_VERSION` tag and records the pushed digest in the release
+notes (`.github/workflows/release.yml`); the install copies that digest-pinned
+image into the tenant ECR repository. The `openci-tf` GHCR package must have
+**Public** visibility before publishing. The release checks out the exact event
+SHA, verifies the checkout matches that SHA, and records the image digest, tag,
+and source commit as separate release-note fields. It then uses an empty Docker
+config to run the installer's real digest pull and fails before creating the
+GitHub release if anonymous access is not available.
+
+To publish release `1.02` from the feature branch after its commits are pushed,
+a human with package administration rights runs exactly:
+
+```sh
+cd /home/gary/project/repos/openci-tf
+SOURCE_SHA="$(git rev-parse HEAD)"
+test "$(git branch --show-current)" = post-onboarding-gitops-replay
+test "$(cat IMAGE_VERSION)" = 1.02
+gh api --method PATCH /orgs/config0-hub/packages/container/openci-tf \
+  -f visibility=public
+gh workflow run Release --ref post-onboarding-gitops-replay
+RUN_ID="$(gh run list --workflow Release --branch post-onboarding-gitops-replay \
+  --event workflow_dispatch --limit 10 --json databaseId,headSha \
+  --jq ".[] | select(.headSha == \"${SOURCE_SHA}\") | .databaseId" | head -1)"
+test -n "$RUN_ID"
+gh run watch "$RUN_ID" --exit-status
+gh release view v1.02 --json body,targetCommitish
+```
+
+The final command must show `targetCommitish` equal to `SOURCE_SHA` and three
+release-note fields: `OpenCI-TF image`, `OpenCI-TF tag`, and
+`OpenCI-TF source commit`. Supply those literal digest, tag, and source values
+as `OPENCI_TF_GHCR_IMAGE`, `OPENCI_TF_IMAGE_TAG`, and `OPENCI_TF_GIT_REF` to
+the platform feature deploy. Do not use a tag-only image reference.
+
+Before running the add-on install, store the GitHub control token. The command
+writes the default path that `install/register_repo.py` derives from
+`gitops_repo`: `/openci-tf/clone-token/<owner>-<repo>-control`. The token needs
+Contents, Pull requests, and Issues read/write for the mandatory registration
+probe; see [docs/GITHUB_TOKEN.md](GITHUB_TOKEN.md).
+
+```sh
+just install-github-control-token --repo <owner/repo> --token-file ./github-control-token.txt
+```
+
+Then set the required SSM install config (the same `just config set` namespace
+as standalone):
+
+```sh
+just config set state_bucket_name <tenant-state-bucket>
+just config set engine_name <tenant-engine-prefix>
+just config set ghcr_image ghcr.io/<owner>/openci-tf@sha256:<digest>
+just config set gitops_repo <owner/repo>
+just config set trigger_id <trigger-id>
+just config set account_alias <hub-account-alias>
+just config set upstream_urls_json '{...}'          # pinned runtime download URLs
+just config set api_caller_role_arn <role-arn>      # optional: tenant executor role for POST /runs
+just install --mode config0-addon
+```
+
+The journey composes four phases:
+
+1. **ecr** (`install/config0_addon.py --stage ecr`) — targeted `module.ecr`
+   apply on `infra/deploy` with the same backend and tfvars as the full apply,
+   so the repository exists before the image copy.
+2. **image copy** (`scripts/copy_ghcr_image.sh`) — pulls the digest-pinned
+   GHCR image and pushes it to tenant ECR at the `IMAGE_VERSION` tag.
+3. **deploy** (`install/config0_addon.py --stage deploy`) — applies
+   `infra/foundation`, waits for the copied image tag to exist in ECR, then
+   applies `infra/deploy` fully. When `api_caller_role_arn` is set, the stage
+   writes an `api_caller_policy_json` entry for that role with actions
+   `plan|drift|report` only.
+4. **registration** (`install/register_repo.py`) - initializes an empty
+   repository with `.openci_tf/.gitkeep`, proves comment access with a probe on
+   a throwaway branch and PR, then generates or reuses the webhook HMAC secret
+   in SSM. It writes both the repository settings row and the hub account alias
+   row, then creates or reconciles the GitHub webhook (the hook id is recorded
+   at `/openci-tf/install/<project>/webhook_hook_id` for clean removal). A
+   failure after partial activation rolls the settings rows and webhook back.
+   A live installation refuses a different repository until it is explicitly
+   removed. Re-runs for the same repository converge. See
+   [docs/GITHUB_WEBHOOK.md](GITHUB_WEBHOOK.md).
+
+The journey stops at the first failed phase; later phases do not run and the
+recipe exits nonzero naming the failed stage.
+
+In config0-addon mode the hub Lambda exec role trusts
+`arn:aws:iam::*:role/<project>-executor-*` by name pattern instead of an
+enumerated account list; each target role's own trust policy remains the gate
+(see [docs/ACCOUNTS.md](ACCOUNTS.md)).
+
+After apply, the deploy root exports the values an embedding platform records:
+`project_name`, `ecr_repository_url`, `settings_table_name`,
+`run_registry_table_name`, `api_url`, and `webhook_url`
+(`tofu -chdir=infra/deploy output`).
 
 ## Deploy the console
 
@@ -177,15 +296,25 @@ carry it as a bearer token. Static files never receive or require the token.
 
 ## Updating an existing install
 
-Code or infrastructure updates reuse the same recipes in the same relative
-order as `just install`; only the components that changed need to be applied,
+An install created before the S3 native lock-file release requires a one-time
+bootstrap-state migration. Use Terraform >= 1.10, which supports
+`use_lockfile=true`, and run `just bootstrap` before any other update recipe.
+That apply removes the legacy `<project>-tf-locks` DynamoDB table from bootstrap
+state. Do not skip it: `just foundation` and `just deploy` cannot remove a
+resource owned by bootstrap state, and `just verify` requires the legacy table
+to be absent.
+
+Code or infrastructure updates then reuse the same recipes in the same relative
+order as `just install`. Only the components that changed need to be applied,
 but when both change, foundation MUST go before deploy (deploy reads
 foundation's buckets/KMS via data sources):
 
 ```sh
-just foundation # bucket lifecycle/KMS changes (e.g. openci-tf/ retention)
-just deploy     # build/push IMAGE_VERSION, then deploy IAM, state machines, and lambdas
-just verify     # post-update checks
+terraform version # must report >= 1.10 for native S3 lock files
+just bootstrap    # required one time when upgrading from DynamoDB state locking
+just foundation   # bucket lifecycle/KMS changes (e.g. openci-tf/ retention)
+just deploy       # build/push IMAGE_VERSION, then deploy IAM, state machines, and lambdas
+just verify       # post-update checks, including legacy lock-table absence
 ```
 
 The engine (`just engine`) and target role recipes only need re-applying when
@@ -287,8 +416,7 @@ just verify-clean   # asserts no openci-tf footprint remains
 `uninstall` prompts whether to keep the state bucket + source copies as the
 surviving record (set `OPENCI_TF_KEEP_STATE=yes|no` for non-interactive runs).
 When not kept, the bootstrap destroy first migrates its own state back to
-local, empties the bucket (all versions), then destroys the bucket and lock
-table. SSM install parameters are deleted in both namespaces.
+local, empties the bucket (all versions), then destroys the bucket. SSM install parameters are deleted in both namespaces.
 
 After Terraform teardown, both `just uninstall` and `just bootstrap-destroy` run
 `scripts/cleanup_operator_footprint.sh`, which removes operator-managed resources
@@ -305,9 +433,9 @@ that survive `terraform destroy`:
 or executor-local/executor-remote roles remain.
 
 `just deploy-destroy` (used during `uninstall`) calls
-`scripts/terraform_unlock_stale_lock.sh` before `terraform destroy`. If a
-Terraform state lock exists on the deploy state, the script stops with exit code
-1, prints the lock holder and age, and shows the exact
+`scripts/terraform_unlock_stale_lock.sh` before `terraform destroy`. If an S3
+native lock file exists beside the deploy state object, the script stops with
+exit code 1, prints the lock holder and age, and shows the exact
 `terraform -chdir=infra/deploy force-unlock <lock-id>` command. It never
 unlocks automatically. Confirm no deploy is running, run that command, then
 retry `just uninstall` or `just deploy-destroy`.
@@ -345,12 +473,12 @@ is required.
    just target-onboard <12-digit-hub-account-id> [state-bucket-name]
    ```
 
-   Verifies the caller is the target account, confirms the existing S3 state bucket
-   (default `openci-tf-state-<target-account-id>`) and ACTIVE
-   `openci-tf-tf-locks` DynamoDB table, stores the hub role ARN and target bucket ARN
+   Verifies the caller is the target account, confirms the backend state bucket
+   (default `openci-tf-state-<target-account-id>`; pass a name to use an
+   existing shared bucket), stores the hub role ARN and target bucket ARN
    in install SSM, then runs `just target-create-aws-readonly`. Terraform derives the
-   target-role ExternalId; onboarding creates neither prerequisite. Running
-   `just bootstrap` in the target account provisions both when they do not exist.
+   target-role ExternalId; onboarding creates no bucket. No lock table exists;
+   state locking is the S3 native lock file.
 
 2. **Hub account** — with credentials for the hub account:
 
@@ -372,11 +500,15 @@ available for manual or recovery flows.
 lane binding, and state access rules.
 
 **Executor state contract:** PR-plan execution roles can only read/write Terraform
-state under the `targets/` prefix of the state bucket. Executors scope DynamoDB
-lock items to `LockID` values matching `<bucket>/targets/*`; broad reads and
-non-target lock keys are denied. Registered repositories MUST configure their
-backend state keys as `targets/<repo>/<folder>.tfstate`. Target role installs
-keep an S3-only backend; the lock table is required by repository execution.
+state under the `targets/` prefix of the state bucket, plus the S3 native lock
+file (`<key>.tflock`) beside each state object. Registered repositories keep
+their committed backend to bucket/key/region only (any terraform/tofu version
+can init it); openci-tf's own runs pass `-backend-config=use_lockfile=true` at
+init and pin tofu/terraform >= 1.10, so platform runs always lock. A human on
+an older version runs unlocked (warned, never blocked). By default backend
+state keys are `targets/<repo>/<folder>.tfstate`; a folder config may instead
+pin `state_bucket`/`state_key` to an exact registered state object (see the
+allowed state pairs below).
 The install control-plane state, the `source/` record, and `engine/` artifacts
 in the same bucket are explicitly denied to executors.
 

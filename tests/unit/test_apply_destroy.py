@@ -192,7 +192,7 @@ def test_intent_gate_apply_enabled_account_passes_folder_gate(monkeypatch):
                 "run_id": "plan-run",
                 "plan_sha256": "b" * 64,
                 "plan_artifact_name": "plan.tfplan",
-                "tf_runtime": "tofu:1.8.0",
+                "tf_runtime": "tofu:1.10.6",
                 "created_at": 1_700_000_000_000,
             }
         ),
@@ -388,7 +388,7 @@ def test_plan_lookup_marks_plan_stale_when_newer_mutation_succeeded(monkeypatch)
         mutation_action="destroy",
         commit_hash="a" * 40,
         account_id="123456789012",
-        expected_tf_runtime="tofu:1.8.0",
+        expected_tf_runtime="tofu:1.10.6",
     )
     assert result.match is None
     assert result.stale is True
@@ -1253,6 +1253,7 @@ def test_create_handler_success_keeps_requested_command_until_terminal_render(
             None,
             {
                 "token": "abc123",
+                "intent_id": "intent-0011223344556677",
                 "trigger_id": "t",
                 "pr_number": 1,
                 "action": "apply",
@@ -1332,6 +1333,7 @@ def test_create_handler_success_terminalizes_run_after_comment_metadata(monkeypa
             None,
             {
                 "token": "abc123",
+                "intent_id": "intent-0011223344556677",
                 "trigger_id": "t",
                 "pr_number": 1,
                 "action": "apply",
@@ -1390,6 +1392,7 @@ def test_create_handler_pipeline_success_terminalizes_run_after_comment_metadata
             None,
             {
                 "token": "abc123",
+                "intent_id": "intent-0011223344556677",
                 "trigger_id": "t",
                 "pr_number": 1,
                 "action": "apply",
@@ -1558,6 +1561,7 @@ def test_create_handler_metadata_failure_does_not_terminalize_succeeded(monkeypa
             None,
             {
                 "token": "abc123",
+                "intent_id": "intent-0011223344556677",
                 "trigger_id": "t",
                 "pr_number": 1,
                 "action": "apply",
@@ -1797,6 +1801,7 @@ def test_create_handler_metadata_endpoint_failure_deletes_intent_comment_and_inv
             None,
             {
                 "token": "abc123",
+                "intent_id": "intent-0011223344556677",
                 "trigger_id": "t",
                 "pr_number": 1,
                 "action": "apply",
@@ -1869,6 +1874,7 @@ def test_create_handler_ambiguous_post_sweeps_bot_token_comment_and_invalidates_
             None,
             {
                 "token": "abc123",
+                "intent_id": "intent-0011223344556677",
                 "trigger_id": "t",
                 "pr_number": 1,
                 "action": "apply",
@@ -2627,7 +2633,7 @@ def test_confirm_intent_carries_the_intents_frozen_account_binding(monkeypatch):
                 "b" * 64,
                 "plan.tfplan",
                 "123456789012",
-                "tofu:1.8.0",
+                "tofu:1.10.6",
                 frozen_binding,
             ),
         ),
@@ -2674,7 +2680,7 @@ def test_token_single_use_race(monkeypatch):
                 "b" * 64,
                 "plan.tfplan",
                 "123456789012",
-                "tofu:1.8.0",
+                "tofu:1.10.6",
                 {
                     "account_id": "123456789012",
                     "readonly_role_name": "openci-tf-executor-readonly",

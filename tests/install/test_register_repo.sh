@@ -84,7 +84,7 @@ COMMON_ARGS=(
   --git-url https://github.com/org/repo.git
   --webhook-secret-ssm /openci-tf/install/smoke/webhook_secret
   --github-token-ssm /openci-tf/clone-token/smoke-token
-  --upstream-urls-json '{"terraform:1.8.5":"https://releases.hashicorp.com/terraform/1.8.5/terraform_1.8.5_linux_amd64.zip","tfsec:1.28.10":"https://github.com/aquasecurity/tfsec/releases/download/v1.28.10/tfsec_1.28.10_linux_amd64.tar.gz","infracost:0.10.39":"https://github.com/infracost/infracost/releases/download/v0.10.39/infracost-linux-amd64.tar.gz"}'
+  --upstream-urls-json '{"terraform:1.10.5":"https://releases.hashicorp.com/terraform/1.10.5/terraform_1.10.5_linux_amd64.zip","tfsec:1.28.10":"https://github.com/aquasecurity/tfsec/releases/download/v1.28.10/tfsec_1.28.10_linux_amd64.tar.gz","infracost:0.10.39":"https://github.com/infracost/infracost/releases/download/v0.10.39/infracost-linux-amd64.tar.gz"}'
 )
 
 write_python_wrapper
@@ -101,11 +101,11 @@ expect_rc "register rejects non-canonical git url" 1 env PATH="${MOCK_DIR}:${PAT
   "${ROOT}/scripts/register_repo.sh" "${COMMON_ARGS[@]}" --git-url https://attacker.example/repo.git
 
 write_aws_no_call_mock
-BAD_UPSTREAM='{"terraform:1.8.5":"http://insecure.example/bin"}'
+BAD_UPSTREAM='{"terraform:1.10.5":"http://insecure.example/bin"}'
 expect_rc "register rejects non-https upstream url" 1 env PATH="${MOCK_DIR}:${PATH}" PYTHONPATH="${ROOT}" REAL_PYTHON="${REAL_PYTHON}" \
   "${ROOT}/scripts/register_repo.sh" "${COMMON_ARGS[@]}" --upstream-urls-json "$BAD_UPSTREAM"
 
-BAD_UPSTREAM_KEY='{"terraform":"https://releases.hashicorp.com/terraform/1.8.5/terraform_1.8.5_linux_amd64.zip"}'
+BAD_UPSTREAM_KEY='{"terraform":"https://releases.hashicorp.com/terraform/1.10.5/terraform_1.10.5_linux_amd64.zip"}'
 expect_rc "register rejects bare upstream url key" 1 env PATH="${MOCK_DIR}:${PATH}" PYTHONPATH="${ROOT}" REAL_PYTHON="${REAL_PYTHON}" \
   "${ROOT}/scripts/register_repo.sh" "${COMMON_ARGS[@]}" --upstream-urls-json "$BAD_UPSTREAM_KEY"
 
@@ -138,7 +138,7 @@ import json, sys
 item = json.load(open(sys.argv[1]))
 assert item["git_url"]["S"] == "https://github.com/org/repo.git"
 assert item["ssm_openci_tf_github_token"]["S"] == "/openci-tf/clone-token/smoke-token"
-assert item["upstream_urls"]["M"]["terraform:1.8.5"]["S"].startswith("https://")
+assert item["upstream_urls"]["M"]["terraform:1.10.5"]["S"].startswith("https://")
 assert "tamper" not in json.dumps(item)
 print("PASS: register item encoding")
 PY
