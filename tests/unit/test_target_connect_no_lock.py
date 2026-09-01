@@ -15,6 +15,8 @@ _READONLY_MODULE = _REPO_ROOT / "infra/modules/executor-readonly"
 _HUB_LOCAL_EXECUTOR = _REPO_ROOT / "infra/modules/hub-setup/local_executor_readonly.tf"
 _BOOTSTRAP_MAIN = _REPO_ROOT / "infra/bootstrap/main.tf"
 _GENERATE_BACKEND = _REPO_ROOT / "scripts/generate_backend.sh"
+_INSTALL_DOC = _REPO_ROOT / "docs/INSTALL.md"
+_VERIFY = _REPO_ROOT / "scripts/verify.sh"
 
 _LOCK_FREE_TF_SOURCES = (
     "infra/bootstrap/main.tf",
@@ -52,6 +54,27 @@ def test_bootstrap_provisions_no_lock_table():
         pytest.skip("bootstrap main.tf is not available in this test environment")
     text = _BOOTSTRAP_MAIN.read_text()
     assert 'resource "aws_dynamodb_table"' not in text
+
+
+def test_update_migration_runs_the_real_bootstrap_owner_before_verification():
+    update = _INSTALL_DOC.read_text().split("## Updating an existing install", 1)[1].split(
+        "## Enable apply and destroy", 1
+    )[0]
+    commands = ["just bootstrap", "just foundation", "just deploy", "just verify"]
+    positions = [update.index(command) for command in commands]
+    assert positions == sorted(positions)
+    assert "Terraform >= 1.10" in update
+    assert "removes the legacy `<project>-tf-locks` DynamoDB table" in update
+
+    # The documented producer is the bootstrap root that formerly owned the
+    # resource; its real post-migration configuration omits the table, while
+    # the real verification consumer requires the physical table to be gone.
+    assert 'resource "aws_dynamodb_table"' not in _BOOTSTRAP_MAIN.read_text()
+    verify = _VERIFY.read_text()
+    assert (
+        'check "lock table ${PROJECT}-tf-locks (must never exist)" '
+        '0 table_exists "${PROJECT}-tf-locks"'
+    ) in verify
 
 
 def test_bootstrap_recipe_clears_stale_foreign_backend_cache():

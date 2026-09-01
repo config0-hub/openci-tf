@@ -265,15 +265,25 @@ carry it as a bearer token. Static files never receive or require the token.
 
 ## Updating an existing install
 
-Code or infrastructure updates reuse the same recipes in the same relative
-order as `just install`; only the components that changed need to be applied,
+An install created before the S3 native lock-file release requires a one-time
+bootstrap-state migration. Use Terraform >= 1.10, which supports
+`use_lockfile=true`, and run `just bootstrap` before any other update recipe.
+That apply removes the legacy `<project>-tf-locks` DynamoDB table from bootstrap
+state. Do not skip it: `just foundation` and `just deploy` cannot remove a
+resource owned by bootstrap state, and `just verify` requires the legacy table
+to be absent.
+
+Code or infrastructure updates then reuse the same recipes in the same relative
+order as `just install`. Only the components that changed need to be applied,
 but when both change, foundation MUST go before deploy (deploy reads
 foundation's buckets/KMS via data sources):
 
 ```sh
-just foundation # bucket lifecycle/KMS changes (e.g. openci-tf/ retention)
-just deploy     # build/push IMAGE_VERSION, then deploy IAM, state machines, and lambdas
-just verify     # post-update checks
+terraform version # must report >= 1.10 for native S3 lock files
+just bootstrap    # required one time when upgrading from DynamoDB state locking
+just foundation   # bucket lifecycle/KMS changes (e.g. openci-tf/ retention)
+just deploy       # build/push IMAGE_VERSION, then deploy IAM, state machines, and lambdas
+just verify       # post-update checks, including legacy lock-table absence
 ```
 
 The engine (`just engine`) and target role recipes only need re-applying when
