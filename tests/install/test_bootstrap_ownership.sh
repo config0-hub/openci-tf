@@ -12,8 +12,10 @@ set -euo pipefail
 #   E) bootstrap: surviving LOCAL state + foreign-owned bucket -> abort (no adopt)
 #   F) bootstrap: surviving LOCAL state tracking a DIFFERENT bucket -> abort
 #   G) bootstrap-destroy: local state + foreign bucket -> abort, NO deletes
-# No DynamoDB lock table exists (S3 native lock file); no recipe may ever call
-# dynamodb delete-table.
+#   P) legacy state tracks a foreign physical table name -> abort
+#   Q) legacy state tracks the expected table but its live owner tag is foreign -> abort
+# No new DynamoDB lock table exists (S3 native lock file); migration safety may
+# inspect the removed legacy table but no recipe directly deletes it.
 #
 # Run: tests/install/test_bootstrap_ownership.sh
 
@@ -46,6 +48,8 @@ esac
 EOF
   cat >"$MOCK_DIR/terraform" <<'EOF'
 #!/usr/bin/env bash
+mkdir -p "$MOCK_CALLS"
+touch "$MOCK_CALLS/terraform"
 exit 0
 EOF
   chmod +x "$MOCK_DIR/aws" "$MOCK_DIR/terraform"
@@ -140,6 +144,24 @@ KEEP_LOCAL_STATE=1 run_case "N2: foreign-bucket child aborts bootstrap resume" 1
 write_raw_state '[{"mode": "managed", "type": "aws_s3_bucket", "name": "state", "instances": [{"attributes": {"bucket": "openci-tf-state-123456789012"}}]}, {"mode": "managed", "type": "aws_s3_bucket_public_access_block", "name": "state", "instances": [{"attributes": {"bucket": "openci-tf-state-123456789012"}}]}, {"mode": "managed", "type": "aws_s3_bucket_public_access_block", "name": "state", "instances": [{"attributes": {"bucket": "openci-tf-state-123456789012"}}]}]'
 KEEP_LOCAL_STATE=1 run_case "O: duplicate allowlisted address aborts destroy" 1 bootstrap-destroy
 assert_no_call "O: no delete-objects issued" delete-objects
+rm -f "$REPO/infra/bootstrap/terraform.tfstate"
+
+# P: an allowlisted legacy address cannot redirect migration to another table.
+write_mock owned-bucket-foreign-table present present
+write_local_state "openci-tf-state-123456789012" "some-other-table"
+KEEP_LOCAL_STATE=1 run_case "P: foreign physical legacy table name aborts bootstrap" 1 bootstrap
+assert_no_call "P: bootstrap never reaches Terraform" terraform
+KEEP_LOCAL_STATE=1 run_case "P2: foreign physical legacy table name aborts destroy" 1 bootstrap-destroy
+assert_no_call "P2: destroy never reaches Terraform" terraform
+assert_no_call "P2: bucket is not emptied" delete-objects
+
+# Q: even the expected physical name is unsafe when its live owner tag is foreign.
+write_local_state "openci-tf-state-123456789012" "openci-tf-tf-locks"
+KEEP_LOCAL_STATE=1 run_case "Q: foreign-owned legacy table aborts bootstrap migration" 1 bootstrap
+assert_no_call "Q: bootstrap never reaches Terraform" terraform
+KEEP_LOCAL_STATE=1 run_case "Q2: foreign-owned legacy table aborts destroy" 1 bootstrap-destroy
+assert_no_call "Q2: destroy never reaches Terraform" terraform
+assert_no_call "Q2: bucket is not emptied" delete-objects
 rm -f "$REPO/infra/bootstrap/terraform.tfstate"
 
 if [ "$FAILURES" -gt 0 ]; then

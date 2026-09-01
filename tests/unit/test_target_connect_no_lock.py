@@ -1,9 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Config0, Inc.
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Decision 27: state locking is the S3 native lock file; no DynamoDB lock IAM,
-lock table, or lock-table backend plumbing exists anywhere."""
+provisioning, or lock-table backend plumbing remains. Legacy table references
+exist only in recovery checks that safely remove pre-migration state."""
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -17,6 +19,7 @@ _BOOTSTRAP_MAIN = _REPO_ROOT / "infra/bootstrap/main.tf"
 _GENERATE_BACKEND = _REPO_ROOT / "scripts/generate_backend.sh"
 _INSTALL_DOC = _REPO_ROOT / "docs/INSTALL.md"
 _VERIFY = _REPO_ROOT / "scripts/verify.sh"
+_STATE_IDENTITY = _REPO_ROOT / "scripts/state_identity.sh"
 
 _LOCK_FREE_TF_SOURCES = (
     "infra/bootstrap/main.tf",
@@ -91,8 +94,62 @@ def test_bootstrap_recipe_clears_stale_foreign_backend_cache():
 def test_justfile_backend_inits_pass_use_lockfile():
     justfile = (_REPO_ROOT / "justfile").read_text()
     assert "-backend-config=use_lockfile=true" in justfile
-    assert "tf-locks" not in justfile
-    assert "dynamodb" not in justfile.lower().replace("no dynamodb lock table exists", "")
+    backend_generation = [line for line in justfile.splitlines() if "generate_backend.sh" in line]
+    assert backend_generation
+    assert all("tf-locks" not in line for line in backend_generation)
+    assert all("LEGACY_LOCK_TABLE" not in line for line in backend_generation)
+
+
+def test_legacy_state_identity_accepts_only_the_former_physical_table_name(tmp_path: Path):
+    bucket = "openci-tf-state-123456789012"
+    expected_table = "openci-tf-tf-locks"
+
+    def run(table_name: str) -> subprocess.CompletedProcess[str]:
+        state = tmp_path / f"{table_name}.tfstate"
+        state.write_text(
+            json.dumps(
+                {
+                    "version": 4,
+                    "resources": [
+                        {
+                            "mode": "managed",
+                            "type": "aws_s3_bucket",
+                            "name": "state",
+                            "instances": [{"attributes": {"bucket": bucket}}],
+                        },
+                        {
+                            "mode": "managed",
+                            "type": "aws_dynamodb_table",
+                            "name": "locks",
+                            "instances": [{"attributes": {"name": table_name}}],
+                        },
+                    ],
+                }
+            )
+        )
+        return subprocess.run(
+            [str(_STATE_IDENTITY), str(state), bucket, expected_table],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    assert run(expected_table).returncode == 0
+    foreign = run("someone-elses-table")
+    assert foreign.returncode == 1
+    assert "refusing to use it" in foreign.stderr
+
+
+def test_legacy_table_recovery_checks_live_ownership_before_terraform():
+    justfile = (_REPO_ROOT / "justfile").read_text()
+    bootstrap = justfile.split("bootstrap:", 1)[1].split("# Destroys the state bucket", 1)[0]
+    destroy = justfile.split("bootstrap-destroy:", 1)[1].split("# --- component recipes", 1)[0]
+    for recipe in (bootstrap, destroy):
+        state_identity = recipe.index("./scripts/state_identity.sh")
+        owner_probe = recipe.index("aws dynamodb list-tags-of-resource")
+        terraform = recipe.index("terraform -chdir=infra/bootstrap")
+        assert state_identity < owner_probe < terraform
+        assert 'TABLE_OWNER" = "openci-tf-bootstrap"' in recipe
 
 
 def test_generated_backend_is_bucket_key_region_only(tmp_path: Path):

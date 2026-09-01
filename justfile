@@ -36,7 +36,8 @@ config action key value="":
 # State bucket. Chicken-and-egg: first run applies with LOCAL state (the
 # backend bucket does not exist yet), then migrates state into it. Backend
 # locking is the S3 native lock file (use_lockfile at init; tofu/terraform
-# >= 1.10). No DynamoDB lock table exists.
+# >= 1.10). No new DynamoDB lock table is provisioned; recovery validates a
+# removed legacy table before allowing Terraform to migrate it away.
 bootstrap:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -44,6 +45,7 @@ bootstrap:
     source ./scripts/phase_timing.sh
     ACCT="$(aws sts get-caller-identity --query Account --output text)"
     BUCKET="{{OPENCI_TF_PROJECT}}-state-${ACCT}"
+    LEGACY_LOCK_TABLE="{{OPENCI_TF_PROJECT}}-tf-locks"
     bootstrap_terraform_apply() {
     ./scripts/write_tfvars.sh infra/bootstrap "aws_region={{OPENCI_TF_REGION}}"
     set +e; ./scripts/bucket_exists.sh "$BUCKET"; probe_rc=$?; set -e
@@ -51,13 +53,23 @@ bootstrap:
     if [ -s infra/bootstrap/terraform.tfstate ]; then
         # Crash-window recovery: a previous run applied locally but never
         # finished migrating. Resume from LOCAL state ONLY if it provably
-        # tracks OUR bucket name (no foreign resource may be reachable
-        # through this state), and any live bucket is not foreign-owned.
-        ./scripts/state_identity.sh infra/bootstrap/terraform.tfstate "$BUCKET" || exit 1
+        # tracks OUR bucket and legacy table names (no foreign resource may be
+        # reachable through this state), and every live tracked resource is
+        # not foreign-owned.
+        ./scripts/state_identity.sh infra/bootstrap/terraform.tfstate "$BUCKET" "$LEGACY_LOCK_TABLE" || exit 1
         if [ "$probe_rc" = 0 ]; then
             OWNER="$(./scripts/bucket_owner.sh "$BUCKET")"
             [ "$OWNER" = "openci-tf-bootstrap" ] || [ "$OWNER" = "untagged" ] || {
                 echo "ERROR: bucket ${BUCKET} is owned by '${OWNER}'; refusing to adopt via local-state resume" >&2; exit 1; }
+        fi
+        if jq -e '.resources[]? | select(.mode == "managed" and .type == "aws_dynamodb_table" and .name == "locks")' infra/bootstrap/terraform.tfstate >/dev/null; then
+            set +e; ./scripts/table_exists.sh "$LEGACY_LOCK_TABLE"; table_rc=$?; set -e
+            [ "$table_rc" = 0 ] || [ "$table_rc" = 1 ] || exit "$table_rc"
+            if [ "$table_rc" = 0 ]; then
+                TABLE_OWNER="$(aws dynamodb list-tags-of-resource --resource-arn "arn:aws:dynamodb:{{OPENCI_TF_REGION}}:${ACCT}:table/${LEGACY_LOCK_TABLE}" --query "Tags[?Key=='ManagedBy'].Value" --output text)"
+                [ "$TABLE_OWNER" = "openci-tf-bootstrap" ] || {
+                    echo "ERROR: legacy lock table ${LEGACY_LOCK_TABLE} is owned by '${TABLE_OWNER:-untagged}'; refusing local-state migration" >&2; exit 1; }
+            fi
         fi
         echo "local bootstrap state survives and tracks ${BUCKET}: resuming interrupted bootstrap"
         rm -f infra/bootstrap/backend.tf
@@ -101,6 +113,7 @@ bootstrap-destroy:
     source ./scripts/phase_timing.sh
     ACCT="$(aws sts get-caller-identity --query Account --output text)"
     BUCKET="{{OPENCI_TF_PROJECT}}-state-${ACCT}"
+    LEGACY_LOCK_TABLE="{{OPENCI_TF_PROJECT}}-tf-locks"
     bootstrap_destroy_terraform() {
     ./scripts/write_tfvars.sh infra/bootstrap "aws_region={{OPENCI_TF_REGION}}"
     set +e; ./scripts/bucket_exists.sh "$BUCKET"; bucket_rc=$?; set -e
@@ -110,7 +123,16 @@ bootstrap-destroy:
         # finished). Destroy from it ONLY if it provably tracks OUR bucket,
         # and every live tracked resource passes ownership — ALL checks run
         # BEFORE any destructive side effect (empty/destroy).
-        ./scripts/state_identity.sh infra/bootstrap/terraform.tfstate "$BUCKET" || exit 1
+        ./scripts/state_identity.sh infra/bootstrap/terraform.tfstate "$BUCKET" "$LEGACY_LOCK_TABLE" || exit 1
+        if jq -e '.resources[]? | select(.mode == "managed" and .type == "aws_dynamodb_table" and .name == "locks")' infra/bootstrap/terraform.tfstate >/dev/null; then
+            set +e; ./scripts/table_exists.sh "$LEGACY_LOCK_TABLE"; table_rc=$?; set -e
+            [ "$table_rc" = 0 ] || [ "$table_rc" = 1 ] || exit "$table_rc"
+            if [ "$table_rc" = 0 ]; then
+                TABLE_OWNER="$(aws dynamodb list-tags-of-resource --resource-arn "arn:aws:dynamodb:{{OPENCI_TF_REGION}}:${ACCT}:table/${LEGACY_LOCK_TABLE}" --query "Tags[?Key=='ManagedBy'].Value" --output text)"
+                [ "$TABLE_OWNER" = "openci-tf-bootstrap" ] || {
+                    echo "ERROR: legacy lock table ${LEGACY_LOCK_TABLE} is owned by '${TABLE_OWNER:-untagged}'; refusing local-state destroy" >&2; exit 1; }
+            fi
+        fi
         if [ "$bucket_rc" = 0 ]; then
             OWNER="$(./scripts/bucket_owner.sh "$BUCKET")"
             [ "$OWNER" = "openci-tf-bootstrap" ] || [ "$OWNER" = "untagged" ] || { echo "ERROR: bucket ${BUCKET} owned by '${OWNER}', refusing to destroy" >&2; exit 1; }
