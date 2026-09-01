@@ -13,8 +13,8 @@ Select these repository permissions for every registered repository:
 | Fine-grained permission | Access | Why openci-tf needs it |
 | --- | --- | --- |
 | Metadata | Read | Repository metadata, PR/repository checks, and collaborator permission lookup. |
-| Contents | Read | Pinned cloning of the same-repository PR head SHA; registration also checks the repository root contents endpoint, so the repository must have initial content/default branch. |
-| Pull requests | Read | Repository PR list, PR metadata, and changed-files reads. |
+| Contents | Read and write | Pinned cloning and root-content checks; config0 add-on registration also writes a file on a throwaway probe branch. The repository must have initial content/default branch. |
+| Pull requests | Read and write | PR list, metadata, and changed-files reads; config0 add-on registration also creates and closes a throwaway probe PR. |
 | Issues | Read and write | Repository-wide and PR issue-comment list/create/update/delete. |
 
 Do **not** select Administration unless GitHub changes the official endpoint
@@ -26,11 +26,14 @@ Relevant GitHub REST permission references:
 
 - Get a repository — Metadata read:
   <https://docs.github.com/rest/repos/repos#get-a-repository>
-- Get repository content — Contents read:
-  <https://docs.github.com/rest/repos/contents#get-repository-content>
-- List pull requests, get a pull request, and list pull request files — Pull requests read:
+- Get and create or update repository content - Contents read/write:
+  <https://docs.github.com/rest/repos/contents#get-repository-content> and
+  <https://docs.github.com/rest/repos/contents#create-or-update-file-contents>
+- List, get, create, and update pull requests, and list pull request files - Pull requests read/write:
   <https://docs.github.com/rest/pulls/pulls#list-pull-requests>,
-  <https://docs.github.com/rest/pulls/pulls#get-a-pull-request>, and
+  <https://docs.github.com/rest/pulls/pulls#get-a-pull-request>,
+  <https://docs.github.com/rest/pulls/pulls#create-a-pull-request>,
+  <https://docs.github.com/rest/pulls/pulls#update-a-pull-request>, and
   <https://docs.github.com/rest/pulls/pulls#list-pull-requests-files>
 - List repository issue comments and list/create/update/delete issue comments — Issues read/write:
   <https://docs.github.com/rest/issues/comments>
@@ -63,9 +66,17 @@ Keep these as three separate SSM/KMS-backed credentials:
    printf '%s' "$GITHUB_CONTROL_TOKEN" | just install-github-control-token --repo ORG/REPO --token-file -
    ```
 
-3. Register the repo. The registration path reads the token from SSM, runs a
-   bounded read-only capability verifier, and writes the DynamoDB row only if the
-   verifier passes:
+3. Register the repo through the path used by the installation:
+
+   - `just install --mode config0-addon` reads the token from the default
+     `/openci-tf/clone-token/ORG-REPO-control` path. Before activating settings
+     or a webhook, it creates a throwaway branch and file, opens and closes a
+     throwaway PR, posts a comment, then deletes the branch. This mandatory
+     mutation probe verifies the Contents, Pull requests, and Issues write
+     permissions in the table above.
+   - The standalone `just register-repo` command is the legacy registration
+     path. It runs the bounded read-only capability verifier below and writes
+     the DynamoDB row only if that verifier passes:
 
    ```sh
    just register-repo \
@@ -84,7 +95,7 @@ runtime version your repo uses (for example both `terraform:1.10.5` and
 `terraform:1.12.2` when folders use both). Existing rows with a bare `terraform`
 or `tofu` key are accepted only when resolving one version of that binary.
 
-The verifier uses only `GET` endpoints. Required registration checks validate
+The standalone verifier uses only `GET` endpoints. Required registration checks validate
 authenticated access (`/user`), repository metadata, root contents, repository PR listing
 (`state=all&per_page=1`), repository-wide issue comments (`per_page=1`), and
 collaborator-permission lookup. A 404 from the contents endpoint is fail-loud;
@@ -98,11 +109,12 @@ interpolation.
 `--github-capability-pr-number` is optional because repository registration often
 precedes PRs. When supplied, it additionally verifies exact PR metadata,
 changed-files, and that PR's issue comments. It is not required for normal registration.
-The verifier never creates, updates, deletes comments, or changes repository
-settings. Therefore **Issues write cannot be checked safely at registration
-time**; a missing Issues write permission fails loud on the first real PR comment
-attempt with a bounded non-secret GitHub API error. There is no public skip or
-break-glass flag for this registration check.
+The standalone verifier never creates, updates, deletes comments, or changes
+repository settings. Therefore it cannot prove the write permissions required by
+the config0 add-on registration probe; use the full permission table for add-on
+installs. On the standalone path, a missing Issues write permission fails loud on
+the first real PR comment attempt with a bounded non-secret GitHub API error.
+There is no public skip or break-glass flag for either registration check.
 
 ## Rotation
 

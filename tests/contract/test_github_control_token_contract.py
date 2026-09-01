@@ -6,13 +6,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 GITHUB_TOKEN_DOC = (ROOT / "docs" / "GITHUB_TOKEN.md").read_text()
+INSTALL_DOC = (ROOT / "docs" / "INSTALL.md").read_text()
 REGISTER_REPO = (ROOT / "scripts" / "register_repo.sh").read_text()
+CONFIG0_REGISTER_REPO = (ROOT / "install" / "register_repo.py").read_text()
 INSTALL_TOKEN = (ROOT / "scripts" / "install_github_control_token.sh").read_text()
 
 
 def test_documented_fine_grained_control_token_permissions_are_exact():
     assert "Only selected repositories" in GITHUB_TOKEN_DOC
-    for permission in ["Metadata | Read", "Contents | Read", "Pull requests | Read", "Issues | Read and write"]:
+    for permission in [
+        "Metadata | Read",
+        "Contents | Read and write",
+        "Pull requests | Read and write",
+        "Issues | Read and write",
+    ]:
         assert permission in GITHUB_TOKEN_DOC
     assert "classic `repo`" in GITHUB_TOKEN_DOC
     assert "Do **not** select Administration" in GITHUB_TOKEN_DOC
@@ -41,6 +48,7 @@ def test_registration_has_no_public_break_glass_capability_flag():
 
 def test_registration_documents_required_and_optional_read_only_checks():
     for phrase in [
+        "standalone verifier uses only `GET` endpoints",
         "repository PR listing",
         "repository-wide issue comments",
         "collaborator-permission lookup",
@@ -49,3 +57,26 @@ def test_registration_documents_required_and_optional_read_only_checks():
         "There is no public skip",
     ]:
         assert phrase in GITHUB_TOKEN_DOC
+
+
+def test_addon_permission_contract_matches_the_real_mutation_probe():
+    for operation in [
+        'github.request("PUT", f"/repos/{repo}/contents/{file_path}"',
+        '"POST",\n            f"/repos/{repo}/pulls"',
+        '"POST",\n            f"/repos/{repo}/issues/{number}/comments"',
+        '"PATCH", f"/repos/{repo}/pulls/{number}"',
+        '("delete probe branch", "DELETE", ref_path',
+    ]:
+        assert operation in CONFIG0_REGISTER_REPO
+    for phrase in [
+        "mandatory mutation probe",
+        "Contents, Pull requests, and Issues write",
+        "legacy registration",
+    ]:
+        assert phrase in GITHUB_TOKEN_DOC
+
+
+def test_addon_install_documents_control_token_at_the_consumed_default_path():
+    assert "just install-github-control-token --repo <owner/repo>" in INSTALL_DOC
+    assert "/openci-tf/clone-token/<owner>-<repo>-control" in INSTALL_DOC
+    assert "install/register_repo.py" in INSTALL_DOC

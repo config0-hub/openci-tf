@@ -158,8 +158,18 @@ image into the tenant ECR repository. The `openci-tf` GHCR package must have
 to run the installer's real digest pull and fails before creating the GitHub
 release if anonymous access is not available.
 
-Required SSM install config before running (same `just config set` namespace as
-standalone):
+Before running the add-on install, store the GitHub control token. The command
+writes the default path that `install/register_repo.py` derives from
+`gitops_repo`: `/openci-tf/clone-token/<owner>-<repo>-control`. The token needs
+Contents, Pull requests, and Issues read/write for the mandatory registration
+probe; see [docs/GITHUB_TOKEN.md](GITHUB_TOKEN.md).
+
+```sh
+just install-github-control-token --repo <owner/repo> --token-file ./github-control-token.txt
+```
+
+Then set the required SSM install config (the same `just config set` namespace
+as standalone):
 
 ```sh
 just config set state_bucket_name <tenant-state-bucket>
