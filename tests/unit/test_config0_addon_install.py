@@ -197,12 +197,17 @@ def test_hub_setup_pattern_trust_matches_executor_roles():
     assert "var.target_account_wildcard" in hub_main
 
 
-def test_release_workflow_publishes_ghcr_image_with_digest():
+def test_release_workflow_publishes_ghcr_image_with_digest_and_exact_source():
     workflow = _RELEASE_WORKFLOW.read_text(encoding="utf-8")
     assert "ghcr.io" in workflow
     assert "scripts/image_tag.sh" in workflow
     assert "RepoDigests" in workflow
-    assert "gh release" in workflow
+    assert "ref: ${{ github.sha }}" in workflow
+    assert 'test "$source_sha" = "$GITHUB_SHA"' in workflow
+    assert "OpenCI-TF image:" in workflow
+    assert "OpenCI-TF tag:" in workflow
+    assert "OpenCI-TF source commit:" in workflow
+    assert '--target "${{ steps.source.outputs.sha }}"' in workflow
 
 
 def test_release_gates_on_anonymous_pull_through_the_installers_real_consumer():

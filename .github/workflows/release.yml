@@ -25,6 +25,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Record the exact release source
+        id: source
+        run: |
+          source_sha="$(git rev-parse HEAD)"
+          test "$source_sha" = "$GITHUB_SHA"
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
 
       - name: Read the checked-in image version
         id: version
@@ -69,10 +78,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="v${{ steps.version.outputs.tag }}"
-          notes="Lambda container image: \`${{ steps.push.outputs.digest }}\` (GHCR tag \`${{ steps.version.outputs.tag }}\`, source ${GITHUB_SHA})"
+          notes="$(cat <<'EOF'
+          OpenCI-TF image: `${{ steps.push.outputs.digest }}`
+          OpenCI-TF tag: `${{ steps.version.outputs.tag }}`
+          OpenCI-TF source commit: `${{ steps.source.outputs.sha }}`
+          EOF
+          )"
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes "$notes"
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" \
+              --target "${{ steps.source.outputs.sha }}" --notes "$notes"
           else
-            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --target "${{ steps.source.outputs.sha }}" \
               --title "openci-tf ${{ steps.version.outputs.tag }}" --notes "$notes"
           fi

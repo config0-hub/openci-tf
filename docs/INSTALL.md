@@ -154,9 +154,36 @@ The Lambda image is not built locally. A GitHub release publishes it to GHCR at
 the checked-in `IMAGE_VERSION` tag and records the pushed digest in the release
 notes (`.github/workflows/release.yml`); the install copies that digest-pinned
 image into the tenant ECR repository. The `openci-tf` GHCR package must have
-**Public** visibility before publishing. The release uses an empty Docker config
-to run the installer's real digest pull and fails before creating the GitHub
-release if anonymous access is not available.
+**Public** visibility before publishing. The release checks out the exact event
+SHA, verifies the checkout matches that SHA, and records the image digest, tag,
+and source commit as separate release-note fields. It then uses an empty Docker
+config to run the installer's real digest pull and fails before creating the
+GitHub release if anonymous access is not available.
+
+To publish release `1.02` from the feature branch after its commits are pushed,
+a human with package administration rights runs exactly:
+
+```sh
+cd /home/gary/project/repos/openci-tf
+SOURCE_SHA="$(git rev-parse HEAD)"
+test "$(git branch --show-current)" = post-onboarding-gitops-replay
+test "$(cat IMAGE_VERSION)" = 1.02
+gh api --method PATCH /orgs/config0-hub/packages/container/openci-tf \
+  -f visibility=public
+gh workflow run Release --ref post-onboarding-gitops-replay
+RUN_ID="$(gh run list --workflow Release --branch post-onboarding-gitops-replay \
+  --event workflow_dispatch --limit 10 --json databaseId,headSha \
+  --jq ".[] | select(.headSha == \"${SOURCE_SHA}\") | .databaseId" | head -1)"
+test -n "$RUN_ID"
+gh run watch "$RUN_ID" --exit-status
+gh release view v1.02 --json body,targetCommitish
+```
+
+The final command must show `targetCommitish` equal to `SOURCE_SHA` and three
+release-note fields: `OpenCI-TF image`, `OpenCI-TF tag`, and
+`OpenCI-TF source commit`. Supply those literal digest, tag, and source values
+as `OPENCI_TF_GHCR_IMAGE`, `OPENCI_TF_IMAGE_TAG`, and `OPENCI_TF_GIT_REF` to
+the platform feature deploy. Do not use a tag-only image reference.
 
 Before running the add-on install, store the GitHub control token. The command
 writes the default path that `install/register_repo.py` derives from
