@@ -465,6 +465,7 @@ install-config0-addon:
     GHCR_IMAGE="$(./scripts/ssm_config.sh get ghcr_image)" || { echo "ERROR: set the released image first: just config set ghcr_image ghcr.io/<owner>/openci-tf@sha256:<digest>" >&2; exit 1; }
     GITOPS_REPO="$(./scripts/ssm_config.sh get gitops_repo)" || { echo "ERROR: set the repository first: just config set gitops_repo <owner/repo>" >&2; exit 1; }
     TRIGGER_ID="$(./scripts/ssm_config.sh get trigger_id)" || { echo "ERROR: set the trigger id first: just config set trigger_id <id>" >&2; exit 1; }
+    ACCOUNT_ALIAS="$(./scripts/ssm_config.sh get account_alias)" || { echo "ERROR: set the hub account alias first: just config set account_alias <alias>" >&2; exit 1; }
     UPSTREAM_URLS_JSON="$(./scripts/ssm_config.sh get upstream_urls_json)" || { echo "ERROR: set the pinned runtime URLs first: just config set upstream_urls_json '{...}'" >&2; exit 1; }
     API_CALLER_ROLE_ARN="$(./scripts/ssm_config.sh get-or api_caller_role_arn '')"
     addon_args=(--region "{{OPENCI_TF_REGION}}" --project-name "{{OPENCI_TF_PROJECT}}" --state-bucket "$STATE_BUCKET" --engine-name "$ENGINE_NAME")
@@ -475,7 +476,8 @@ install-config0-addon:
     register_repository() {
     WEBHOOK_URL="$(tofu -chdir=infra/deploy output -raw webhook_url)"
     python3 install/register_repo.py --repo "$GITOPS_REPO" --trigger-id "$TRIGGER_ID" \
-        --webhook-url "$WEBHOOK_URL" --upstream-urls-json "$UPSTREAM_URLS_JSON" \
+        --account-alias "$ACCOUNT_ALIAS" --webhook-url "$WEBHOOK_URL" \
+        --upstream-urls-json "$UPSTREAM_URLS_JSON" \
         --region "{{OPENCI_TF_REGION}}" --project-name "{{OPENCI_TF_PROJECT}}"
     }
     run_stage() {

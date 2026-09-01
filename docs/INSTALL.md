@@ -204,6 +204,7 @@ just config set engine_name <tenant-engine-prefix>
 just config set ghcr_image ghcr.io/<owner>/openci-tf@sha256:<digest>
 just config set gitops_repo <owner/repo>
 just config set trigger_id <trigger-id>
+just config set account_alias <hub-account-alias>
 just config set upstream_urls_json '{...}'          # pinned runtime download URLs
 just config set api_caller_role_arn <role-arn>      # optional: tenant executor role for POST /runs
 just install --mode config0-addon
@@ -221,13 +222,16 @@ The journey composes four phases:
    applies `infra/deploy` fully. When `api_caller_role_arn` is set, the stage
    writes an `api_caller_policy_json` entry for that role with actions
    `plan|drift|report` only.
-4. **registration** (`install/register_repo.py`) — proves comment access
-   first with a probe on a throwaway branch and PR, then generates or reuses
-   the webhook HMAC secret in SSM, writes the repository settings row, and
-   creates or reconciles the GitHub webhook (the hook id is recorded at
-   `/openci-tf/install/<project>/webhook_hook_id` for clean removal). A
-   failure after partial activation rolls the activation back. Re-runs
-   converge. See [docs/GITHUB_WEBHOOK.md](GITHUB_WEBHOOK.md).
+4. **registration** (`install/register_repo.py`) - initializes an empty
+   repository with `.openci_tf/.gitkeep`, proves comment access with a probe on
+   a throwaway branch and PR, then generates or reuses the webhook HMAC secret
+   in SSM. It writes both the repository settings row and the hub account alias
+   row, then creates or reconciles the GitHub webhook (the hook id is recorded
+   at `/openci-tf/install/<project>/webhook_hook_id` for clean removal). A
+   failure after partial activation rolls the settings rows and webhook back.
+   A live installation refuses a different repository until it is explicitly
+   removed. Re-runs for the same repository converge. See
+   [docs/GITHUB_WEBHOOK.md](GITHUB_WEBHOOK.md).
 
 The journey stops at the first failed phase; later phases do not run and the
 recipe exits nonzero naming the failed stage.

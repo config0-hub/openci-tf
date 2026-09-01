@@ -55,7 +55,13 @@ def test_config0_addon_help_documents_both_stages():
 
 def test_register_repo_help_documents_registration_flags():
     help_text = _help_output(_REGISTER_REPO)
-    for flag in ("--repo", "--trigger-id", "--webhook-url", "--upstream-urls-json"):
+    for flag in (
+        "--repo",
+        "--trigger-id",
+        "--account-alias",
+        "--webhook-url",
+        "--upstream-urls-json",
+    ):
         assert flag in help_text
 
 
@@ -189,6 +195,9 @@ def test_deploy_root_supports_config0_addon_inputs():
     assert 'target_account_wildcard = var.install_mode == "config0-addon"' in main
     assert "${local.engine_name}-codebuild" in main
     assert "${local.engine_name}-worker" in main
+    assert 'module "hub_executor_poweruser"' in main
+    assert 'var.install_mode == "config0-addon" ? 1 : 0' in main
+    assert 'source                   = "../modules/executor-poweruser"' in main
 
 
 def test_hub_setup_pattern_trust_matches_executor_roles():
@@ -369,6 +378,16 @@ class _FakeDynamoDb:
         self.items = dict(items or {})
         self.calls = []
 
+    def query(self, **kwargs):
+        self.calls.append(("query", kwargs))
+        return {
+            "Items": [
+                item
+                for (pk, _), item in self.items.items()
+                if pk == "repo"
+            ]
+        }
+
     @staticmethod
     def _key(key_or_item):
         return (key_or_item["pk"]["S"], key_or_item["sk"]["S"])
@@ -391,6 +410,7 @@ def _register_args(**overrides):
     args = SimpleNamespace(
         repo="owner/sample-target-repo",
         trigger_id="trig",
+        account_alias="hub-111122223333",
         git_url="https://github.com/owner/sample-target-repo.git",
         github_token_ssm="/openci-tf/clone-token/owner-sample-target-repo-control",
         webhook_url="https://api.example.com/webhook",
@@ -408,6 +428,46 @@ def _register_args(**overrides):
     return args
 
 
+def test_hub_alias_producer_round_trips_through_real_alias_consumer(monkeypatch):
+    from boto3.dynamodb.types import TypeDeserializer
+    from src.domain.accounts import aliases
+
+    module = _register_module()
+    args = _register_args()
+    typed_item = module.account_alias_item(args, "111122223333")
+    deserializer = TypeDeserializer()
+    item = {
+        key: deserializer.deserialize(value)
+        for key, value in typed_item.items()
+    }
+    monkeypatch.setattr(aliases, "get_account_alias", lambda alias: item)
+
+    loaded = aliases.load_account_alias(args.account_alias)
+
+    assert loaded.account_id == "111122223333"
+    assert loaded.role_name == "openci-tf-executor-readonly"
+    assert loaded.poweruser_role_name == "openci-tf-executor-poweruser"
+    assert loaded.external_id == module.derive_external_id(
+        "111122223333", "111122223333"
+    )
+    assert loaded.enable_apply is True
+
+
+def test_different_repository_is_rejected_before_registration():
+    module = _register_module()
+    existing = {
+        "pk": {"S": "repo"},
+        "sk": {"S": "old-trigger"},
+        "repo_name": {"S": "owner/old-repo"},
+    }
+    dynamodb = _FakeDynamoDb({("repo", "old-trigger"): existing})
+
+    with pytest.raises(module.RegistrationError, match="remove that add-on"):
+        module.require_repo_compatible(
+            dynamodb, "openci-tf-settings", "owner/new-repo"
+        )
+
+
 def test_main_runs_comment_probe_before_any_activation(monkeypatch):
     """The probe must pass before the settings row, webhook, or hook id are written."""
     module = _register_module()
@@ -418,12 +478,19 @@ def test_main_runs_comment_probe_before_any_activation(monkeypatch):
     monkeypatch.setattr(module, "reconcile_webhook", lambda github, args, secret: (order.append("webhook"), (1, True, None))[1])
     monkeypatch.setattr(module, "record_hook_id", lambda ssm, args, hook_id: (order.append("record"), "p")[1])
 
+    dynamodb = _FakeDynamoDb()
     fake_boto3 = SimpleNamespace(
-        client=lambda name, region_name: _FakeSsm(
-            {"/openci-tf/clone-token/owner-sample-target-repo-control": "token"}
+        client=lambda name, region_name: (
+            _FakeSsm(
+                {"/openci-tf/clone-token/owner-sample-target-repo-control": "token"}
+            )
+            if name == "ssm"
+            else SimpleNamespace(
+                get_caller_identity=lambda: {"Account": "111122223333"}
+            )
+            if name == "sts"
+            else dynamodb
         )
-        if name == "ssm"
-        else _FakeDynamoDb()
     )
     monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
 
@@ -431,6 +498,7 @@ def test_main_runs_comment_probe_before_any_activation(monkeypatch):
         [
             "--repo", "owner/sample-target-repo",
             "--trigger-id", "trig",
+            "--account-alias", "hub-111122223333",
             "--webhook-url", "https://api.example.com/webhook",
             "--upstream-urls-json", json.dumps({"tofu:1.12.6": "https://example.com/tofu.tar.gz"}),
             "--region", "us-east-1",
@@ -438,6 +506,7 @@ def test_main_runs_comment_probe_before_any_activation(monkeypatch):
     )
     assert rc == 0
     assert order == ["probe", "secret", "settings", "webhook", "record"]
+    assert ("account", "hub-111122223333") in dynamodb.items
 
 
 def test_main_failed_probe_never_activates(monkeypatch):
@@ -451,12 +520,19 @@ def test_main_failed_probe_never_activates(monkeypatch):
     monkeypatch.setattr(module, "apply_repo_settings", lambda *a: touched.append("settings"))
     monkeypatch.setattr(module, "reconcile_webhook", lambda *a: touched.append("webhook"))
     monkeypatch.setattr(module, "record_hook_id", lambda *a: touched.append("record"))
+    dynamodb = _FakeDynamoDb()
     fake_boto3 = SimpleNamespace(
-        client=lambda name, region_name: _FakeSsm(
-            {"/openci-tf/clone-token/owner-sample-target-repo-control": "token"}
+        client=lambda name, region_name: (
+            _FakeSsm(
+                {"/openci-tf/clone-token/owner-sample-target-repo-control": "token"}
+            )
+            if name == "ssm"
+            else SimpleNamespace(
+                get_caller_identity=lambda: {"Account": "111122223333"}
+            )
+            if name == "sts"
+            else dynamodb
         )
-        if name == "ssm"
-        else _FakeDynamoDb()
     )
     monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
 
@@ -465,6 +541,7 @@ def test_main_failed_probe_never_activates(monkeypatch):
             [
                 "--repo", "owner/sample-target-repo",
                 "--trigger-id", "trig",
+                "--account-alias", "hub-111122223333",
                 "--webhook-url", "https://api.example.com/webhook",
                 "--upstream-urls-json", json.dumps({"tofu:1.12.6": "https://example.com/tofu.tar.gz"}),
                 "--region", "us-east-1",
@@ -483,18 +560,30 @@ def test_activate_registration_rolls_back_on_late_failure():
 
     with pytest.raises(RuntimeError, match="ssm put_parameter failed"):
         module.activate_registration(
-            github, ssm, dynamodb, args, "secret", "/openci-tf/install/openci-tf/webhook_secret"
+            github,
+            ssm,
+            dynamodb,
+            args,
+            "secret",
+            "/openci-tf/install/openci-tf/webhook_secret",
+            "111122223333",
         )
     deletes = [call for call in github.calls if call[0] == "DELETE"]
     assert deletes and deletes[0][1].endswith("/hooks/4242")
     assert ("delete_item", {"pk": {"S": "repo"}, "sk": {"S": "trig"}}) in dynamodb.calls
     assert ("repo", "trig") not in dynamodb.items
+    assert ("account", "hub-111122223333") not in dynamodb.items
 
 
 def test_activate_registration_restores_prior_settings_row_on_late_failure():
     module = _register_module()
     args = _register_args()
     prior = {"pk": {"S": "repo"}, "sk": {"S": "trig"}, "repo_name": {"S": "owner/old-repo"}}
+    prior_account = {
+        "pk": {"S": "account"},
+        "sk": {"S": "hub-111122223333"},
+        "account_id": {"S": "999900001111"},
+    }
     prior_hook = {
         "id": 7,
         "active": False,
@@ -503,11 +592,22 @@ def test_activate_registration_restores_prior_settings_row_on_late_failure():
     }
     github = _FakeGitHub(hooks=[prior_hook])
     ssm = _FakeSsm(fail_put=True)
-    dynamodb = _FakeDynamoDb({("repo", "trig"): prior})
+    dynamodb = _FakeDynamoDb(
+        {
+            ("repo", "trig"): prior,
+            ("account", "hub-111122223333"): prior_account,
+        }
+    )
 
     with pytest.raises(RuntimeError, match="ssm put_parameter failed"):
         module.activate_registration(
-            github, ssm, dynamodb, args, "secret", "/openci-tf/install/openci-tf/webhook_secret"
+            github,
+            ssm,
+            dynamodb,
+            args,
+            "secret",
+            "/openci-tf/install/openci-tf/webhook_secret",
+            "111122223333",
         )
     # Pre-existing hook is reconciled, never deleted.
     assert not [call for call in github.calls if call[0] == "DELETE"]
@@ -521,6 +621,7 @@ def test_activate_registration_restores_prior_settings_row_on_late_failure():
         "config": {"url": "https://api.example.com/webhook/trig", "content_type": "form"},
     }
     assert dynamodb.items[("repo", "trig")] == prior
+    assert dynamodb.items[("account", "hub-111122223333")] == prior_account
 
 
 def test_reconcile_webhook_snapshot_round_trips_prior_state():
@@ -544,10 +645,11 @@ def test_reconcile_webhook_snapshot_round_trips_prior_state():
 
 
 class _ProbeGitHub:
-    """Serves the probe flow; optionally fails at one path fragment."""
+    """Serves the probe flow; optionally starts as an empty repository."""
 
-    def __init__(self, fail_on=None):
+    def __init__(self, fail_on=None, *, empty=False):
         self.fail_on = fail_on
+        self.empty = empty
         self.calls = []
 
     def request(self, method, path, body=None, *, ok_status=(200, 201)):
@@ -555,7 +657,9 @@ class _ProbeGitHub:
         if self.fail_on and self.fail_on in path and method == "POST":
             raise RuntimeError(f"forced failure at {path}")
         if method == "GET" and path == "/repos/owner/sample-target-repo":
-            return {"default_branch": "main"}
+            return {"default_branch": "main", "size": 0 if self.empty else 1}
+        if method == "PUT" and path.endswith("/contents/.openci_tf/.gitkeep"):
+            return {"commit": {"sha": "initial123"}}
         if method == "GET" and "git/ref/heads/main" in path:
             return {"object": {"sha": "abc123"}}
         if method == "POST" and path.endswith("/pulls"):
@@ -567,6 +671,29 @@ class _ProbeGitHub:
     def exists(self, path):
         self.calls.append(("EXISTS", path))
         return None
+
+
+def test_empty_repository_is_initialized_before_the_real_probe_flow():
+    module = _register_module()
+    args = _register_args()
+    github = _ProbeGitHub(empty=True)
+
+    module.comment_probe(github, args)
+
+    init_call = (
+        "PUT",
+        "/repos/owner/sample-target-repo/contents/.openci_tf/.gitkeep",
+    )
+    branch_call = (
+        "POST",
+        "/repos/owner/sample-target-repo/git/refs",
+    )
+    assert init_call in github.calls
+    assert github.calls.index(init_call) < github.calls.index(branch_call)
+    assert (
+        "GET",
+        "/repos/owner/sample-target-repo/git/ref/heads/main",
+    ) not in github.calls
 
 
 def test_comment_probe_cleans_up_branch_and_pr_on_failure():

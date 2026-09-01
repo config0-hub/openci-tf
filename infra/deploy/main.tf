@@ -34,6 +34,14 @@ module "hub_setup" {
   enable_apply            = var.enable_apply
 }
 
+module "hub_executor_poweruser" {
+  count                    = var.install_mode == "config0-addon" ? 1 : 0
+  source                   = "../modules/executor-poweruser"
+  role_prefix              = var.project_name
+  hub_lambda_exec_role_arn = module.hub_setup.hub_lambda_exec_role_arn
+  state_bucket_arn         = local.state_bucket_arn
+}
+
 data "aws_sfn_state_machine" "engine_codebuild" {
   name = "${local.engine_name}-codebuild"
 }

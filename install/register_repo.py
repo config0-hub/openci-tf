@@ -4,19 +4,20 @@
 
 Converging registration flow (safe to re-run):
 
-  1. Comment probe: a throwaway branch and pull request prove the control
-     token can push contents, open PRs, and comment; both are removed again
-     even when the probe fails.
-  2. Generate the webhook secret (reused when it already exists in SSM).
-  3. Apply the repository settings item to the <project>-settings table.
-  4. Create or reconcile the GitHub webhook; the hook id is recorded in SSM
+  1. Refuse a different repository while any repository registration remains.
+  2. Initialize an empty repository, then use a throwaway branch and pull
+     request to prove the control token can push contents, open PRs, and
+     comment; the probe artifacts are removed even when the probe fails.
+  3. Generate the webhook secret (reused when it already exists in SSM).
+  4. Apply repository and hub-account-alias settings to <project>-settings.
+  5. Create or reconcile the GitHub webhook; the hook id is recorded in SSM
      at /openci-tf/install/<project>/webhook_hook_id and printed.
 
 Every failure is fatal. The probe runs before any activation write, so a
 repository is never activated with a token that cannot write. A failure
 after partial activation rolls the activation back (a newly created hook is
 deleted; a pre-existing hook is patched back to its prior state; the
-settings row is removed or restored) before the error is re-raised.
+settings rows are removed or restored) before the error is re-raised.
 """
 
 from __future__ import annotations
@@ -35,7 +36,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+from src.domain.accounts.external_id import derive_external_id  # noqa: E402
 from src.domain.cmd_builder.installers import PINNED_UPSTREAM_URLS  # noqa: E402
+from src.domain.engine.artifact_limits import MAX_ACCOUNT_ALIAS_CHARS  # noqa: E402
 from src.platform.aws.clone_token import validate_clone_token_path  # noqa: E402
 from src.platform.git.origin import validate_clone_source  # noqa: E402
 
@@ -107,6 +110,45 @@ def get_or_create_secret(ssm, path: str) -> str:
         return value
 
 
+def require_repo_compatible(dynamodb, table: str, repo: str) -> None:
+    """Refuse to register a second repository over a live installation."""
+    response = dynamodb.query(
+        TableName=table,
+        KeyConditionExpression="pk = :pk",
+        ExpressionAttributeValues={":pk": {"S": "repo"}},
+        ProjectionExpression="sk, repo_name",
+    )
+    rows = response.get("Items", [])
+    if not isinstance(rows, list):
+        raise RegistrationError("repository settings query Items must be a list")
+    registered = sorted(
+        {
+            item.get("repo_name", {}).get("S", "")
+            for item in rows
+            if item.get("repo_name", {}).get("S")
+        }
+    )
+    conflicts = [name for name in registered if name != repo]
+    if conflicts:
+        raise RegistrationError(
+            f"openci-tf is already registered to {conflicts}; remove that add-on "
+            f"before installing repository {repo!r}"
+        )
+
+
+def account_alias_item(args: argparse.Namespace, account_id: str) -> dict:
+    """Build the exact low-level DynamoDB row consumed by load_account_alias."""
+    return {
+        "pk": {"S": "account"},
+        "sk": {"S": args.account_alias},
+        "account_id": {"S": account_id},
+        "role_name": {"S": f"{args.project_name}-executor-readonly"},
+        "poweruser_role_name": {"S": f"{args.project_name}-executor-poweruser"},
+        "external_id": {"S": derive_external_id(account_id, account_id)},
+        "enable_apply": {"BOOL": True},
+    }
+
+
 def apply_repo_settings(dynamodb, args: argparse.Namespace, webhook_secret_ssm: str) -> None:
     upstream_urls = json.loads(args.upstream_urls_json)
     if not isinstance(upstream_urls, dict) or not upstream_urls:
@@ -135,6 +177,13 @@ def apply_repo_settings(dynamodb, args: argparse.Namespace, webhook_secret_ssm: 
         item["require_approval"] = {"BOOL": True}
     dynamodb.put_item(TableName=args.table, Item=item)
     print(f"applied repo settings for {args.repo} (trigger_id={args.trigger_id}) to {args.table}")
+
+
+def apply_account_alias(dynamodb, args: argparse.Namespace, account_id: str) -> None:
+    dynamodb.put_item(TableName=args.table, Item=account_alias_item(args, account_id))
+    print(
+        f"applied hub account alias {args.account_alias} ({account_id}) to {args.table}"
+    )
 
 
 def reconcile_webhook(github: GitHub, args: argparse.Namespace, secret: str) -> tuple[int, bool, dict | None]:
@@ -181,13 +230,48 @@ def record_hook_id(ssm, args: argparse.Namespace, hook_id: int) -> str:
     return path
 
 
+def repository_base(github: GitHub, repo: str) -> tuple[str, str]:
+    """Return the default branch and base SHA, initializing an empty repo once."""
+    metadata = github.request("GET", f"/repos/{repo}")
+    if not isinstance(metadata, dict):
+        raise RegistrationError("GitHub repository metadata must be an object")
+    default_branch = metadata.get("default_branch")
+    if not isinstance(default_branch, str) or not default_branch:
+        raise RegistrationError("GitHub repository has no default branch name")
+    if metadata.get("size") == 0:
+        created = github.request(
+            "PUT",
+            f"/repos/{repo}/contents/.openci_tf/.gitkeep",
+            {
+                "message": "Initialize repository for openci-tf registration",
+                "content": base64.b64encode(b"openci-tf\n").decode(),
+            },
+        )
+        if not isinstance(created, dict):
+            raise RegistrationError("GitHub initial commit response must be an object")
+        base_sha = (created.get("commit") or {}).get("sha")
+        if not isinstance(base_sha, str) or not base_sha:
+            raise RegistrationError("GitHub initial commit response has no commit SHA")
+        print(
+            f"initialized empty repository {repo} on {default_branch} at "
+            ".openci_tf/.gitkeep"
+        )
+        return default_branch, base_sha
+    ref = github.request("GET", f"/repos/{repo}/git/ref/heads/{default_branch}")
+    if not isinstance(ref, dict):
+        raise RegistrationError("GitHub default branch ref must be an object")
+    base_sha = (ref.get("object") or {}).get("sha")
+    if not isinstance(base_sha, str) or not base_sha:
+        raise RegistrationError("GitHub default branch ref has no commit SHA")
+    return default_branch, base_sha
+
+
 def comment_probe(github: GitHub, args: argparse.Namespace) -> None:
     """Prove the token can push a branch, open a PR, and comment; then clean up."""
     repo = args.repo
     branch = f"openci-tf-register-probe-{args.trigger_id}"
     ref_path = f"/repos/{repo}/git/refs/heads/{branch}"
-    default_branch = github.request("GET", f"/repos/{repo}")["default_branch"]
-    base_sha = github.request("GET", f"/repos/{repo}/git/ref/heads/{default_branch}")["object"]["sha"]
+    default_branch, base_sha = repository_base(github, repo)
 
     if github.exists(f"/repos/{repo}/git/ref/heads/{branch}") is not None:
         github.request("DELETE", ref_path, ok_status=(204,))
@@ -258,20 +342,23 @@ def _cleanup_probe(
 
 
 def activate_registration(
-    github: GitHub, ssm, dynamodb, args: argparse.Namespace, secret: str, webhook_secret_ssm: str
+    github: GitHub,
+    ssm,
+    dynamodb,
+    args: argparse.Namespace,
+    secret: str,
+    webhook_secret_ssm: str,
+    account_id: str,
 ) -> int:
-    """Write the settings row and webhook; roll back both on a late failure.
-
-    Runs only after the comment probe has proven the token. If the webhook
-    create/reconcile or the hook-id record fails after the settings row was
-    written, the partial activation is reconciled back (a newly created hook
-    is deleted; a pre-existing hook is patched back to its prior active flag,
-    events, and config; the settings row is removed, or restored to its prior
-    item) and the original error is re-raised.
-    """
-    key = {"pk": {"S": "repo"}, "sk": {"S": args.trigger_id}}
-    prior_item = dynamodb.get_item(TableName=args.table, Key=key).get("Item")
+    """Write repo plus hub-alias settings and webhook as one rollback unit."""
+    repo_key = {"pk": {"S": "repo"}, "sk": {"S": args.trigger_id}}
+    account_key = {"pk": {"S": "account"}, "sk": {"S": args.account_alias}}
+    prior_items = {
+        "repo": dynamodb.get_item(TableName=args.table, Key=repo_key).get("Item"),
+        "account": dynamodb.get_item(TableName=args.table, Key=account_key).get("Item"),
+    }
     apply_repo_settings(dynamodb, args, webhook_secret_ssm)
+    apply_account_alias(dynamodb, args, account_id)
     hook_id: int | None = None
     hook_created = False
     prior_hook_state: dict | None = None
@@ -302,14 +389,15 @@ def activate_registration(
                     file=sys.stderr,
                 )
         try:
-            if prior_item is None:
-                dynamodb.delete_item(TableName=args.table, Key=key)
-                print(f"rolled back settings row for trigger_id={args.trigger_id} after failed registration", file=sys.stderr)
-            else:
-                dynamodb.put_item(TableName=args.table, Item=prior_item)
-                print(f"restored prior settings row for trigger_id={args.trigger_id} after failed registration", file=sys.stderr)
+            for name, key in (("repo", repo_key), ("account", account_key)):
+                prior_item = prior_items[name]
+                if prior_item is None:
+                    dynamodb.delete_item(TableName=args.table, Key=key)
+                else:
+                    dynamodb.put_item(TableName=args.table, Item=prior_item)
+            print("restored repository and hub-alias settings after failed registration", file=sys.stderr)
         except Exception as cleanup_error:
-            print(f"WARNING: could not restore settings row: {cleanup_error}", file=sys.stderr)
+            print(f"WARNING: could not restore registration settings: {cleanup_error}", file=sys.stderr)
         raise
 
 
@@ -321,6 +409,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--repo", required=True, help="Repository as owner/repo")
     parser.add_argument("--trigger-id", required=True, help="Webhook trigger id registered for this repository")
+    parser.add_argument(
+        "--account-alias",
+        required=True,
+        help="Hub account alias used by folder configuration",
+    )
     parser.add_argument("--git-url", default="", help="Canonical HTTPS clone URL (default: https://github.com/<repo>.git)")
     parser.add_argument("--webhook-url", required=True, help="Deploy output webhook_url; the trigger id is appended")
     parser.add_argument(
@@ -337,6 +430,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if not _REPO_NAME.fullmatch(args.repo) or ".." in args.repo:
         parser.error("--repo must be exactly owner/repo")
+    if (
+        not args.account_alias.strip()
+        or len(args.account_alias) > MAX_ACCOUNT_ALIAS_CHARS
+    ):
+        parser.error(
+            f"--account-alias must be non-blank and at most {MAX_ACCOUNT_ALIAS_CHARS} characters"
+        )
     if not args.git_url:
         args.git_url = f"https://github.com/{args.repo}.git"
     if not args.github_token_ssm:
@@ -355,6 +455,12 @@ def main(argv: list[str] | None = None) -> int:
 
     ssm = boto3.client("ssm", region_name=args.region)
     dynamodb = boto3.client("dynamodb", region_name=args.region)
+    sts = boto3.client("sts", region_name=args.region)
+
+    require_repo_compatible(dynamodb, args.table, args.repo)
+    account_id = sts.get_caller_identity()["Account"]
+    if not isinstance(account_id, str) or not re.fullmatch(r"\d{12}", account_id):
+        raise RegistrationError("STS caller identity has no valid 12-digit account id")
 
     token = ssm.get_parameter(Name=args.github_token_ssm, WithDecryption=True)["Parameter"]["Value"].strip()
     if not token:
@@ -365,7 +471,15 @@ def main(argv: list[str] | None = None) -> int:
 
     webhook_secret_ssm = f"/openci-tf/install/{args.project_name}/webhook_secret"
     secret = get_or_create_secret(ssm, webhook_secret_ssm)
-    hook_id = activate_registration(github, ssm, dynamodb, args, secret, webhook_secret_ssm)
+    hook_id = activate_registration(
+        github,
+        ssm,
+        dynamodb,
+        args,
+        secret,
+        webhook_secret_ssm,
+        account_id,
+    )
     print(f"registered {args.repo} (trigger_id={args.trigger_id}, hook_id={hook_id})")
     return 0
 
