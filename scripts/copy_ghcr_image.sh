@@ -7,13 +7,15 @@ set -euo pipefail
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 PROJECT="${OPENCI_TF_PROJECT:-openci-tf}"
 GHCR_IMAGE=""
+VERIFY_PUBLIC_ONLY=false
 
 usage() {
   cat >&2 <<'EOF'
-Usage: copy_ghcr_image.sh --ghcr-image ghcr.io/<owner>/openci-tf@sha256:<digest> [--region REGION] [--project NAME]
+Usage: copy_ghcr_image.sh --ghcr-image ghcr.io/<owner>/openci-tf@sha256:<digest> [--region REGION] [--project NAME] [--verify-public-only]
 
-Pulls the digest-pinned GHCR image and pushes it to
+Pulls the digest-pinned GHCR image anonymously and pushes it to
 <account>.dkr.ecr.<region>.amazonaws.com/<project>:<IMAGE_VERSION>.
+With --verify-public-only, stops after the pull without calling AWS or pushing.
 EOF
   exit 1
 }
@@ -24,6 +26,7 @@ while [[ $# -gt 0 ]]; do
     --ghcr-image) GHCR_IMAGE="$2"; shift 2 ;;
     --region) REGION="$2"; shift 2 ;;
     --project) PROJECT="$2"; shift 2 ;;
+    --verify-public-only) VERIFY_PUBLIC_ONLY=true; shift ;;
     *) echo "Unknown arg: $1" >&2; usage ;;
   esac
 done
@@ -37,13 +40,23 @@ case "$GHCR_IMAGE" in
     ;;
 esac
 
+pull_released_image() {
+  docker pull "$GHCR_IMAGE"
+}
+
+if [[ "$VERIFY_PUBLIC_ONLY" == true ]]; then
+  pull_released_image
+  echo "verified anonymous pull of ${GHCR_IMAGE}"
+  exit 0
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IMAGE_TAG="$("${SCRIPT_DIR}/image_tag.sh")"
 ACCT="$(aws sts get-caller-identity --query Account --output text)"
 ECR_REGISTRY="${ACCT}.dkr.ecr.${REGION}.amazonaws.com"
 ECR_IMAGE="${ECR_REGISTRY}/${PROJECT}:${IMAGE_TAG}"
 
-docker pull "$GHCR_IMAGE"
+pull_released_image
 docker tag "$GHCR_IMAGE" "$ECR_IMAGE"
 aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 docker push "$ECR_IMAGE"

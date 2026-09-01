@@ -54,6 +54,16 @@ jobs:
           esac
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
+      - name: Verify the image is anonymously pullable
+        run: |
+          # GHCR package visibility must already be Public. Use an empty Docker
+          # config and the installer's real pull path so cached workflow
+          # credentials cannot make a private package pass this release gate.
+          anonymous_docker_config="$(mktemp -d)"
+          trap 'rm -rf "$anonymous_docker_config"' EXIT
+          DOCKER_CONFIG="$anonymous_docker_config" ./scripts/copy_ghcr_image.sh \
+            --ghcr-image "${{ steps.push.outputs.digest }}" --verify-public-only
+
       - name: Create or update the release with the digest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

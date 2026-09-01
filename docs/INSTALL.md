@@ -153,7 +153,10 @@ on PATH (the installers fail loud below that).
 The Lambda image is not built locally. A GitHub release publishes it to GHCR at
 the checked-in `IMAGE_VERSION` tag and records the pushed digest in the release
 notes (`.github/workflows/release.yml`); the install copies that digest-pinned
-image into the tenant ECR repository.
+image into the tenant ECR repository. The `openci-tf` GHCR package must have
+**Public** visibility before publishing. The release uses an empty Docker config
+to run the installer's real digest pull and fails before creating the GitHub
+release if anonymous access is not available.
 
 Required SSM install config before running (same `just config set` namespace as
 standalone):

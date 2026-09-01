@@ -17,6 +17,7 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONFIG0_ADDON = _REPO_ROOT / "install" / "config0_addon.py"
 _REGISTER_REPO = _REPO_ROOT / "install" / "register_repo.py"
+_COPY_GHCR_IMAGE = _REPO_ROOT / "scripts" / "copy_ghcr_image.sh"
 _JUSTFILE = _REPO_ROOT / "justfile"
 _RELEASE_WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "release.yml"
 
@@ -202,6 +203,44 @@ def test_release_workflow_publishes_ghcr_image_with_digest():
     assert "scripts/image_tag.sh" in workflow
     assert "RepoDigests" in workflow
     assert "gh release" in workflow
+
+
+def test_release_gates_on_anonymous_pull_through_the_installers_real_consumer():
+    workflow = _RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    verify = workflow.index("Verify the image is anonymously pullable")
+    release = workflow.index("Create or update the release with the digest")
+    assert verify < release
+    assert 'DOCKER_CONFIG="$anonymous_docker_config" ./scripts/copy_ghcr_image.sh' in workflow
+    assert '--ghcr-image "${{ steps.push.outputs.digest }}" --verify-public-only' in workflow
+
+
+def test_public_pull_verification_uses_real_copy_script_without_aws(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "calls"
+    (bin_dir / "docker").write_text(
+        '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$MOCK_CALLS"\n', encoding="utf-8"
+    )
+    (bin_dir / "aws").write_text(
+        '#!/usr/bin/env bash\necho "AWS must not be called" >&2\nexit 97\n', encoding="utf-8"
+    )
+    for command in ("docker", "aws"):
+        (bin_dir / command).chmod(0o755)
+    image = "ghcr.io/config0-hub/openci-tf@sha256:" + "a" * 64
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["MOCK_CALLS"] = str(calls)
+    completed = subprocess.run(
+        [str(_COPY_GHCR_IMAGE), "--ghcr-image", image, "--verify-public-only"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=_REPO_ROOT,
+        env=env,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert calls.read_text(encoding="utf-8").splitlines() == [f"pull {image}"]
+    assert f"verified anonymous pull of {image}" in completed.stdout
 
 
 class _FakeGitHub:
