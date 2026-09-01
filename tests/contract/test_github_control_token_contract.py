@@ -69,7 +69,7 @@ def test_addon_permission_contract_matches_the_real_mutation_probe():
     ]:
         assert operation in CONFIG0_REGISTER_REPO
     for phrase in [
-        "mandatory mutation probe",
+        "mutation probe verifies",
         "Contents, Pull requests, and Issues write",
         "legacy registration",
     ]:
