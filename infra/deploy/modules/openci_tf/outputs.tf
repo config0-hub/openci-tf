@@ -38,9 +38,12 @@ output "destroy_state_machine_arn" {
 }
 
 # API Gateway
+# The $default stage invoke_url ends with "/", so the join must trim it:
+# "https://x.execute-api.../" + "/webhook" would register a "//webhook/<id>"
+# URL, which does not match the "POST /webhook/{trigger_id}" route.
 output "webhook_url" {
   description = "Base URL for webhooks: POST {url}/{trigger_id}"
-  value       = "${aws_apigatewayv2_stage.default.invoke_url}/webhook"
+  value       = "${trimsuffix(aws_apigatewayv2_stage.default.invoke_url, "/")}/webhook"
 }
 
 output "api_id" {
@@ -52,8 +55,8 @@ output "run_registry_table_name" {
 }
 
 output "api_url" {
-  description = "Base URL for AWS IAM core API routes"
-  value       = aws_apigatewayv2_stage.default.invoke_url
+  description = "Base URL for AWS IAM core API routes (no trailing slash)"
+  value       = trimsuffix(aws_apigatewayv2_stage.default.invoke_url, "/")
 }
 
 output "alarm_topic_arn" { value = aws_sns_topic.alarms.arn }
