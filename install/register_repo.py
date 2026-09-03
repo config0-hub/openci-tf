@@ -5,13 +5,17 @@
 Converging registration flow (safe to re-run):
 
   1. Refuse a different repository while any repository registration remains.
-  2. Initialize an empty repository, then use a throwaway branch and pull
-     request to prove the control token can push contents, open PRs, and
-     comment; the probe artifacts are removed even when the probe fails.
+  2. Initialize an empty repository (only when the default branch has no
+     commit yet), then use a throwaway branch and pull request to prove the
+     control token can push contents, open PRs, and comment; the probe
+     artifacts are removed even when the probe fails.
   3. Generate the webhook secret (reused when it already exists in SSM).
   4. Apply repository and hub-account-alias settings to <project>-settings.
-  5. Create or reconcile the GitHub webhook; the hook id is recorded in SSM
-     at /openci-tf/install/<project>/webhook_hook_id and printed.
+  5. Create or reconcile the GitHub webhook. An existing hook is found by the
+     hook id recorded in SSM, then by its config.url (also matching a URL
+     that differs only by doubled slashes); it is patched in place, never
+     duplicated. The hook id is recorded in SSM at
+     /openci-tf/install/<project>/webhook_hook_id and printed.
 
 Every failure is fatal. The probe runs before any activation write, so a
 repository is never activated with a token that cannot write. A failure
@@ -90,12 +94,17 @@ class GitHub:
             raise RegistrationError(f"GitHub {method} {path} returned unexpected HTTP {status}")
         return json.loads(payload)
 
-    def exists(self, path: str) -> dict | list | None:
-        """GET that returns None on 404 instead of failing."""
+    def exists(self, path: str, *, missing: tuple[int, ...] = (404,)) -> dict | list | None:
+        """GET that returns None on a missing-resource status instead of failing.
+
+        GitHub answers git-data reads on a repository without any commit with
+        HTTP 409 ("Git Repository is empty"); callers that probe for that
+        state pass missing=(404, 409).
+        """
         try:
             return self.request("GET", path)
         except RegistrationError as error:
-            if "HTTP 404" in str(error):
+            if any(f"HTTP {code}" in str(error) for code in missing):
                 return None
             raise
 
@@ -186,20 +195,69 @@ def apply_account_alias(dynamodb, args: argparse.Namespace, account_id: str) -> 
     )
 
 
-def reconcile_webhook(github: GitHub, args: argparse.Namespace, secret: str) -> tuple[int, bool, dict | None]:
+def _normalize_hook_url(url: object) -> str:
+    """Collapse doubled path slashes so a hook written by an older release
+    (which joined the webhook URL as ``//webhook``) still matches."""
+    if not isinstance(url, str):
+        return ""
+    return re.sub(r"(?<!:)/{2,}", "/", url).rstrip("/")
+
+
+def find_existing_hook(hooks: list, full_url: str, stored_hook_id: int | None) -> dict | None:
+    """Pick the hook a previous registration created, if any.
+
+    Match order: the hook id recorded in SSM, an exact config.url match, then
+    a config.url that differs from full_url only by doubled slashes.
+    """
+    if not isinstance(hooks, list):
+        raise RegistrationError("GitHub hook listing must be a list")
+    if stored_hook_id is not None:
+        for hook in hooks:
+            if hook.get("id") == stored_hook_id:
+                return hook
+    for hook in hooks:
+        if hook.get("config", {}).get("url") == full_url:
+            return hook
+    wanted = _normalize_hook_url(full_url)
+    for hook in hooks:
+        if _normalize_hook_url(hook.get("config", {}).get("url")) == wanted:
+            return hook
+    return None
+
+
+def stored_hook_id(ssm, args: argparse.Namespace) -> int | None:
+    """Return the hook id a previous registration recorded in SSM, if any."""
+    path = f"/openci-tf/install/{args.project_name}/webhook_hook_id"
+    try:
+        value = ssm.get_parameter(Name=path, WithDecryption=True)["Parameter"]["Value"]
+    except ssm.exceptions.ParameterNotFound:
+        return None
+    if not isinstance(value, str) or not value.strip().isdigit():
+        raise RegistrationError(f"recorded webhook hook id at {path} is not an integer: {value!r}")
+    return int(value.strip())
+
+
+def reconcile_webhook(
+    github: GitHub,
+    args: argparse.Namespace,
+    secret: str,
+    *,
+    stored_hook_id: int | None = None,
+) -> tuple[int, bool, dict | None]:
     """Create or reconcile the webhook.
 
     Returns (hook_id, created_new_hook, prior_hook_state). For a pre-existing
     hook, prior_hook_state snapshots the fields the PATCH changes (active,
     events, config) so a late registration failure can restore them; for a
-    newly created hook it is None.
+    newly created hook it is None. A hook found via find_existing_hook is
+    patched to the current URL, events, and secret; a second hook is never
+    created for the same trigger.
     """
     full_url = f"{args.webhook_url.rstrip('/')}/{args.trigger_id}"
     config = {"url": full_url, "content_type": "json", "secret": secret, "insecure_ssl": "0"}
     hooks = github.request("GET", f"/repos/{args.repo}/hooks?per_page=100")
-    matches = [hook for hook in hooks if hook.get("config", {}).get("url") == full_url]
-    if matches:
-        hook = matches[0]
+    hook = find_existing_hook(hooks, full_url, stored_hook_id)
+    if hook is not None:
         hook_id = hook["id"]
         prior_state = {
             "active": hook.get("active"),
@@ -230,39 +288,63 @@ def record_hook_id(ssm, args: argparse.Namespace, hook_id: int) -> str:
     return path
 
 
+def default_branch_sha(github: GitHub, repo: str, default_branch: str) -> str | None:
+    """Return the default branch head SHA, or None when the repository has no commit.
+
+    The repository ``size`` field is not used: it is a cached KB figure that
+    stays 0 for a repository holding only the bootstrap ``.openci_tf/.gitkeep``,
+    which made every re-registration repeat the bootstrap PUT and fail with
+    HTTP 422 because the existing blob sha was not supplied.
+    """
+    ref = github.exists(f"/repos/{repo}/git/ref/heads/{default_branch}", missing=(404, 409))
+    if ref is None:
+        return None
+    if not isinstance(ref, dict):
+        raise RegistrationError("GitHub default branch ref must be an object")
+    base_sha = (ref.get("object") or {}).get("sha")
+    if not isinstance(base_sha, str) or not base_sha:
+        raise RegistrationError("GitHub default branch ref has no commit SHA")
+    return base_sha
+
+
 def repository_base(github: GitHub, repo: str) -> tuple[str, str]:
-    """Return the default branch and base SHA, initializing an empty repo once."""
+    """Return the default branch and base SHA, initializing an empty repo once.
+
+    A repository whose default branch already has a commit (including one
+    whose only commit is the bootstrap ``.openci_tf/.gitkeep`` from an earlier
+    registration) is left untouched.
+    """
     metadata = github.request("GET", f"/repos/{repo}")
     if not isinstance(metadata, dict):
         raise RegistrationError("GitHub repository metadata must be an object")
     default_branch = metadata.get("default_branch")
     if not isinstance(default_branch, str) or not default_branch:
         raise RegistrationError("GitHub repository has no default branch name")
-    if metadata.get("size") == 0:
-        created = github.request(
-            "PUT",
-            f"/repos/{repo}/contents/.openci_tf/.gitkeep",
-            {
-                "message": "Initialize repository for openci-tf registration",
-                "content": base64.b64encode(b"openci-tf\n").decode(),
-            },
-        )
-        if not isinstance(created, dict):
-            raise RegistrationError("GitHub initial commit response must be an object")
-        base_sha = (created.get("commit") or {}).get("sha")
-        if not isinstance(base_sha, str) or not base_sha:
-            raise RegistrationError("GitHub initial commit response has no commit SHA")
-        print(
-            f"initialized empty repository {repo} on {default_branch} at "
-            ".openci_tf/.gitkeep"
-        )
+    base_sha = default_branch_sha(github, repo, default_branch)
+    if base_sha is not None:
         return default_branch, base_sha
-    ref = github.request("GET", f"/repos/{repo}/git/ref/heads/{default_branch}")
-    if not isinstance(ref, dict):
-        raise RegistrationError("GitHub default branch ref must be an object")
-    base_sha = (ref.get("object") or {}).get("sha")
+    if github.exists(f"/repos/{repo}/contents/.openci_tf/.gitkeep") is not None:
+        raise RegistrationError(
+            f"repository {repo} has .openci_tf/.gitkeep but no readable {default_branch} head; "
+            "refusing to re-initialize"
+        )
+    created = github.request(
+        "PUT",
+        f"/repos/{repo}/contents/.openci_tf/.gitkeep",
+        {
+            "message": "Initialize repository for openci-tf registration",
+            "content": base64.b64encode(b"openci-tf\n").decode(),
+        },
+    )
+    if not isinstance(created, dict):
+        raise RegistrationError("GitHub initial commit response must be an object")
+    base_sha = (created.get("commit") or {}).get("sha")
     if not isinstance(base_sha, str) or not base_sha:
-        raise RegistrationError("GitHub default branch ref has no commit SHA")
+        raise RegistrationError("GitHub initial commit response has no commit SHA")
+    print(
+        f"initialized empty repository {repo} on {default_branch} at "
+        ".openci_tf/.gitkeep"
+    )
     return default_branch, base_sha
 
 
@@ -363,7 +445,9 @@ def activate_registration(
     hook_created = False
     prior_hook_state: dict | None = None
     try:
-        hook_id, hook_created, prior_hook_state = reconcile_webhook(github, args, secret)
+        hook_id, hook_created, prior_hook_state = reconcile_webhook(
+            github, args, secret, stored_hook_id=stored_hook_id(ssm, args)
+        )
         record_hook_id(ssm, args, hook_id)
         return hook_id
     except BaseException:
