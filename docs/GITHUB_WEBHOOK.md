@@ -23,7 +23,10 @@ canonical.
 4. creates or reconciles the GitHub webhook against the deploy's
    `webhook_url`, recording the hook id at
    `/openci-tf/install/<project>/webhook_hook_id` so removal can delete the
-   exact hook.
+   exact hook. An existing hook is matched by that recorded id first, then by
+   its `config.url` (a URL that differs only by doubled slashes, as written by
+   releases before 1.03, also matches) and patched to the current URL, events,
+   and secret. A second hook is never created for the same trigger.
 
 Re-runs converge; every failure is fatal. Nothing is activated before the
 probe passes, and a failure after the settings row is written rolls the

@@ -475,7 +475,7 @@ def test_main_runs_comment_probe_before_any_activation(monkeypatch):
     monkeypatch.setattr(module, "comment_probe", lambda github, args: order.append("probe"))
     monkeypatch.setattr(module, "get_or_create_secret", lambda ssm, path: (order.append("secret"), "s")[1])
     monkeypatch.setattr(module, "apply_repo_settings", lambda dynamodb, args, path: order.append("settings"))
-    monkeypatch.setattr(module, "reconcile_webhook", lambda github, args, secret: (order.append("webhook"), (1, True, None))[1])
+    monkeypatch.setattr(module, "reconcile_webhook", lambda github, args, secret, **kw: (order.append("webhook"), (1, True, None))[1])
     monkeypatch.setattr(module, "record_hook_id", lambda ssm, args, hook_id: (order.append("record"), "p")[1])
 
     dynamodb = _FakeDynamoDb()
@@ -518,7 +518,7 @@ def test_main_failed_probe_never_activates(monkeypatch):
         lambda github, args: (_ for _ in ()).throw(module.RegistrationError("probe failed")),
     )
     monkeypatch.setattr(module, "apply_repo_settings", lambda *a: touched.append("settings"))
-    monkeypatch.setattr(module, "reconcile_webhook", lambda *a: touched.append("webhook"))
+    monkeypatch.setattr(module, "reconcile_webhook", lambda *a, **kw: touched.append("webhook"))
     monkeypatch.setattr(module, "record_hook_id", lambda *a: touched.append("record"))
     dynamodb = _FakeDynamoDb()
     fake_boto3 = SimpleNamespace(
@@ -668,8 +668,10 @@ class _ProbeGitHub:
             return {"id": 9}
         return {}
 
-    def exists(self, path):
+    def exists(self, path, *, missing=(404,)):
         self.calls.append(("EXISTS", path))
+        if "git/ref/heads/main" in path and not self.empty:
+            return self.request("GET", path)
         return None
 
 
@@ -708,3 +710,148 @@ def test_comment_probe_cleans_up_branch_and_pr_on_failure():
         "DELETE",
         "/repos/owner/sample-target-repo/git/refs/heads/openci-tf-register-probe-trig",
     ) in github.calls
+
+
+class _FakeRepoGitHub:
+    """Serves repository metadata, refs, and contents for repository_base."""
+
+    def __init__(self, module, *, size, head_sha, gitkeep_sha=None, ref_status=404):
+        self.module = module
+        self.size = size
+        self.head_sha = head_sha
+        self.gitkeep_sha = gitkeep_sha
+        self.ref_status = ref_status
+        self.calls = []
+
+    def _fail(self, method, path, code):
+        raise self.module.RegistrationError(f"GitHub {method} {path} failed with HTTP {code}: {{}}")
+
+    def request(self, method, path, body=None, *, ok_status=(200, 201)):
+        self.calls.append((method, path, body))
+        if method == "GET" and path == "/repos/owner/sample-target-repo":
+            return {"default_branch": "main", "size": self.size}
+        if method == "GET" and path == "/repos/owner/sample-target-repo/git/ref/heads/main":
+            if self.head_sha is None:
+                self._fail(method, path, self.ref_status)
+            return {"object": {"sha": self.head_sha}}
+        if method == "GET" and path == "/repos/owner/sample-target-repo/contents/.openci_tf/.gitkeep":
+            if self.gitkeep_sha is None:
+                self._fail(method, path, 404)
+            return {"sha": self.gitkeep_sha}
+        if method == "PUT" and path == "/repos/owner/sample-target-repo/contents/.openci_tf/.gitkeep":
+            if self.gitkeep_sha is not None and "sha" not in (body or {}):
+                self._fail(method, path, 422)
+            return {"commit": {"sha": "bootstrap-sha"}}
+        raise AssertionError(f"unexpected call {method} {path}")
+
+    exists = None  # replaced per instance below
+
+
+def _repo_github(**kwargs):
+    module = _register_module()
+    fake = _FakeRepoGitHub(module, **kwargs)
+    fake.exists = lambda path, *, missing=(404,): module.GitHub.exists(fake, path, missing=missing)
+    return fake
+
+
+def test_repository_base_skips_bootstrap_when_gitkeep_already_exists():
+    """Re-registration: GitHub still reports size 0 for a repo holding only the
+    bootstrap .gitkeep; the default branch head is the truth and no PUT happens."""
+    module = _register_module()
+    github = _repo_github(size=0, head_sha="head-1", gitkeep_sha="blob-1")
+
+    assert module.repository_base(github, "owner/sample-target-repo") == ("main", "head-1")
+    assert [call for call in github.calls if call[0] == "PUT"] == []
+
+
+def test_repository_base_bootstraps_only_a_repo_without_any_commit():
+    module = _register_module()
+    for ref_status in (404, 409):
+        github = _repo_github(size=0, head_sha=None, ref_status=ref_status)
+        assert module.repository_base(github, "owner/sample-target-repo") == ("main", "bootstrap-sha")
+        puts = [call for call in github.calls if call[0] == "PUT"]
+        assert len(puts) == 1 and "sha" not in puts[0][2]
+
+
+def test_repository_base_uses_head_for_a_populated_repo():
+    module = _register_module()
+    github = _repo_github(size=12, head_sha="head-2")
+    assert module.repository_base(github, "owner/sample-target-repo") == ("main", "head-2")
+    assert [call for call in github.calls if call[0] == "PUT"] == []
+
+
+def test_reconcile_webhook_patches_hook_recorded_in_ssm_even_when_url_changed():
+    """The v1.03 URL fix changes full_url; the hook from the prior release must be
+    patched in place (found by the stored hook id), not duplicated."""
+    module = _register_module()
+    args = SimpleNamespace(repo="owner/sample-target-repo", trigger_id="trig", webhook_url="https://api.example.com/webhook")
+    old_hook = {"id": 9, "active": True, "events": ["issue_comment", "pull_request"], "config": {"url": "https://old.example.com/webhook/trig"}}
+    github = _FakeGitHub(hooks=[old_hook])
+
+    hook_id, created, prior = module.reconcile_webhook(github, args, "secret", stored_hook_id=9)
+
+    assert (hook_id, created) == (9, False)
+    assert prior["config"]["url"] == "https://old.example.com/webhook/trig"
+    assert [call for call in github.calls if call[0] == "POST"] == []
+    patched = [call for call in github.calls if call[0] == "PATCH"]
+    assert patched[0][1].endswith("/hooks/9")
+    assert patched[0][2]["config"]["url"] == "https://api.example.com/webhook/trig"
+
+
+def test_reconcile_webhook_matches_double_slash_url_from_older_release():
+    module = _register_module()
+    args = SimpleNamespace(repo="owner/sample-target-repo", trigger_id="trig", webhook_url="https://api.example.com/webhook")
+    broken_hook = {"id": 11, "active": True, "events": ["push"], "config": {"url": "https://api.example.com//webhook/trig"}}
+    github = _FakeGitHub(hooks=[broken_hook])
+
+    hook_id, created, _ = module.reconcile_webhook(github, args, "secret")
+
+    assert (hook_id, created) == (11, False)
+    assert [call for call in github.calls if call[0] == "POST"] == []
+    patched = [call for call in github.calls if call[0] == "PATCH"]
+    assert patched[0][2]["config"]["url"] == "https://api.example.com/webhook/trig"
+
+
+def test_reconcile_webhook_ignores_unrelated_hooks():
+    module = _register_module()
+    args = SimpleNamespace(repo="owner/sample-target-repo", trigger_id="trig", webhook_url="https://api.example.com/webhook")
+    other = {"id": 3, "active": True, "events": ["push"], "config": {"url": "https://other.example.com/webhook/trig2"}}
+    github = _FakeGitHub(hooks=[other])
+
+    assert module.reconcile_webhook(github, args, "secret", stored_hook_id=99) == (4242, True, None)
+    assert [call for call in github.calls if call[0] == "PATCH"] == []
+
+
+def test_stored_hook_id_reads_ssm_or_none():
+    module = _register_module()
+    args = _register_args()
+    assert module.stored_hook_id(_FakeSsm(), args) is None
+    assert module.stored_hook_id(_FakeSsm({"/openci-tf/install/openci-tf/webhook_hook_id": "9"}), args) == 9
+    with pytest.raises(module.RegistrationError, match="not an integer"):
+        module.stored_hook_id(_FakeSsm({"/openci-tf/install/openci-tf/webhook_hook_id": "nine"}), args)
+
+
+def test_activate_registration_second_run_converges_without_new_hook():
+    """A second registration over a live one upserts the settings rows, patches
+    the recorded hook, and rewrites the same hook id."""
+    module = _register_module()
+    args = _register_args()
+    live_hook = {"id": 9, "active": True, "events": ["issue_comment", "pull_request"], "config": {"url": "https://api.example.com//webhook/trig"}}
+    github = _FakeGitHub(hooks=[live_hook])
+    ssm = _FakeSsm({"/openci-tf/install/openci-tf/webhook_hook_id": "9"})
+    dynamodb = _FakeDynamoDb(
+        {
+            ("repo", "trig"): {"pk": {"S": "repo"}, "sk": {"S": "trig"}, "repo_name": {"S": "owner/sample-target-repo"}},
+            ("account", "hub-111122223333"): module.account_alias_item(args, "111122223333"),
+        }
+    )
+
+    hook_id = module.activate_registration(
+        github, ssm, dynamodb, args, "secret", "/openci-tf/install/openci-tf/webhook_secret", "111122223333"
+    )
+
+    assert hook_id == 9
+    assert ssm.parameters["/openci-tf/install/openci-tf/webhook_hook_id"] == "9"
+    assert [call for call in github.calls if call[0] in ("POST", "DELETE")] == []
+    assert set(dynamodb.items) == {("repo", "trig"), ("account", "hub-111122223333")}
+    assert dynamodb.items[("repo", "trig")]["repo_name"] == {"S": "owner/sample-target-repo"}

@@ -222,15 +222,20 @@ The journey composes four phases:
    applies `infra/deploy` fully. When `api_caller_role_arn` is set, the stage
    writes an `api_caller_policy_json` entry for that role with actions
    `plan|drift|report` only.
-4. **registration** (`install/register_repo.py`) - initializes an empty
-   repository with `.openci_tf/.gitkeep`, proves comment access with a probe on
+4. **registration** (`install/register_repo.py`) - initializes a repository
+   that has no commit yet with `.openci_tf/.gitkeep` (a repository whose
+   default branch already has a head, including one from an earlier
+   registration, is left untouched), proves comment access with a probe on
    a throwaway branch and PR, then generates or reuses the webhook HMAC secret
    in SSM. It writes both the repository settings row and the hub account alias
    row, then creates or reconciles the GitHub webhook (the hook id is recorded
-   at `/openci-tf/install/<project>/webhook_hook_id` for clean removal). A
-   failure after partial activation rolls the settings rows and webhook back.
-   A live installation refuses a different repository until it is explicitly
-   removed. Re-runs for the same repository converge. See
+   at `/openci-tf/install/<project>/webhook_hook_id` for clean removal). An
+   existing hook is found by that recorded id, then by its URL, and patched in
+   place; a second hook is never created. A failure after partial activation
+   rolls the settings rows and webhook back. A live installation refuses a
+   different repository until it is explicitly removed. Re-running the same
+   registration converges: no bootstrap commit, no new hook, settings rows
+   rewritten with the same values, exit 0. See
    [docs/GITHUB_WEBHOOK.md](GITHUB_WEBHOOK.md).
 
 The journey stops at the first failed phase; later phases do not run and the
