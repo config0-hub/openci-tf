@@ -43,6 +43,37 @@ def test_engine_codebuild_gets_foundation_kms_decrypt_and_data_key():
     assert "Resource = data.aws_kms_alias.foundation.target_key_arn" in block
 
 
+def test_engine_init_reads_the_package_object_with_kms_decrypt():
+    # defect 38: init_job head_objects the SSE-KMS package object on every
+    # read-lane submission, so it needs s3:GetObject AND kms:Decrypt; without
+    # these the engine returns {"status":"error"} before dispatch.
+    assert 'data "aws_iam_role" "engine_init"' in SOURCE
+    assert 'name = "${local.engine_name}-init-job"' in SOURCE
+    block = _resource_block("engine_init_foundation")
+    assert 'Action   = ["s3:GetObject"]' in block
+    assert 'Resource = "${data.aws_s3_bucket.package.arn}/*"' in block
+    assert 'Action   = ["kms:Decrypt"]' in block
+    # init_job only reads; it never writes or generates a data key.
+    assert "s3:PutObject" not in block
+    assert "kms:GenerateDataKey" not in block
+
+
+def test_engine_worker_reads_package_and_writes_done():
+    block = _resource_block("engine_worker_foundation_s3")
+    assert 'Action   = ["s3:GetObject"]' in block
+    assert 'Resource = "${data.aws_s3_bucket.package.arn}/*"' in block
+    assert 'Action   = ["s3:PutObject"]' in block
+    assert 'Resource = "${data.aws_s3_bucket.done.arn}/*"' in block
+
+
+def test_engine_codebuild_reads_package_and_writes_done():
+    block = _resource_block("engine_codebuild_foundation_s3")
+    assert 'Action   = ["s3:GetObject"]' in block
+    assert 'Resource = "${data.aws_s3_bucket.package.arn}/*"' in block
+    assert 'Action   = ["s3:PutObject"]' in block
+    assert 'Resource = "${data.aws_s3_bucket.done.arn}/*"' in block
+
+
 def test_engine_finalizer_gets_only_foundation_done_write_and_kms():
     block = _resource_block("engine_finalizer_foundation_done")
     assert 'Action   = ["s3:PutObject"]' in block
