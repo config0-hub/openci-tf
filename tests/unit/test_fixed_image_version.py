@@ -10,8 +10,8 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_image_version_is_fixed_at_1_04() -> None:
-    assert (_REPO_ROOT / "IMAGE_VERSION").read_text(encoding="utf-8") == "1.04\n"
+def test_image_version_is_fixed_at_1_05() -> None:
+    assert (_REPO_ROOT / "IMAGE_VERSION").read_text(encoding="utf-8") == "1.05\n"
     result = subprocess.run(
         [_REPO_ROOT / "scripts/image_tag.sh"],
         cwd=_REPO_ROOT,
@@ -20,7 +20,7 @@ def test_image_version_is_fixed_at_1_04() -> None:
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout == "1.04\n"
+    assert result.stdout == "1.05\n"
 
 
 def test_deploy_paths_do_not_derive_or_accept_image_tags() -> None:
