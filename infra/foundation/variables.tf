@@ -9,6 +9,11 @@ variable "name_prefix" {
   # ref 4353245 - openci-tf remote executor consistency naming
   default = "openci-tf"
 }
+variable "tags" {
+  description = "Tags to apply to all resources"
+  type        = map(string)
+  default     = {}
+}
 # Bucket names are DELIBERATELY not overridable: downstream stacks (deploy,
 # engine) discover them by the deterministic <prefix>-{tmp,package,done}-<acct>
 # convention via data sources. An override here would break those lookups.
