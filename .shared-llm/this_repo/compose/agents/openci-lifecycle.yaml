@@ -1,0 +1,9 @@
+type: agent
+name: openci-lifecycle
+model: opus
+color: orange
+description: .shared-llm/this_repo/layers/agents/this_repo/openci-lifecycle.description.md
+inputs:
+  - .shared-llm/this_repo/layers/agents/this_repo/openci-lifecycle.md
+  - .shared-llm/public/layers/agents/common/_report-contract.md
+output: .claude/agents/openci-lifecycle.md

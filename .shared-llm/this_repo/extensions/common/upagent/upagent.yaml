@@ -1,0 +1,224 @@
+# UpAgent Recruiter launch templates — KIT-SHIPPED DEFAULT (last-resort fallback).
+#
+# This file makes UpAgent work in a repo with NO setup at all. Roster resolution order:
+#   1. $UPAGENT_CONFIG                                             (explicit override)
+#   2. .shared-llm/this_repo/extensions/common/upagent/upagent.yaml (repo-owned roster)
+#   3. THIS FILE, beside the engine                                 (kit default)
+# When this file is the one resolved, the client prints a loud "using kit-default roster"
+# notice so ad-hoc mode is visible, never silent. Do not hand-edit this file in a destination:
+# override it with (1) or (2) instead. Keep it in sync with upagent.yaml.example, which is the
+# documented starting point for repo-owned rosters.
+#
+# The roster is keyed by HARNESS, not by worker type or persona. route.yaml is authoritative
+# for which harness/model/agent runs each stage; the Recruiter only knows HOW to launch each
+# harness as a Herdr pane. It never decides the agent.
+#
+# WHO can be asked — the specialist roster a consult routes by — is a different question with a
+# different lifecycle. Its kit base is
+# `.shared-llm/public/extensions/common/upagent/specialists.yaml`; a destination overlay lives at
+# `.shared-llm/this_repo/extensions/common/upagent/specialists.yaml`. Launch templates REPLACE
+# across base/legacy configuration; specialists MERGE. Do not put a `specialists:` block here.
+#
+# Each template is a Python str.format() string. Available placeholders:
+#   {model}             resolved model id from the route llm_profile (the route schema requires
+#                       a model per profile, so this is never empty on a route-driven order —
+#                       which matters, because a flag like `--model {model}` handed an empty
+#                       value would make the CLI eat the next token as the model)
+#   {agent}             the persona/agent name from the route stage entry
+#   {effort}            reasoning effort from the route llm_profile — the leader resolves it
+#                       to `medium` when the profile omits it, so it is never empty
+#   {cwd}               the phase worktree (also set as the pane's --cwd)
+#   {instructions_path} absolute path to the stage brief the worker must read
+#   {result_path}       absolute path the worker MUST write result.json to
+#   {order_id}          exact order identity the worker MUST echo in result.json
+#
+# Model-id shapes differ per harness: claude takes an alias or full name (`opus`,
+# `claude-opus-4-8`) plus `--effort low|medium|high|xhigh|max`; Codex takes a bare model id
+# (`gpt-5.6-sol`) plus `-c model_reasoning_effort={effort}`; pi takes a provider-qualified
+# `provider/id` plus explicit `--thinking {effort}`.
+#
+# IMPORTANT: because templates are str.format() strings, any LITERAL brace must be DOUBLED —
+# write `${{VAR}}` for a shell variable and `{{a,b}}` for a literal brace group. A single
+# unescaped `{...}` that is not one of the placeholders above is a template authoring error.
+#
+# Every worker's job is the same shape: read the instructions, do the one stage, write a
+# valid result.json — verdict exactly one of passed|failed|blocked; revisit ONLY on a failed
+# verdict and ALWAYS a JSON list of recognized stage ids (never a bare string, never prose);
+# full_log a pointer to the session transcript — and then GO IDLE. A worker never closes its
+# own pane: the Recruiter validates the staged files while the worker is still addressable,
+# may send one COMPLETION_REPAIR turn to fix them, and closes the pane itself afterward.
+# Codex exec exits by construction, so its offering declares `completion_style: exec` and uses
+# reader-side normalization plus salvage-or-block instead of a live repair. Claude, Pi, and Cursor
+# are interactive: Herdr `done` means only one turn ended, so the Recruiter ignores it for
+# terminality and waits for a valid typed bundle, proven pane/process exit, or the deadline.
+# Missing or malformed bundles get one same-address repair only after that legitimate boundary.
+#
+# UNATTENDED STARTUP IS MANDATORY. A worker runs AFK in a pane, so every launch template MUST
+# bypass all trust/permission prompts or the worker hangs forever at a dialog (and the Recruiter's
+# wait times out). Interactive TUIs stay visible; unattended does not mean headless. The bypass:
+#   claude → --dangerously-skip-permissions             (trusts cwd, incl. a fresh worktree)
+#   codex  → --dangerously-bypass-approvals-and-sandbox (with --skip-git-repo-check)
+#   pi     → --approve                                  (trusts project-local files for the run)
+#   cursor → --force --trust                            (approve commands + trust workspace)
+#
+# PI WORKERS RUN INSULATED. `--no-extensions` turns off extension discovery so a broken
+# globally-installed extension can never brick orchestrated workers (a half-installed
+# extension once rerouted every bash/read call through a missing binary — every worker
+# died on its first tool call). Explicit `-e` paths still load, and one is REQUIRED:
+# Herdr's pi integration (`herdr integration install pi` puts it at
+# $HOME/.pi/agent/extensions/herdr-agent-state.ts) reports live working/idle/blocked
+# supervision state. Turn-level `done` is UI telemetry, not completion authority; typed
+# artifacts are authoritative. Interactive pi sessions keep the full extension set.
+# Note pi has NO --agent flag: the
+# persona comes to the worker through the stage brief, not the CLI.
+
+# LEGACY/NON-PUBLIC LLM lifecycle roles are separate from work routes. They interpret
+# configuration and bounded health evidence; Python remains the only pane/process executor. Role
+# commands may use {brief_path}, {cwd}, and {output_path}. Public façade requests NEVER use these
+# raw commands: they always load `offerings.yaml`, whose code-owned renderer pins the Account
+# Manager to `claude-sonnet-5` / low / `upagent-account-manager`, even when this file exists.
+#
+# mode: direct (legacy route default) — route/controller orders have no standing manager unless
+# their order opts in. Python still owns lease, validation, publication, and terminality; any
+# manager is advisory and a manager crash degrades supervision rather than blocking a mechanically
+# valid worker. An explicitly legacy raw order may opt in with
+# `"management": {"mode": "dedicated"}`. Legacy consult-door orders follow this roster default.
+#
+# rescue_on_startup_failure (default true) — when a worker launch fails or stalls before
+# health verification, hire one bounded broker (the checker role) to read the failure and
+# advise retry vs stop, then relaunch at most once. If the broker itself cannot run, the
+# Recruiter retries once anyway. Applies in both modes.
+management:
+  mode: direct
+  rescue_on_startup_failure: true
+  startup_timeout_ms: 180000
+  inactivity_check_ms: 900000
+  requester_grace_ms: 300000
+  account_manager:
+    command: >-
+      claude --dangerously-skip-permissions --agent upagent-account-manager
+      --model claude-sonnet-5 --effort low
+      "Read {brief_path}, perform that one lifecycle review, write {output_path},
+      then remain available."
+    expected_agent: claude
+    expected_process: claude
+    timeout_ms: 120000
+  checker:
+    command: >-
+      claude --dangerously-skip-permissions --agent upagent-checker
+      --model haiku --effort low
+      "Read {brief_path}, perform that one bounded assessment, write {output_path}, then exit."
+    expected_agent: claude
+    expected_process: claude
+    timeout_ms: 120000
+  # Hired ONLY for contradictory salvage evidence after a worker's pane vanished. Clean hits
+  # (a commit landed after the order started) and clean misses (nothing on disk) are decided
+  # in Python and never spawn it. Its verdict is advisory: `salvageable-done` is accepted only
+  # after every cited commit/file re-verifies mechanically, otherwise the order stays blocked
+  # and the receipt records `rescuer_uncorroborated`. See upagent.yaml.example for the full
+  # contract, the `salvaged-done` verdict, and `synthesis_path` on the receipt.
+  rescuer:
+    command: >-
+      claude --dangerously-skip-permissions --agent upagent-rescuer
+      --model claude-sonnet-5 --effort low
+      "Read {brief_path}, perform that one bounded salvage assessment, write {output_path},
+      then exit."
+    expected_agent: claude
+    expected_process: claude
+    timeout_ms: 120000
+# Request intake (no configuration): a NEW request whose `cockpit_pane` no longer exists is
+# refused with `cockpit_pane_not_found: <pane>` before ledger creation or launch. An identical
+# ad-hoc/public retry may refresh only this routing field before Recruiter acceptance (`just
+# upagent up`, then retry the same id; optionally pass the current `--cockpit-pane`). Once
+# accepted, the exact pane is frozen and attachment needs no live caller pane. Re-point a
+# relaunched phase leader with `just leader-restamp <phase-start.json> <new-pane>`.
+#
+# Optional process-detector overrides. Use these when a harness wrapper changes what Herdr reports.
+# A mismatch fails startup; the Hub never guesses that some unrelated foreground process is healthy.
+health:
+  claude:
+    expected_agent: claude
+    expected_process: claude
+  codex:
+    expected_agent: codex
+    expected_process: codex
+  pi:
+    expected_agent: pi
+    expected_process: pi
+  cursor:
+    expected_agent: cursor
+    expected_process: cursor-agent
+
+# Phase leaders are controllers, not stage workers. The deterministic phase-start transaction
+# holds this command behind a filesystem gate, writes the durable leader receipt, verifies leader
+# health, then releases the leader. Coordination v2 has no standing phase watchdog. Keeping
+# separate templates prevents the controller from trying to trim a worker prompt or guess each
+# harness's controller mode.
+# The claude leader deliberately does NOT pass `--agent {agent}`: no phase-leader agent
+# definition ships anywhere, so the flag pointed claude at a nonexistent file and it exited
+# on the spot (surfacing as a confusing pane_not_found at phase start). The persona name
+# still travels in the prompt; --model and --effort stay on the command line, always.
+phase_leaders:
+  claude: >-
+    claude --dangerously-skip-permissions --model {model} --effort {effort}
+    "Read {instructions_path} and follow that phase-leader assignment as the {agent} persona."
+
+  codex: >-
+    codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check
+    --model {model} -c model_reasoning_effort={effort}
+    "Read {instructions_path} and follow that phase-leader assignment."
+
+  pi: >-
+    pi --approve --no-extensions -e "$HOME/.pi/agent/extensions/herdr-agent-state.ts"
+    --model {model} --thinking {effort}
+    "Read {instructions_path} and follow that phase-leader assignment."
+
+  cursor: >-
+    cursor-agent --force --trust --model {model}
+    "Read {instructions_path} and follow that phase-leader assignment."
+
+harnesses:
+  claude: >-
+    claude --dangerously-skip-permissions --agent {agent} --model {model} --effort {effort}
+    "Read {instructions_path} and do exactly that one stage in {cwd}.
+    When finished, write exactly one result.json to {result_path} with order_id exactly {order_id}.
+    verdict: exactly one of passed|failed|blocked. revisit: only on a failed verdict, and always
+    a JSON list of recognized stage ids from the brief — never a bare string, never prose.
+    full_log: a pointer to your session transcript. Then remain in your session and go idle;
+    do NOT exit or close your pane — the Recruiter validates your files and closes the pane."
+
+  # Codex has no --agent flag. The persona comes from instructions_path. Its exec process and
+  # token-scoped completion monitor, rather than agent-status, delimit the run and finalize its
+  # private staged result without any Codex-specific public-result polling.
+  # codex exec exits when the run ends (it cannot stay idle), so its recovery path is Python's
+  # reader-side repair plus the completion reactor, never a live COMPLETION_REPAIR turn.
+  codex: >-
+    codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check
+    --model {model} -c model_reasoning_effort={effort}
+    "Read {instructions_path} and do exactly that one stage in {cwd}.
+    Write exactly one result.json to {result_path} with order_id exactly {order_id}.
+    verdict: exactly one of passed|failed|blocked. revisit: only on a failed verdict, and always
+    a JSON list of recognized stage ids from the brief — never a bare string, never prose.
+    full_log: a pointer to your session transcript."
+
+  pi: >-
+    pi --approve --no-extensions -e "$HOME/.pi/agent/extensions/herdr-agent-state.ts"
+    --model {model} --thinking {effort}
+    "Read {instructions_path}; do the stage in {cwd}; write exactly one result.json to
+    {result_path} with order_id exactly {order_id}.
+    verdict: exactly one of passed|failed|blocked. revisit: only on a failed verdict, and always
+    a JSON list of recognized stage ids from the brief — never a bare string, never prose.
+    full_log: a pointer to your session transcript. Then remain in your session and go idle;
+    do NOT exit or close your pane — the Recruiter validates your files and closes the pane."
+
+  # Cursor stays interactive so Herdr shows live progress. Turn-level done is not terminal; an
+  # absent bundle remains supervised until artifacts, positively confirmed process/pane exit, or
+  # the deadline, after which missing or malformed required artifacts can receive one repair.
+  cursor: >-
+    cursor-agent --force --trust --model {model}
+    "Read {instructions_path}; do the stage in {cwd}; write exactly one result.json to
+    {result_path} with order_id exactly {order_id}.
+    verdict: exactly one of passed|failed|blocked. revisit: only on a failed verdict, and always
+    a JSON list of recognized stage ids from the brief — never a bare string, never prose.
+    full_log: a pointer to your session transcript. Then remain in your session and go idle;
+    do NOT exit or close your pane — the Recruiter validates your files and closes the pane."

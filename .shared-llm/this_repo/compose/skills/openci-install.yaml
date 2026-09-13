@@ -1,0 +1,5 @@
+name: openci-install
+description: .shared-llm/this_repo/layers/skills/this_repo/openci-install/description.md
+inputs:
+  - .shared-llm/this_repo/layers/skills/this_repo/openci-install/workflow.md
+output: .claude/skills/openci-install/SKILL.md

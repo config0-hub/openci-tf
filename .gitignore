@@ -29,7 +29,6 @@ review/
 # LLM kit: public/ is kit-synced and disposable. this_repo/ is this
 # repo's overlay (CLAUDE.md / AGENTS.md / python skill sources) — keep it.
 .shared-llm/public/
-.shared-llm
 AGENTS.md
 CLAUDE.md
 PLANS
