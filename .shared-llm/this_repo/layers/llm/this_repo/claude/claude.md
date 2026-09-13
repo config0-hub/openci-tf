@@ -9,5 +9,5 @@ Terraform CLI used by module/fixture tests.
 ## Delegation
 
 Long waits (image builds, `just install`) may go to a subagent so the main
-session stays usable. Keep apply/destroy and any remote git mutation in the
-session the human is talking to.
+session stays usable. The apply, destroy, and remote-git rule in the
+invariants above still holds for any subagent.

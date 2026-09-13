@@ -152,17 +152,23 @@ All other folders use public module sources from:
 
 `git::https://github.com/williaumwu/openci-test-public-modules.git//modules/<module>?ref=main`
 
-Before a real install/test run, patch the GitOps repository's placeholder backend
-account IDs (`111111111111` and `222222222222`) to the actual hub/target account
-mapping selected for that run. The installer must still confirm which account is the hub and which
-aliases should be `primary` and `secondary`.
+Backend account ids: the fixed test branch `openci-test-run-1` at `b70b57e`
+already carries the real hub and target account ids. Verify that mapping
+(`grep -r 111111111111 terraform/` must find nothing) and make no remote
+change. Only a newly created fixture branch still holds the placeholders
+`111111111111` (hub) and `222222222222` (secondary); patch those before its
+first run, after confirming which account is the hub and which aliases are
+`primary` and `secondary`.
 
-Private module cloning requires a fine-grained GitHub PAT that can read
-`williaumwu/openci-test-private-modules` with Contents read permission. Store it
-as a dotenv value, never a raw token string, for example:
+Private module cloning needs a GitHub token that can read
+`williaumwu/openci-test-private-modules` (Contents: read). For this test run
+that is the classic PAT in the `openci-tf.env` file listed under "Fixed
+values" above. A replacement token may be fine-grained or classic as long as
+it has that read permission. Store it as a dotenv value, never a raw token
+string, for example:
 
 ```dotenv
-GITHUB_TOKEN=<fine-grained-token-with-read-access-to-openci-test-private-modules>
+GITHUB_TOKEN=<token-with-read-access-to-openci-test-private-modules>
 ```
 
 Recommended SSM parameter path for that dotenv during openci-tf install/testing:
