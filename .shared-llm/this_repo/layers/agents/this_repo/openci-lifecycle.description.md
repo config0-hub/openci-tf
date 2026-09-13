@@ -1,0 +1,1 @@
+Owns the full lifecycle of the live openci-tf test install: reset both test AWS accounts and GitHub to zero with proof, then install from scratch and prove it with a real PR plan. Use for reset, wipe, reinstall, onboarding, and handoff runs of openci-tf.

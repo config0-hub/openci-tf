@@ -1,0 +1,1 @@
+Install openci-tf from scratch into the two test accounts, onboard the secondary, register the gitops repo and webhook, and prove the install with one real PR plan. Use when the user says install, set up, onboard, or hand off a fresh end-to-end run.

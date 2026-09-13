@@ -1,0 +1,1 @@
+Tear down a live openci-tf test install (hub + secondary AWS accounts, GitHub webhook) and prove nothing is left. Use before any fresh end-to-end install run, or when the user says reset, wipe, clean out, or start over.

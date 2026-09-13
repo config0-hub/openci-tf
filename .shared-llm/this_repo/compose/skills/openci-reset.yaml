@@ -1,0 +1,5 @@
+name: openci-reset
+description: .shared-llm/this_repo/layers/skills/this_repo/openci-reset/description.md
+inputs:
+  - .shared-llm/this_repo/layers/skills/this_repo/openci-reset/workflow.md
+output: .claude/skills/openci-reset/SKILL.md
