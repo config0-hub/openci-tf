@@ -95,9 +95,12 @@ them here.
 - Pin the PR head SHA. Do not follow a moving branch tip.
 - Do not widen apply/destroy: those stay behind `docs/APPLY.md` gates
   (`enable_apply`, per-folder `apply.allow` / `destroy.allow`, confirm tokens).
-- Do not commit org names, extra account aliases, token values, or live
-  customer fixtures beyond the test targets and credential *paths* above.
+- Do not commit token values, extra account aliases, or live customer
+  fixtures. Tracked files may name the two test accounts above and credential
+  *paths* under `~/project/repos/hamburger/exclude_folder/`, never values.
   Use placeholders (`sample-target-repo`, `REPLACE_MAIN_ACCOUNT`) in tracked
   examples. Live evidence stays under `/tmp` or another local scratch path.
 - Do not push, open, or update PRs unless the human explicitly owns the remote
   and authorizes that action.
+- Keep apply, destroy, and any remote git mutation in the session the human is
+  talking to. Do not hand those to a subagent or a hired worker.

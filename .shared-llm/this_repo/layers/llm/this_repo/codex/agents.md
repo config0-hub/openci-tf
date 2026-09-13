@@ -2,8 +2,10 @@
 
 ## UpAgent workers
 
-A hired UpAgent worker is terminal. It returns `blocked` when it needs help.
-It never spawns another worker.
+The "Subagents" rule further down this page, with its Sonnet, Opus, and
+GPT-5.5 exceptions, applies to the session the human runs. It does not apply
+to a hired UpAgent worker. A hired UpAgent worker is terminal. It returns
+`blocked` when it needs help. It never spawns another worker or subagent.
 
 ## Session memories
 
