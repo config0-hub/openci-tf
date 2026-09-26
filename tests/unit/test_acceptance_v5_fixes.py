@@ -170,6 +170,67 @@ def test_collect_rejects_wrong_existing_execution_id(monkeypatch):
         )
 
 
+def test_collect_missing_artifact_names_step_exit_code_and_output_tail(monkeypatch):
+    """Regression: a throttled upload left init.out missing behind a succeeded step."""
+    from src.domain.engine.execution_id import compose_execution_id
+
+    exec_id = compose_execution_id("run", "infra/a", 0)
+    slowdown = (
+        "<Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message>"
+        "<Bucket>openci-tf-tmp-123456789012</Bucket></Error>"
+    )
+    marker = {
+        "trigger_id": exec_id,
+        "status": "succeeded",
+        "steps": [
+            {
+                "step_name": "step-0",
+                "status": "succeeded",
+                "exit_code": 0,
+                "duration_seconds": 12,
+                "output": "x" * 2000 + "\ntoken=ghp_" + "a" * 36 + "\n" + slowdown,
+            }
+        ],
+    }
+    reads: list[tuple[str, str]] = []
+
+    def get_bounded_json(bucket, key, _max_bytes):
+        reads.append((bucket, key))
+        return marker
+
+    monkeypatch.setenv("TMP_BUCKET_NAME", "tmp")
+    monkeypatch.setenv("DONE_BUCKET_NAME", "done")
+    monkeypatch.setenv("PACKAGE_BUCKET_NAME", "pkg")
+    monkeypatch.setattr(collect, "head_object", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(collect, "get_bounded_json", get_bounded_json)
+    with pytest.raises(ValueError) as raised:
+        collect.handler(
+            {
+                "exec_id": exec_id,
+                "attempt": 0,
+                "succeeded": True,
+                "credential_expired": False,
+                "steps": [{"step_name": "step-0", "status": "succeeded", "exit_code": 0}],
+                "error": None,
+                "pointers": {"done": f"s3://done/{exec_id}/done"},
+                "action": "drift",
+                "repo_name": "org/repo",
+                "commit_hash": "c" * 40,
+                "account_id": "123456789012",
+                "folder": "infra/a",
+                "run_id": "run",
+                "submitted_at": 1_700_000_000.0,
+            },
+            object(),
+        )
+    message = str(raised.value)
+    assert message.startswith("expected artifact missing: init.out; step step-0 exit_code 0, output tail: ")
+    assert message.endswith(slowdown)
+    assert "ghp_" not in message
+    assert len(message.split("output tail: ", 1)[1]) <= 300
+    assert reads == [("done", f"{exec_id}/done")]
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

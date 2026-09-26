@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from src.core.logging import get_logger
 from src.core.terminal_evidence import redact_and_bound_terminal_evidence
-from src.domain.engine.artifact_limits import MAX_MANIFEST_BYTES
+from src.domain.engine.artifact_limits import MAX_DONE_MARKER_BYTES, MAX_MANIFEST_BYTES
 from src.domain.engine.artifact_paths import pr_pointer_key
 from src.domain.engine.run_artifact_layout import (
     manifest_key_for_layout,
@@ -42,6 +42,7 @@ logger = get_logger(__name__)
 
 _MAX_COLLECT_ATTEMPTS = 3
 _MAX_DRIFT_RESULT_BYTES = 1_024
+_STEP_OUTPUT_TAIL_CHARS = 300
 
 
 def _put_pointer_object(
@@ -58,6 +59,27 @@ def _put_pointer_object(
     if if_match is not None:
         params["IfMatch"] = if_match
     boto3.client("s3").put_object(**params)
+
+
+def _step_failure_evidence(done_uri: str) -> str:
+    """Name the engine step exit code and redacted output tail from the done marker."""
+    bucket, key = done_uri.removeprefix("s3://").split("/", 1)
+    marker = get_bounded_json(bucket, key, MAX_DONE_MARKER_BYTES)
+    steps = marker.get("steps") if isinstance(marker, dict) else None
+    if not isinstance(steps, list) or not steps or not isinstance(steps[-1], dict):
+        return f"done marker {done_uri} has no step evidence"
+    step = steps[-1]
+    output = step.get("output")
+    lines: list[str] = []
+    if isinstance(output, str):
+        covered = 0
+        for line in reversed(output.splitlines()):
+            lines.insert(0, str(redact_and_bound_terminal_evidence(line)))
+            covered += len(line) + 1
+            if covered >= _STEP_OUTPUT_TAIL_CHARS:
+                break
+    tail = "\n".join(lines)[-_STEP_OUTPUT_TAIL_CHARS:]
+    return f"step {step.get('step_name')} exit_code {step.get('exit_code')}, output tail: {tail}"
 
 
 def _submitted_at(event: dict) -> datetime | None:
@@ -288,43 +310,48 @@ def handler(event: dict, _context: object) -> dict:
     manifest_object_key = manifest_key_for_layout(
         layout, repo_name=repo_name, run_id=run_id, folder_path=folder
     )
-    manifest = build_manifest(
-        execution_id=exec_id,
-        buckets=BucketSet(
-            tmp_bucket=tmp_bucket,
-            done_bucket=done_bucket,
-            package_bucket=package_bucket or tmp_bucket,
-            done_uri=done_uri,
-            package_uri=package_uri,
-        ),
-        binding=ManifestBinding(
-            run_id=run_id,
-            repo_name=repo_name,
-            commit_hash=commit_hash,
-            account_id=account_id,
-            folder=folder,
-            attempt=attempt,
-            source_plan_run_id=str(event["source_plan_run_id"]) if event.get("source_plan_run_id") else None,
-            pr_number=layout.pr_number,
-            pointer_type=layout.pointer_type,
-        ),
-        action=action,
-        head_object=head_object,
-        read_object_bytes=get_object_bytes,
-        plan_metadata=plan_metadata,
-        plan_dimensions={
-            "repo_name": repo_name,
-            "commit_hash": commit_hash,
-            "account_id": account_id,
-            "folder": folder,
-            "run_id": run_id,
-        },
-        failure_reason=failure_reason,
-        generated_at_source=_submitted_at(event),
-        folder_keys=folder_keys,
-        manifest_object_key=manifest_object_key,
-        pipeline_plan_focus=pipeline_plan_focus,
-    )
+    try:
+        manifest = build_manifest(
+            execution_id=exec_id,
+            buckets=BucketSet(
+                tmp_bucket=tmp_bucket,
+                done_bucket=done_bucket,
+                package_bucket=package_bucket or tmp_bucket,
+                done_uri=done_uri,
+                package_uri=package_uri,
+            ),
+            binding=ManifestBinding(
+                run_id=run_id,
+                repo_name=repo_name,
+                commit_hash=commit_hash,
+                account_id=account_id,
+                folder=folder,
+                attempt=attempt,
+                source_plan_run_id=str(event["source_plan_run_id"]) if event.get("source_plan_run_id") else None,
+                pr_number=layout.pr_number,
+                pointer_type=layout.pointer_type,
+            ),
+            action=action,
+            head_object=head_object,
+            read_object_bytes=get_object_bytes,
+            plan_metadata=plan_metadata,
+            plan_dimensions={
+                "repo_name": repo_name,
+                "commit_hash": commit_hash,
+                "account_id": account_id,
+                "folder": folder,
+                "run_id": run_id,
+            },
+            failure_reason=failure_reason,
+            generated_at_source=_submitted_at(event),
+            folder_keys=folder_keys,
+            manifest_object_key=manifest_object_key,
+            pipeline_plan_focus=pipeline_plan_focus,
+        )
+    except ValueError as error:
+        if not str(error).startswith("expected artifact missing:"):
+            raise
+        raise ValueError(f"{error}; {_step_failure_evidence(done_uri)}") from error
     pointers = dict(pointers)
     pointers["artifacts_prefix"] = f"s3://{tmp_bucket}/{folder_keys.prefix}"
     authoritative_manifest = manifest

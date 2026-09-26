@@ -61,7 +61,7 @@ def test_script_is_generated_for_each_safe_verb(verb):
     assert "set -euo pipefail" in script
     assert "trap _on_exit EXIT" in script
     assert "upload_artifacts" in script
-    assert "curl -sS --fail-with-body --retry 3" in script
+    assert "curl -sS --fail-with-body --retry 10 --retry-max-time 30" in script
     assert "cd 'folder with spaces'" in script
 
 

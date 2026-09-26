@@ -66,7 +66,7 @@ printf '%s' '{"totalMonthlyCost":"1.00"}' > "$out"
 def test_report_script_uses_tfsec_soft_fail_out_and_silent_curl():
     script = render(ScriptParams("report", "lambda", folder="infra"))
     assert "tfsec . --format json --soft-fail --out" in script
-    assert "curl -sS --fail-with-body --retry 3" in script
+    assert "curl -sS --fail-with-body --retry 10 --retry-max-time 30" in script
     assert 'curl --fail-with-body --show-error --location "$upstream_url" -o "$archive"' in script
     assert 'curl --fail-with-body --show-error -H \'Content-Type: application/octet-stream\' --upload-file "$archive" "$cache_put_url"' in script
     put_lines = [line for line in script.splitlines() if '--upload-file "$archive"' in line and "cache_put_url" in line]
@@ -825,3 +825,92 @@ def test_render_plan_destroy_posts_linked_multi_folder_summary(monkeypatch):
     assert "clean folder" not in summary_body
     folder_body = posted_bodies["folder-infra/a"]
     assert "1 to destroy" in folder_body
+
+
+def _run_drift_script(tmp_path: Path, *, tofu_body: str, failing_upload: str) -> subprocess.CompletedProcess:
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    source = tmp_path / "tofu"
+    source.write_text(f"#!/usr/bin/env bash\n{tofu_body}\n")
+    source.chmod(0o755)
+    with tarfile.open(downloads / "tofu.tar.gz", "w:gz") as archive:
+        archive.add(source, arcname="tofu")
+    upload_log = tmp_path / "uploads.log"
+    curl = tmp_path / "curl"
+    curl.write_text(f'''#!/usr/bin/env bash
+set -euo pipefail
+if [[ " $* " == *" --upload-file "* ]]; then
+  for arg in "$@"; do
+    case "$arg" in https://*) url="$arg" ;; esac
+  done
+  case "$url" in https://upload/*) printf '%s\\n' "$url" >> "{upload_log}" ;; esac
+  if [ "$url" = "{failing_upload}" ]; then
+    echo '<Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>'
+    exit 22
+  fi
+  exit 0
+fi
+for arg in "$@"; do case "$arg" in https://cache/*) exit 22 ;; https://upstream/*) source="$arg" ;; esac; done
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then cp "{downloads}/$(basename "$source").tar.gz" "$2"; exit 0; fi
+  shift
+done
+''')
+    curl.chmod(0o755)
+    sha256sum = tmp_path / "sha256sum"
+    sha256sum.write_text("#!/usr/bin/env bash\ncat >/dev/null\n")
+    sha256sum.chmod(0o755)
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    script_path = tmp_path / "run.sh"
+    script_path.write_text(render(ScriptParams("drift", "lambda", folder=str(folder))))
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "ARTIFACTS_DIR": str(tmp_path / "artifacts"),
+        "ARTIFACT_PUT_URL_INIT_OUT": "https://upload/init",
+        "ARTIFACT_PUT_URL_VALIDATE_OUT": "https://upload/validate",
+        "ARTIFACT_PUT_URL_TF_PLAN_OUT": "https://upload/plan",
+        "ARTIFACT_PUT_URL_DRIFT_JSON": "https://upload/drift",
+        "CACHE_GET_URL_TOFU": "https://cache/tofu",
+        "CACHE_PUT_URL_TOFU": "https://cache-put/tofu",
+        "UPSTREAM_URL_TOFU": "https://upstream/tofu",
+    }
+    completed = subprocess.run(["bash", str(script_path)], env=env, text=True, capture_output=True, check=False)
+    completed.uploads = upload_log.read_text().splitlines() if upload_log.exists() else []
+    return completed
+
+
+_TOFU_NO_DRIFT = '''case "$1" in
+  init) echo init ;;
+  validate) echo validate ;;
+  plan) echo plan ;;
+esac'''
+
+
+def test_drift_script_fails_when_an_artifact_upload_fails(tmp_path):
+    """Regression: a throttled init.out upload reported step exit 0 with no artifact."""
+    completed = _run_drift_script(tmp_path, tofu_body=_TOFU_NO_DRIFT, failing_upload="https://upload/init")
+    assert completed.returncode == 22, completed.stderr
+    assert "Error: upload failed for init.out (exit 22)" in completed.stderr
+    assert completed.uploads == [
+        "https://upload/init",
+        "https://upload/validate",
+        "https://upload/plan",
+        "https://upload/drift",
+    ]
+
+
+def test_drift_script_keeps_the_command_exit_code_when_uploads_also_fail(tmp_path):
+    tofu_body = '''case "$1" in
+  init) echo init-broken; exit 1 ;;
+esac'''
+    completed = _run_drift_script(tmp_path, tofu_body=tofu_body, failing_upload="https://upload/init")
+    assert completed.returncode == 1, completed.stderr
+    assert "Error: upload failed for init.out (exit 22)" in completed.stderr
+
+
+def test_drift_script_succeeds_when_every_upload_succeeds(tmp_path):
+    completed = _run_drift_script(tmp_path, tofu_body=_TOFU_NO_DRIFT, failing_upload="https://upload/none")
+    assert completed.returncode == 0, completed.stderr
+    assert len(completed.uploads) == 4

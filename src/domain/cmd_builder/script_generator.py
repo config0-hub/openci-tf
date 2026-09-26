@@ -16,10 +16,17 @@ _SAFE_VERBS = frozenset({"plan", "report", "drift", "plan_destroy", "apply", "de
 
 _GIT_AUTH_SETUP = """
 _on_exit() {
+  exit_status=$?
   if [ -n "${_OPENCI_TF_GIT_ASKPASS:-}" ] && [ -f "${_OPENCI_TF_GIT_ASKPASS}" ]; then
     rm -f "${_OPENCI_TF_GIT_ASKPASS}"
   fi
+  set +e
   upload_artifacts
+  upload_status=$?
+  if [ "$exit_status" -eq 0 ] && [ "$upload_status" -ne 0 ]; then
+    exit "$upload_status"
+  fi
+  exit "$exit_status"
 }
 trap _on_exit EXIT
 if [ -n "${GITHUB_TOKEN:-}" ]; then
@@ -112,9 +119,9 @@ if len(encoded) > 4096:
 with open(metadata_path, "wb") as handle:
     handle.write(encoded + b"\n")
 OPENCI_TF_PLAN_META_PY
-  curl -sS --fail-with-body --retry 3 -H 'Content-Type: application/octet-stream' --upload-file "$plan_file" "$PLAN_BINARY_PUT_URL" || { status=$?; echo "Error: upload failed for plan.tfplan" >&2; exit "$status"; }
-  curl -sS --fail-with-body --retry 3 -H 'Content-Type: text/plain' --upload-file "$sha_file" "$PLAN_SHA256_PUT_URL" || { status=$?; echo "Error: upload failed for plan.tfplan.sha256" >&2; exit "$status"; }
-  curl -sS --fail-with-body --retry 3 -H 'Content-Type: application/json' --upload-file "$metadata_file" "$PLAN_METADATA_PUT_URL" || { status=$?; echo "Error: upload failed for plan-metadata.json" >&2; exit "$status"; }
+  curl -sS --fail-with-body --retry 10 --retry-max-time 30 -H 'Content-Type: application/octet-stream' --upload-file "$plan_file" "$PLAN_BINARY_PUT_URL" || { status=$?; echo "Error: upload failed for plan.tfplan" >&2; exit "$status"; }
+  curl -sS --fail-with-body --retry 10 --retry-max-time 30 -H 'Content-Type: text/plain' --upload-file "$sha_file" "$PLAN_SHA256_PUT_URL" || { status=$?; echo "Error: upload failed for plan.tfplan.sha256" >&2; exit "$status"; }
+  curl -sS --fail-with-body --retry 10 --retry-max-time 30 -H 'Content-Type: application/json' --upload-file "$metadata_file" "$PLAN_METADATA_PUT_URL" || { status=$?; echo "Error: upload failed for plan-metadata.json" >&2; exit "$status"; }
 }
 '''.strip()
 
@@ -186,9 +193,9 @@ if len(encoded) > 4096:
 with open(metadata_path, "wb") as handle:
     handle.write(encoded + b"\n")
 OPENCI_TF_DESTROY_PLAN_META_PY
-  curl -sS --fail-with-body --retry 3 -H 'Content-Type: application/octet-stream' --upload-file "$plan_file" "$DESTROY_PLAN_BINARY_PUT_URL" || { status=$?; echo "Error: upload failed for destroy.plan.tfplan" >&2; exit "$status"; }
-  curl -sS --fail-with-body --retry 3 -H 'Content-Type: text/plain' --upload-file "$sha_file" "$DESTROY_PLAN_SHA256_PUT_URL" || { status=$?; echo "Error: upload failed for destroy.plan.tfplan.sha256" >&2; exit "$status"; }
-  curl -sS --fail-with-body --retry 3 -H 'Content-Type: application/json' --upload-file "$metadata_file" "$DESTROY_PLAN_METADATA_PUT_URL" || { status=$?; echo "Error: upload failed for destroy-plan-metadata.json" >&2; exit "$status"; }
+  curl -sS --fail-with-body --retry 10 --retry-max-time 30 -H 'Content-Type: application/octet-stream' --upload-file "$plan_file" "$DESTROY_PLAN_BINARY_PUT_URL" || { status=$?; echo "Error: upload failed for destroy.plan.tfplan" >&2; exit "$status"; }
+  curl -sS --fail-with-body --retry 10 --retry-max-time 30 -H 'Content-Type: text/plain' --upload-file "$sha_file" "$DESTROY_PLAN_SHA256_PUT_URL" || { status=$?; echo "Error: upload failed for destroy.plan.tfplan.sha256" >&2; exit "$status"; }
+  curl -sS --fail-with-body --retry 10 --retry-max-time 30 -H 'Content-Type: application/json' --upload-file "$metadata_file" "$DESTROY_PLAN_METADATA_PUT_URL" || { status=$?; echo "Error: upload failed for destroy-plan-metadata.json" >&2; exit "$status"; }
 }
 '''.strip()
 
@@ -333,6 +340,7 @@ fi""" if plan_enabled and not params.pipeline_plan_focus else ""
     return f'''#!/usr/bin/env bash
 set -euo pipefail
 upload_artifacts() {{
+  upload_failed=0
   for name in {artifact_names}; do
     artifact="${{ARTIFACTS_DIR:-/tmp}}/$name"
     [ -f "$artifact" ] || continue
@@ -346,14 +354,14 @@ upload_artifacts() {{
       *.json) ctype="application/json" ;;
       *) ctype="application/octet-stream" ;;
     esac
-    set +e
-    curl -sS --fail-with-body --retry 3 -H "Content-Type: $ctype" --upload-file "$artifact" "$url"
-    upload_status=$?
-    set -e
-    if [ "$upload_status" -ne 0 ]; then
-      echo "Warning: upload failed for $name (exit $upload_status)" >&2
+    curl -sS --fail-with-body --retry 10 --retry-max-time 30 -H "Content-Type: $ctype" --upload-file "$artifact" "$url"
+    curl_status=$?
+    if [ "$curl_status" -ne 0 ]; then
+      echo "Error: upload failed for $name (exit $curl_status)" >&2
+      upload_failed=$curl_status
     fi
   done
+  return "$upload_failed"
 }}
 {plan_artifact_helper}
 {_GIT_AUTH_SETUP}
@@ -396,6 +404,7 @@ def _render_apply_like(params: ScriptParams) -> str:
     return f'''#!/usr/bin/env bash
 set -euo pipefail
 upload_artifacts() {{
+  upload_failed=0
   for name in {artifact_names}; do
     artifact="${{ARTIFACTS_DIR:-/tmp}}/$name"
     [ -f "$artifact" ] || continue
@@ -409,14 +418,14 @@ upload_artifacts() {{
       *.json) ctype="application/json" ;;
       *) ctype="application/octet-stream" ;;
     esac
-    set +e
-    curl -sS --fail-with-body --retry 3 -H "Content-Type: $ctype" --upload-file "$artifact" "$url"
-    upload_status=$?
-    set -e
-    if [ "$upload_status" -ne 0 ]; then
-      echo "Warning: upload failed for $name (exit $upload_status)" >&2
+    curl -sS --fail-with-body --retry 10 --retry-max-time 30 -H "Content-Type: $ctype" --upload-file "$artifact" "$url"
+    curl_status=$?
+    if [ "$curl_status" -ne 0 ]; then
+      echo "Error: upload failed for $name (exit $curl_status)" >&2
+      upload_failed=$curl_status
     fi
   done
+  return "$upload_failed"
 }}
 {_APPLY_PLAN_HELPER}
 {_GIT_AUTH_SETUP}
