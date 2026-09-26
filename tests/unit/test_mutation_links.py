@@ -153,6 +153,9 @@ def test_resolve_codebuild_build_id_paginates(monkeypatch):
 
     assert build_id == "openci-tf-worker:11111111-2222-3333-4444-555555555555"
     assert codebuild.list_builds_for_project.call_count == 2
+    first_call, second_call = codebuild.list_builds_for_project.call_args_list
+    assert first_call.kwargs == {"projectName": "openci-tf-worker", "sortOrder": "DESCENDING"}
+    assert second_call.kwargs == {"projectName": "openci-tf-worker", "nextToken": "page-2"}
 
 
 def test_codebuild_url_rejects_step_functions_execution_arn():

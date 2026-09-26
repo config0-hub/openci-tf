@@ -62,12 +62,12 @@ def resolve_codebuild_build_id(
     for _ in range(max_attempts):
         next_token: str | None = None
         for _ in range(max_pages):
-            request: dict[str, object] = {
-                "projectName": project_name,
-                "sortOrder": "DESCENDING",
-            }
+            request: dict[str, object] = {"projectName": project_name}
+            # CodeBuild rejects sortOrder alongside nextToken; the token keeps the first page's order.
             if next_token:
                 request["nextToken"] = next_token
+            else:
+                request["sortOrder"] = "DESCENDING"
             response = client.list_builds_for_project(**request)
             build_ids = response.get("ids") if isinstance(response.get("ids"), list) else []
             if build_ids:
