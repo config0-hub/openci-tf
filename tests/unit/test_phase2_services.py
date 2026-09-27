@@ -382,7 +382,7 @@ class _S3:
 
 
 def test_list_text_prefix_allows_text_and_rejects_size_and_content_type(monkeypatch):
-    monkeypatch.setattr(s3.boto3, "client", lambda *_: _S3())
+    monkeypatch.setattr(s3.boto3, "client", lambda *_args, **_kwargs: _S3())
     assert s3.list_text_prefix("tmp", "run/", 4, frozenset({"text/plain", "application/json"})) == {"ok.txt": "ok", "big.txt": "[artifact rejected: exceeds size limit]", "bad.bin": "[artifact rejected: unsupported content type]"}
 
 
