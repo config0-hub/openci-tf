@@ -36,6 +36,7 @@ from src.platform.aws.s3 import (
     get_object_bytes,
     head_object,
     put_json_create_only,
+    s3_client,
 )
 
 logger = get_logger(__name__)
@@ -48,8 +49,6 @@ _STEP_OUTPUT_TAIL_CHARS = 300
 def _put_pointer_object(
     *, bucket: str, key: str, body: bytes, if_match: str | None = None
 ) -> None:
-    import boto3
-
     params: dict[str, object] = {
         "Bucket": bucket,
         "Key": key,
@@ -58,7 +57,7 @@ def _put_pointer_object(
     }
     if if_match is not None:
         params["IfMatch"] = if_match
-    boto3.client("s3").put_object(**params)
+    s3_client().put_object(**params)
 
 
 def _step_failure_evidence(done_uri: str) -> str:

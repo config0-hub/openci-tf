@@ -14,6 +14,61 @@ from src.domain.cmd_builder.installers import (
 
 _SAFE_VERBS = frozenset({"plan", "report", "drift", "plan_destroy", "apply", "destroy"})
 
+# Every presigned S3 GET and PUT in the generated script goes through s3_curl.
+# A freshly created bucket answers 503 SlowDown while S3 scales the prefix, so
+# transient answers (curl's own set: HTTP 408, 429, 500, 502, 503, 504 and a
+# curl timeout) are retried with jittered exponential backoff (waits of
+# [delay, 2*delay) seconds, delay 1, 2, 4, 8, 8, ...) until the next wait
+# would pass 90 s, so a throttled call keeps trying for at least 75 s. Any
+# other answer (a 403 cache miss) returns at once. Usage: s3_curl DEST ARGS...
+# where DEST receives the body on success and "-" discards it.
+S3_CURL_HELPER = r'''
+s3_curl() {
+  local dest="$1"
+  shift
+  local body start deadline delay attempt pause status code retryable s3_error
+  body="$(mktemp)"
+  start=$SECONDS
+  deadline=$((SECONDS + 90))
+  delay=1
+  attempt=1
+  while :; do
+    status=0
+    code="$(curl -sS -o "$body" -w '%{http_code}' "$@")" || status=$?
+    retryable=0
+    case "$status:$code" in
+      0:[45][0-9][0-9]) ;;
+      0:*)
+        if [ "$dest" = "-" ]; then rm -f "$body"; else mv "$body" "$dest"; fi
+        return 0
+        ;;
+    esac
+    case "$status:$code" in
+      0:408|0:429|0:500|0:502|0:503|0:504|28:*) retryable=1 ;;
+    esac
+    pause=$((delay + RANDOM % delay))
+    if [ "$retryable" -eq 0 ] || [ $((SECONDS + pause)) -gt "$deadline" ]; then
+      { cat "$body"; echo; } >&2
+      s3_error="$(sed -n 's:.*<Code>\([A-Za-z]*\)</Code>.*:\1:p' "$body" | head -n 1)" || s3_error=""
+      rm -f "$body"
+      if [ "$retryable" -eq 1 ]; then
+        echo "Error: S3 request still failing (HTTP ${code:-none} ${s3_error:-}, curl exit $status) after $attempt attempts over $((SECONDS - start))s" >&2
+      elif [ "$status" -eq 0 ]; then
+        echo "curl: (22) The requested URL returned error: $code" >&2
+      fi
+      if [ "$status" -ne 0 ]; then
+        return "$status"
+      fi
+      return 22
+    fi
+    echo "Warning: S3 request returned HTTP ${code:-none} (curl exit $status), attempt $attempt; retrying in ${pause}s" >&2
+    sleep "$pause"
+    attempt=$((attempt + 1))
+    if [ "$delay" -lt 8 ]; then delay=$((delay * 2)); fi
+  done
+}
+'''.strip()
+
 _GIT_AUTH_SETUP = """
 _on_exit() {
   exit_status=$?
@@ -119,9 +174,9 @@ if len(encoded) > 4096:
 with open(metadata_path, "wb") as handle:
     handle.write(encoded + b"\n")
 OPENCI_TF_PLAN_META_PY
-  curl -sS --fail-with-body --retry 10 --retry-max-time 30 -H 'Content-Type: application/octet-stream' --upload-file "$plan_file" "$PLAN_BINARY_PUT_URL" || { status=$?; echo "Error: upload failed for plan.tfplan" >&2; exit "$status"; }
-  curl -sS --fail-with-body --retry 10 --retry-max-time 30 -H 'Content-Type: text/plain' --upload-file "$sha_file" "$PLAN_SHA256_PUT_URL" || { status=$?; echo "Error: upload failed for plan.tfplan.sha256" >&2; exit "$status"; }
-  curl -sS --fail-with-body --retry 10 --retry-max-time 30 -H 'Content-Type: application/json' --upload-file "$metadata_file" "$PLAN_METADATA_PUT_URL" || { status=$?; echo "Error: upload failed for plan-metadata.json" >&2; exit "$status"; }
+  s3_curl - -H 'Content-Type: application/octet-stream' --upload-file "$plan_file" "$PLAN_BINARY_PUT_URL" || { status=$?; echo "Error: upload failed for plan.tfplan" >&2; exit "$status"; }
+  s3_curl - -H 'Content-Type: text/plain' --upload-file "$sha_file" "$PLAN_SHA256_PUT_URL" || { status=$?; echo "Error: upload failed for plan.tfplan.sha256" >&2; exit "$status"; }
+  s3_curl - -H 'Content-Type: application/json' --upload-file "$metadata_file" "$PLAN_METADATA_PUT_URL" || { status=$?; echo "Error: upload failed for plan-metadata.json" >&2; exit "$status"; }
 }
 '''.strip()
 
@@ -193,9 +248,9 @@ if len(encoded) > 4096:
 with open(metadata_path, "wb") as handle:
     handle.write(encoded + b"\n")
 OPENCI_TF_DESTROY_PLAN_META_PY
-  curl -sS --fail-with-body --retry 10 --retry-max-time 30 -H 'Content-Type: application/octet-stream' --upload-file "$plan_file" "$DESTROY_PLAN_BINARY_PUT_URL" || { status=$?; echo "Error: upload failed for destroy.plan.tfplan" >&2; exit "$status"; }
-  curl -sS --fail-with-body --retry 10 --retry-max-time 30 -H 'Content-Type: text/plain' --upload-file "$sha_file" "$DESTROY_PLAN_SHA256_PUT_URL" || { status=$?; echo "Error: upload failed for destroy.plan.tfplan.sha256" >&2; exit "$status"; }
-  curl -sS --fail-with-body --retry 10 --retry-max-time 30 -H 'Content-Type: application/json' --upload-file "$metadata_file" "$DESTROY_PLAN_METADATA_PUT_URL" || { status=$?; echo "Error: upload failed for destroy-plan-metadata.json" >&2; exit "$status"; }
+  s3_curl - -H 'Content-Type: application/octet-stream' --upload-file "$plan_file" "$DESTROY_PLAN_BINARY_PUT_URL" || { status=$?; echo "Error: upload failed for destroy.plan.tfplan" >&2; exit "$status"; }
+  s3_curl - -H 'Content-Type: text/plain' --upload-file "$sha_file" "$DESTROY_PLAN_SHA256_PUT_URL" || { status=$?; echo "Error: upload failed for destroy.plan.tfplan.sha256" >&2; exit "$status"; }
+  s3_curl - -H 'Content-Type: application/json' --upload-file "$metadata_file" "$DESTROY_PLAN_METADATA_PUT_URL" || { status=$?; echo "Error: upload failed for destroy-plan-metadata.json" >&2; exit "$status"; }
 }
 '''.strip()
 
@@ -208,7 +263,7 @@ download_and_verify_pinned_plan() {
     echo "Error: unsupported pinned plan artifact ${expected_name}" >&2
     exit 21
   fi
-  curl -sS --fail-with-body --retry 3 -o "$plan_file" "$PINNED_PLAN_GET_URL" || { status=$?; echo "Error: failed to download pinned plan" >&2; exit "$status"; }
+  s3_curl "$plan_file" "$PINNED_PLAN_GET_URL" || { status=$?; echo "Error: failed to download pinned plan" >&2; exit "$status"; }
   actual="$(python3 - <<'OPENCI_TF_VERIFY_SHA_PY'
 import hashlib
 import os
@@ -339,6 +394,7 @@ else
 fi""" if plan_enabled and not params.pipeline_plan_focus else ""
     return f'''#!/usr/bin/env bash
 set -euo pipefail
+{S3_CURL_HELPER}
 upload_artifacts() {{
   upload_failed=0
   for name in {artifact_names}; do
@@ -354,7 +410,7 @@ upload_artifacts() {{
       *.json) ctype="application/json" ;;
       *) ctype="application/octet-stream" ;;
     esac
-    curl -sS --fail-with-body --retry 10 --retry-max-time 30 -H "Content-Type: $ctype" --upload-file "$artifact" "$url"
+    s3_curl - -H "Content-Type: $ctype" --upload-file "$artifact" "$url"
     curl_status=$?
     if [ "$curl_status" -ne 0 ]; then
       echo "Error: upload failed for $name (exit $curl_status)" >&2
@@ -403,6 +459,7 @@ def _render_apply_like(params: ScriptParams) -> str:
     )
     return f'''#!/usr/bin/env bash
 set -euo pipefail
+{S3_CURL_HELPER}
 upload_artifacts() {{
   upload_failed=0
   for name in {artifact_names}; do
@@ -418,7 +475,7 @@ upload_artifacts() {{
       *.json) ctype="application/json" ;;
       *) ctype="application/octet-stream" ;;
     esac
-    curl -sS --fail-with-body --retry 10 --retry-max-time 30 -H "Content-Type: $ctype" --upload-file "$artifact" "$url"
+    s3_curl - -H "Content-Type: $ctype" --upload-file "$artifact" "$url"
     curl_status=$?
     if [ "$curl_status" -ne 0 ]; then
       echo "Error: upload failed for $name (exit $curl_status)" >&2

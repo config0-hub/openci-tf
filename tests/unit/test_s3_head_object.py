@@ -64,3 +64,50 @@ def test_put_json_create_only_is_idempotent_for_matching_payload(monkeypatch):
     assert s3.put_json_create_only("tmp", "run/manifest.json", payload) == "v1"
     client.put_object.assert_called_once()
     assert client.put_object.call_args.kwargs["IfNoneMatch"] == "*"
+
+
+class _RawBody:
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def stream(self, **_kwargs):
+        yield self._body
+
+
+def test_s3_client_retries_slowdown_and_succeeds_on_third_attempt(monkeypatch):
+    import time
+
+    from botocore.awsrequest import AWSResponse
+
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "ap-northeast-1")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    sleeps: list[float] = []
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    attempts: list[str] = []
+
+    def _send(request, **_kwargs):
+        attempts.append(request.url)
+        if len(attempts) < 3:
+            body = b"<Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>"
+            return AWSResponse(request.url, 503, {}, _RawBody(body))
+        return AWSResponse(request.url, 200, {"ETag": '"etag"'}, _RawBody(b""))
+
+    client = s3.s3_client()
+    client.meta.events.register("before-send.s3.PutObject", _send)
+    client.put_object(Bucket="openci-tf-tmp-570017720022", Key="run/manifest.json", Body=b"{}")
+
+    assert len(attempts) == 3
+    assert len(sleeps) == 2
+
+
+def test_s3_client_retry_budget_covers_a_new_prefix_scaling_window(monkeypatch):
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "ap-northeast-1")
+    retries = s3.s3_client().meta.config.retries
+
+    assert retries["mode"] == "standard"
+    # botocore standard mode waits rand * min(2 ** n, 20) s between attempts:
+    # eleven retries average 0.5 + 1 + 2 + 4 + 8 + 6 * 10 = 75.5 s.
+    assert retries["total_max_attempts"] == 12

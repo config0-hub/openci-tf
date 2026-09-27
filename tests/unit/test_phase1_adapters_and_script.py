@@ -8,7 +8,7 @@ import pytest
 from src.core.errors import ConfigResolutionError
 from src.core.models import FolderConfig
 from src.domain.cmd_builder.cmd_resolver import resolve_commands
-from src.domain.cmd_builder.script_generator import ScriptParams, render
+from src.domain.cmd_builder.script_generator import S3_CURL_HELPER, ScriptParams, render
 from src.domain.config.outer_state import resolve_outer_state
 from src.platform.aws.sops import encrypt_file
 
@@ -61,8 +61,18 @@ def test_script_is_generated_for_each_safe_verb(verb):
     assert "set -euo pipefail" in script
     assert "trap _on_exit EXIT" in script
     assert "upload_artifacts" in script
-    assert "curl -sS --fail-with-body --retry 10 --retry-max-time 30" in script
+    assert 's3_curl - -H "Content-Type: $ctype" --upload-file "$artifact" "$url"' in script
     assert "cd 'folder with spaces'" in script
+
+
+@pytest.mark.parametrize("verb", ["plan", "drift", "report", "plan_destroy", "apply", "destroy"])
+def test_every_s3_transfer_in_the_script_goes_through_the_retrying_helper(verb):
+    script = render(ScriptParams(verb=verb, execution_target="lambda"))
+    assert script.count("s3_curl() {") == 1
+    body = script.replace(S3_CURL_HELPER, "")
+    curl_lines = [line.strip() for line in body.splitlines() if "curl " in line and "s3_curl " not in line]
+    assert curl_lines == ['curl --fail-with-body --show-error --location "$upstream_url" -o "$archive"'] * len(curl_lines)
+    assert curl_lines
 
 
 def test_drift_exit_two_is_normalized_and_adversarial_flags_are_quoted_through_resolver():
@@ -101,7 +111,7 @@ def test_plan_and_report_scripts_still_install_and_execute_shared_tools(verb):
     assert "UPSTREAM_URL_TFSEC_1_28_10" in script
     assert "UPSTREAM_URL_INFRACOST_0_10_39" in script
     assert 'curl --fail-with-body --show-error --location "$upstream_url" -o "$archive"' in script
-    assert 'curl --fail-with-body --show-error -H \'Content-Type: application/octet-stream\' --upload-file "$archive" "$cache_put_url"' in script
+    assert 's3_curl - -H \'Content-Type: application/octet-stream\' --upload-file "$archive" "$cache_put_url"' in script
     put_lines = [line for line in script.splitlines() if '--upload-file "$archive"' in line and "cache_put_url" in line]
     assert put_lines
     assert all("--location" not in line for line in put_lines)

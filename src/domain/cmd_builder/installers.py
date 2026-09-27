@@ -120,7 +120,11 @@ def _legacy_environment_name(binary: str, prefix: str) -> str:
 
 
 def render_installer(binary: str, version: str, target: str, checksum: str) -> str:
-    """Use a versioned archive cache, with checksum-verified upstream fallback."""
+    """Use a versioned archive cache, with checksum-verified upstream fallback.
+
+    The cache GET and PUT call ``s3_curl``, which the generated script defines
+    (``script_generator.S3_CURL_HELPER``) so S3 throttling is retried.
+    """
     require_pinned_installer(binary, version)
     directory = bin_dir(target)
     cache_get = _environment_name(binary, version, "CACHE_GET_URL")
@@ -137,12 +141,12 @@ extract_dir="$(mktemp -d)"
 cache_get_url="${{{cache_get}:-${{{legacy_cache_get}:-}}}}"
 cache_put_url="${{{cache_put}:-${{{legacy_cache_put}:-}}}}"
 upstream_url="${{{upstream}:-${{{legacy_upstream}:-}}}}"
-if ! curl --fail-with-body --show-error "$cache_get_url" -o "$archive"; then
+if ! s3_curl "$archive" "$cache_get_url"; then
   test -n "$upstream_url"
   test -n "$cache_put_url"
   curl --fail-with-body --show-error --location "$upstream_url" -o "$archive"
   echo "{checksum}  $archive" | sha256sum -c -
-  curl --fail-with-body --show-error -H 'Content-Type: application/octet-stream' --upload-file "$archive" "$cache_put_url"
+  s3_curl - -H 'Content-Type: application/octet-stream' --upload-file "$archive" "$cache_put_url"
 fi
 {extract}
 installed="$extract_dir/{binary}"

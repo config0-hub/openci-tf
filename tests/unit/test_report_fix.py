@@ -66,9 +66,9 @@ printf '%s' '{"totalMonthlyCost":"1.00"}' > "$out"
 def test_report_script_uses_tfsec_soft_fail_out_and_silent_curl():
     script = render(ScriptParams("report", "lambda", folder="infra"))
     assert "tfsec . --format json --soft-fail --out" in script
-    assert "curl -sS --fail-with-body --retry 10 --retry-max-time 30" in script
+    assert 's3_curl - -H "Content-Type: $ctype" --upload-file "$artifact" "$url"' in script
     assert 'curl --fail-with-body --show-error --location "$upstream_url" -o "$archive"' in script
-    assert 'curl --fail-with-body --show-error -H \'Content-Type: application/octet-stream\' --upload-file "$archive" "$cache_put_url"' in script
+    assert 's3_curl - -H \'Content-Type: application/octet-stream\' --upload-file "$archive" "$cache_put_url"' in script
     put_lines = [line for line in script.splitlines() if '--upload-file "$archive"' in line and "cache_put_url" in line]
     assert put_lines
     assert all("--location" not in line for line in put_lines)

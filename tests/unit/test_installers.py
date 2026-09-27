@@ -13,6 +13,7 @@ from src.domain.cmd_builder.installers import (
     render_installer,
     require_pinned_installer,
 )
+from src.domain.cmd_builder.script_generator import S3_CURL_HELPER
 
 
 def _archive(tmp_path: Path) -> Path:
@@ -51,8 +52,8 @@ def test_installer_version_selects_a_versioned_archive():
     assert "UPSTREAM_URL_TOFU_1_12_6" in new_version
     assert old_version != new_version
     assert 'curl --fail-with-body --show-error --location "$upstream_url" -o "$archive"' in old_version
-    assert 'curl --fail-with-body --show-error "$cache_get_url" -o "$archive"' in old_version
-    assert 'curl --fail-with-body --show-error -H \'Content-Type: application/octet-stream\' --upload-file "$archive" "$cache_put_url"' in old_version
+    assert 'if ! s3_curl "$archive" "$cache_get_url"; then' in old_version
+    assert 's3_curl - -H \'Content-Type: application/octet-stream\' --upload-file "$archive" "$cache_put_url"' in old_version
     put_lines = [line for line in old_version.splitlines() if '--upload-file "$archive"' in line and "cache_put_url" in line]
     assert put_lines
     assert all("--location" not in line for line in put_lines)
@@ -97,7 +98,7 @@ def test_installer_executes_cache_hit_path(tmp_path, monkeypatch):
     monkeypatch.setenv("CACHE_GET_URL_TOFU", "https://cache/tofu")
     monkeypatch.setenv("CACHE_PUT_URL_TOFU", "https://cache/tofu")
     monkeypatch.setenv("UPSTREAM_URL_TOFU", "https://upstream/tofu")
-    subprocess.run(["bash", "-c", "set -e\n" + render_installer("tofu", "1.10.6", "lambda", "0" * 64)], check=True)
+    subprocess.run(["bash", "-c", "set -euo pipefail\n" + S3_CURL_HELPER + "\n" + render_installer("tofu", "1.10.6", "lambda", "0" * 64)], check=True)
     assert Path("/tmp/lambda/bin/tofu").exists()
 
 
@@ -108,6 +109,85 @@ def test_installer_fails_on_real_sha256_mismatch(tmp_path, monkeypatch):
     monkeypatch.setenv("CACHE_GET_URL_TOFU", "https://cache/tofu")
     monkeypatch.setenv("CACHE_PUT_URL_TOFU", "https://cache/tofu")
     monkeypatch.setenv("UPSTREAM_URL_TOFU", "https://upstream/tofu")
-    completed = subprocess.run(["bash", "-c", "set -e\n" + render_installer("tofu", "1.10.6", "lambda", "0" * 64)], text=True, capture_output=True, check=False)
+    completed = subprocess.run(["bash", "-c", "set -euo pipefail\n" + S3_CURL_HELPER + "\n" + render_installer("tofu", "1.10.6", "lambda", "0" * 64)], text=True, capture_output=True, check=False)
     assert completed.returncode != 0
     assert "FAILED" in completed.stdout
+
+
+# The installer script's sleep advances bash's SECONDS instead of waiting, so the
+# s3_curl retry window runs instantly.
+_SLEEP_ADVANCES_CLOCK = 'sleep() { SECONDS=$((SECONDS + $1)); }\n'
+_SLOWDOWN = "<Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>"
+
+
+def _run_installer_against_throttled_cache(tmp_path: Path, monkeypatch, *, put_failures: int):
+    """Cache GET misses with 403; the cache PUT answers 503 SlowDown put_failures times, then 200."""
+    archive = _archive(tmp_path)
+    calls = tmp_path / "curl-calls.log"
+    curl = tmp_path / "curl"
+    curl.write_text(f'''#!/usr/bin/env bash
+out=""; url=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift ;;
+    -w|-H|--upload-file) shift ;;
+    https://*) url="$1" ;;
+  esac
+  shift
+done
+echo "$url" >> "{calls}"
+case "$url" in
+  https://cache-put/*)
+    if [ "$(grep -c '^https://cache-put/' "{calls}")" -le {put_failures} ]; then
+      printf '%s' '{_SLOWDOWN}' > "$out"; printf 503; exit 0
+    fi
+    : > "$out"; printf 200 ;;
+  https://cache/*) printf '%s' '<Error><Code>AccessDenied</Code></Error>' > "$out"; printf 403 ;;
+  https://upstream/*) cp "{archive}" "$out" ;;
+  *) exit 99 ;;
+esac
+''')
+    curl.chmod(0o755)
+    checksum = __import__("hashlib").sha256(archive.read_bytes()).hexdigest()
+    monkeypatch.setenv("PATH", f"{tmp_path}:{__import__('os').environ['PATH']}")
+    monkeypatch.setenv("CACHE_GET_URL_TOFU", "https://cache/tofu")
+    monkeypatch.setenv("CACHE_PUT_URL_TOFU", "https://cache-put/tofu")
+    monkeypatch.setenv("UPSTREAM_URL_TOFU", "https://upstream/tofu")
+    script = "set -euo pipefail\n" + _SLEEP_ADVANCES_CLOCK + S3_CURL_HELPER + "\n" + render_installer("tofu", "1.10.6", "lambda", checksum)
+    completed = subprocess.run(["bash", "-c", script], text=True, capture_output=True, check=False)
+    return completed, calls.read_text().splitlines()
+
+
+def test_installer_cache_put_retries_slowdown_and_succeeds_on_third_attempt(tmp_path, monkeypatch):
+    completed, calls = _run_installer_against_throttled_cache(tmp_path, monkeypatch, put_failures=2)
+
+    assert completed.returncode == 0, completed.stderr
+    assert calls == [
+        "https://cache/tofu",
+        "https://upstream/tofu",
+        "https://cache-put/tofu",
+        "https://cache-put/tofu",
+        "https://cache-put/tofu",
+    ]
+    assert completed.stderr.count("Warning: S3 request returned HTTP 503") == 2
+    assert Path("/tmp/lambda/bin/tofu").exists()
+
+
+def test_installer_cache_miss_403_is_not_retried(tmp_path, monkeypatch):
+    completed, calls = _run_installer_against_throttled_cache(tmp_path, monkeypatch, put_failures=0)
+
+    assert completed.returncode == 0, completed.stderr
+    assert calls.count("https://cache/tofu") == 1
+    assert "curl: (22) The requested URL returned error: 403" in completed.stderr
+
+
+def test_installer_cache_put_fails_loud_after_at_least_sixty_seconds_of_slowdown(tmp_path, monkeypatch):
+    completed, calls = _run_installer_against_throttled_cache(tmp_path, monkeypatch, put_failures=1_000)
+
+    assert completed.returncode == 22
+    assert _SLOWDOWN in completed.stderr
+    final = next(line for line in completed.stderr.splitlines() if line.startswith("Error: S3 request still failing"))
+    assert "HTTP 503 SlowDown" in final
+    waited = int(final.rsplit(" over ", 1)[1].removesuffix("s"))
+    assert waited >= 60
+    assert 3 < calls.count("https://cache-put/tofu") < 20

@@ -14,6 +14,12 @@ from botocore.exceptions import ClientError
 
 _MANIFEST_CONFLICT_MAX_BYTES = 65_536
 
+# One retry policy for every S3 call. A freshly created bucket answers 503
+# SlowDown while S3 scales the prefix; botocore standard mode retries it with
+# full-jitter exponential backoff (rand * min(2 ** n, 20) seconds). Twelve total
+# attempts wait about 75 s on average, and at most about 150 s.
+_S3_RETRY_CONFIG = Config(retries={"mode": "standard", "total_max_attempts": 12})
+
 _SHA256_HEX = __import__("re").compile(r"^[0-9a-f]{64}$")
 
 _ARTIFACT_CONTENT_TYPES: dict[str, str] = {
@@ -62,9 +68,14 @@ def _decode_checksum_sha256(value: Any) -> str | None:
     return None
 
 
+def s3_client():
+    """Return an S3 client that retries throttling with the shared policy."""
+    return boto3.client("s3", config=_S3_RETRY_CONFIG)
+
+
 def head_object(bucket: str, key: str) -> dict[str, Any] | None:
     """Check if an S3 object exists. Returns metadata dict or None."""
-    client = boto3.client("s3")
+    client = s3_client()
     try:
         resp = client.head_object(Bucket=bucket, Key=key, ChecksumMode="ENABLED")
         return {
@@ -110,7 +121,7 @@ def presign_create_put(bucket: str, key: str, expires_in: int, *, content_type: 
 
 def upload_file(path: str, bucket: str, key: str, *, content_type: str | None = None) -> None:
     """Upload a local file to S3, optionally setting an explicit ContentType."""
-    client = boto3.client("s3")
+    client = s3_client()
     if content_type:
         client.upload_file(path, bucket, key, ExtraArgs={"ContentType": content_type})
     else:
@@ -119,7 +130,7 @@ def upload_file(path: str, bucket: str, key: str, *, content_type: str | None = 
 
 def get_object_bytes(bucket: str, key: str, max_bytes: int) -> bytes | None:
     """Read bounded object bytes. Returns None when the object is absent."""
-    client = boto3.client("s3")
+    client = s3_client()
     try:
         head = client.head_object(Bucket=bucket, Key=key, ChecksumMode="ENABLED")
         if head["ContentLength"] > max_bytes:
@@ -138,7 +149,7 @@ def get_object_bytes(bucket: str, key: str, max_bytes: int) -> bytes | None:
 def put_json_create_only(bucket: str, key: str, payload: dict[str, Any]) -> str:
     """Upload a JSON object only when the key is absent."""
     body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    client = boto3.client("s3")
+    client = s3_client()
     try:
         response = client.put_object(
             Bucket=bucket,
@@ -164,7 +175,7 @@ def get_bounded_json_with_meta(
     max_bytes: int,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Download bounded JSON from S3 with object metadata. Returns (payload, meta)."""
-    client = boto3.client("s3")
+    client = s3_client()
     try:
         head = client.head_object(Bucket=bucket, Key=key, ChecksumMode="ENABLED")
     except ClientError as error:
@@ -202,7 +213,7 @@ def get_bounded_json_with_meta(
 
 def get_json_with_meta(bucket: str, key: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Download JSON from S3 with object metadata. Returns (payload, meta)."""
-    client = boto3.client("s3")
+    client = s3_client()
     try:
         resp = client.get_object(Bucket=bucket, Key=key)
         payload = json.loads(resp["Body"].read().decode("utf-8"))
@@ -220,7 +231,7 @@ def get_json_with_meta(bucket: str, key: str) -> tuple[dict[str, Any] | None, di
 
 def get_bounded_json(bucket: str, key: str, max_bytes: int) -> dict[str, Any] | None:
     """Download a bounded JSON sidecar. Returns None if absent."""
-    client = boto3.client("s3")
+    client = s3_client()
     try:
         head = client.head_object(Bucket=bucket, Key=key, ChecksumMode="ENABLED")
         if head["ContentLength"] > max_bytes:
@@ -241,7 +252,7 @@ def get_bounded_json(bucket: str, key: str, max_bytes: int) -> dict[str, Any] | 
 
 def copy_object(*, bucket: str, source_key: str, dest_key: str) -> None:
     """Copy one object within the same bucket."""
-    client = boto3.client("s3")
+    client = s3_client()
     client.copy_object(
         Bucket=bucket,
         Key=dest_key,
@@ -251,7 +262,7 @@ def copy_object(*, bucket: str, source_key: str, dest_key: str) -> None:
 
 def get_bounded_text(bucket: str, key: str, max_bytes: int, allowed_content_types: frozenset[str]) -> tuple[str, str] | None:
     """Fetch exactly one bounded text object. Returns (content_type, body) or None."""
-    client = boto3.client("s3")
+    client = s3_client()
     try:
         head = client.head_object(Bucket=bucket, Key=key, ChecksumMode="ENABLED")
         if head["ContentLength"] > max_bytes:
@@ -275,7 +286,7 @@ def list_text_prefix(bucket: str, prefix: str, max_bytes: int, allowed_content_t
 
     The caller receives a bounded rejection marker rather than an untrusted body.
     """
-    client = boto3.client("s3")
+    client = s3_client()
     response = client.list_objects_v2(Bucket=bucket, Prefix=prefix)
     artifacts: dict[str, str] = {}
     for item in response.get("Contents", []):
