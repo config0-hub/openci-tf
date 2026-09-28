@@ -19,9 +19,11 @@ _SAFE_VERBS = frozenset({"plan", "report", "drift", "plan_destroy", "apply", "de
 # transient answers (curl's own set: HTTP 408, 429, 500, 502, 503, 504 and a
 # curl timeout) are retried with jittered exponential backoff (waits of
 # [delay, 2*delay) seconds, delay 1, 2, 4, 8, 8, ...) until the next wait
-# would pass 90 s, so a throttled call keeps trying for at least 75 s. Any
-# other answer (a 403 cache miss) returns at once. Usage: s3_curl DEST ARGS...
-# where DEST receives the body on success and "-" discards it.
+# would pass 90 s, so a throttled call keeps trying for at least 75 s. Only a
+# 2xx answer is success. Any other answer (a 403 cache miss, a 307 redirect)
+# returns at once with the status and the first 1024 bytes of the body on
+# stderr. Usage: s3_curl DEST ARGS... where DEST receives the body on success
+# and "-" discards it.
 S3_CURL_HELPER = r'''
 s3_curl() {
   local dest="$1"
@@ -37,8 +39,7 @@ s3_curl() {
     code="$(curl -sS -o "$body" -w '%{http_code}' "$@")" || status=$?
     retryable=0
     case "$status:$code" in
-      0:[45][0-9][0-9]) ;;
-      0:*)
+      0:2[0-9][0-9])
         if [ "$dest" = "-" ]; then rm -f "$body"; else mv "$body" "$dest"; fi
         return 0
         ;;
@@ -48,7 +49,7 @@ s3_curl() {
     esac
     pause=$((delay + RANDOM % delay))
     if [ "$retryable" -eq 0 ] || [ $((SECONDS + pause)) -gt "$deadline" ]; then
-      { cat "$body"; echo; } >&2
+      { head -c 1024 "$body"; echo; } >&2
       s3_error="$(sed -n 's:.*<Code>\([A-Za-z]*\)</Code>.*:\1:p' "$body" | head -n 1)" || s3_error=""
       rm -f "$body"
       if [ "$retryable" -eq 1 ]; then

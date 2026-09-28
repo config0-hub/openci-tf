@@ -111,6 +111,8 @@ esac'''
     curl = tmp_path / "curl"
     curl.write_text(f'''#!/usr/bin/env bash
 set -euo pipefail
+curl_args=" $* "
+ok() {{ case "$curl_args" in *" -w "*) printf 200 ;; esac; }}
 if [[ " $* " == *" --upload-file "* ]]; then
   for arg in "$@"; do
     case "$arg" in
@@ -119,11 +121,12 @@ if [[ " $* " == *" --upload-file "* ]]; then
     esac
   done
   printf '%s %s\\n' "$url" "$(basename "$file")" >> "{upload_log}"
+  ok
   exit 0
 fi
 for arg in "$@"; do case "$arg" in https://cache/*) exit 22 ;; https://upstream/*) source="$arg" ;; esac; done
 while [ "$#" -gt 0 ]; do
-  if [ "$1" = "-o" ]; then cp "{downloads}/$(basename "$source").tar.gz" "$2"; exit 0; fi
+  if [ "$1" = "-o" ]; then cp "{downloads}/$(basename "$source").tar.gz" "$2"; ok; exit 0; fi
   shift
 done
 ''')
@@ -558,10 +561,12 @@ esac'''
     curl = tmp_path / "curl"
     curl.write_text(f'''#!/usr/bin/env bash
 set -euo pipefail
-if [[ " $* " == *" --upload-file "* ]]; then exit 0; fi
+curl_args=" $* "
+ok() {{ case "$curl_args" in *" -w "*) printf 200 ;; esac; }}
+if [[ " $* " == *" --upload-file "* ]]; then ok; exit 0; fi
 for arg in "$@"; do case "$arg" in https://cache/*) exit 22 ;; https://upstream/*) source="$arg" ;; esac; done
 while [ "$#" -gt 0 ]; do
-  if [ "$1" = "-o" ]; then cp "{downloads}/$(basename "$source").tar.gz" "$2"; exit 0; fi
+  if [ "$1" = "-o" ]; then cp "{downloads}/$(basename "$source").tar.gz" "$2"; ok; exit 0; fi
   shift
 done
 ''')
@@ -839,6 +844,8 @@ def _run_drift_script(tmp_path: Path, *, tofu_body: str, failing_upload: str) ->
     curl = tmp_path / "curl"
     curl.write_text(f'''#!/usr/bin/env bash
 set -euo pipefail
+curl_args=" $* "
+ok() {{ case "$curl_args" in *" -w "*) printf 200 ;; esac; }}
 if [[ " $* " == *" --upload-file "* ]]; then
   for arg in "$@"; do
     case "$arg" in https://*) url="$arg" ;; esac
@@ -848,11 +855,12 @@ if [[ " $* " == *" --upload-file "* ]]; then
     echo '<Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>'
     exit 22
   fi
+  ok
   exit 0
 fi
 for arg in "$@"; do case "$arg" in https://cache/*) exit 22 ;; https://upstream/*) source="$arg" ;; esac; done
 while [ "$#" -gt 0 ]; do
-  if [ "$1" = "-o" ]; then cp "{downloads}/$(basename "$source").tar.gz" "$2"; exit 0; fi
+  if [ "$1" = "-o" ]; then cp "{downloads}/$(basename "$source").tar.gz" "$2"; ok; exit 0; fi
   shift
 done
 ''')

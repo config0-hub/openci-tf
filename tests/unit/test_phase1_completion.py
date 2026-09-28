@@ -370,10 +370,12 @@ def test_generated_script_uploads_artifacts_after_early_command_failure(tmp_path
     curl = tmp_path / "curl"
     curl.write_text(f'''#!/usr/bin/env bash
 set -euo pipefail
-if [[ " $* " == *" --upload-file "* ]]; then echo "$*" >> "{uploads}"; exit 0; fi
+curl_args=" $* "
+ok() {{ case "$curl_args" in *" -w "*) printf 200 ;; esac; }}
+if [[ " $* " == *" --upload-file "* ]]; then echo "$*" >> "{uploads}"; ok; exit 0; fi
 for arg in "$@"; do case "$arg" in https://upstream/*) source="$arg" ;; esac; done
 while [ "$#" -gt 0 ]; do
-  if [ "$1" = "-o" ]; then cp "{downloads}/$(basename "$source").tar.gz" "$2"; exit 0; fi
+  if [ "$1" = "-o" ]; then cp "{downloads}/$(basename "$source").tar.gz" "$2"; ok; exit 0; fi
   shift
 done
 ''')
@@ -427,7 +429,9 @@ echo breakdown'''
     curl = tmp_path / "curl"
     curl.write_text(f'''#!/usr/bin/env bash
 set -euo pipefail
-if [[ " $* " == *" --upload-file "* ]]; then exit 0; fi
+curl_args=" $* "
+ok() {{ case "$curl_args" in *" -w "*) printf 200 ;; esac; }}
+if [[ " $* " == *" --upload-file "* ]]; then ok; exit 0; fi
 for arg in "$@"; do
   case "$arg" in
     https://cache/*) exit 22 ;;
@@ -435,7 +439,7 @@ for arg in "$@"; do
   esac
 done
 while [ "$#" -gt 0 ]; do
-  if [ "$1" = "-o" ]; then cp "{downloads}/$(basename "$source").tar.gz" "$2"; exit 0; fi
+  if [ "$1" = "-o" ]; then cp "{downloads}/$(basename "$source").tar.gz" "$2"; ok; exit 0; fi
   shift
 done
 ''')

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Config0, Inc.
 # SPDX-License-Identifier: AGPL-3.0-or-later
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 import pytest
 
@@ -74,6 +74,25 @@ def test_presign_put_allows_retry_overwrite() -> None:
         assert "IfNoneMatch" not in captured["Params"]
     finally:
         monkeypatch.undo()
+
+
+@pytest.mark.parametrize("region", ["us-east-1", "us-west-2"])
+def test_presign_urls_use_regional_host(monkeypatch, region) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    monkeypatch.setenv("AWS_DEFAULT_REGION", region)
+    monkeypatch.setenv("AWS_REGION", region)
+    key = "openci-tf/org/repo/run/tf/plan.tfplan"
+
+    urls = [
+        s3_platform.presign_get("openci-tf-tmp-1", key, 900),
+        s3_platform.presign_put("openci-tf-tmp-1", key, 900),
+        s3_platform.presign_create_put("openci-tf-tmp-1", key, 900),
+    ]
+
+    for url in urls:
+        assert urlparse(url).netloc == f"openci-tf-tmp-1.s3.{region}.amazonaws.com"
 
 
 def test_plan_artifact_metadata_validation_binds_all_run_dimensions() -> None:

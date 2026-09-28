@@ -92,8 +92,17 @@ def head_object(bucket: str, key: str) -> dict[str, Any] | None:
         raise
 
 
+# Presigned URLs use the regional virtual host (<bucket>.s3.<region>.amazonaws.com).
+# The global host answers 307 TemporaryRedirect for a bucket younger than about
+# a day, and a presigned request cannot follow that redirect.
+_PRESIGN_CONFIG = Config(
+    signature_version="s3v4",
+    s3={"addressing_style": "virtual", "us_east_1_regional_endpoint": "regional"},
+)
+
+
 def _presign_client():
-    return boto3.client("s3", config=Config(signature_version="s3v4"))
+    return boto3.client("s3", config=_PRESIGN_CONFIG)
 
 
 def presign_get(bucket: str, key: str, expires_in: int) -> str:

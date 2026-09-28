@@ -29,12 +29,14 @@ def _archive(tmp_path: Path) -> Path:
 def _curl(tmp_path: Path, archive: Path, cache_exit: int) -> None:
     curl = tmp_path / "curl"
     curl.write_text(f'''#!/usr/bin/env bash
+curl_args=" $* "
+ok() {{ case "$curl_args" in *" -w "*) printf 200 ;; esac; }}
 is_cache=false
 [[ "$*" == *"cache"* ]] && is_cache=true
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "-o" ]; then
     if $is_cache && [ {cache_exit} -ne 0 ]; then exit {cache_exit}; fi
-    cp "{archive}" "$2"; exit 0
+    cp "{archive}" "$2"; ok; exit 0
   fi
   shift
 done
@@ -191,3 +193,33 @@ def test_installer_cache_put_fails_loud_after_at_least_sixty_seconds_of_slowdown
     waited = int(final.rsplit(" over ", 1)[1].removesuffix("s"))
     assert waited >= 60
     assert 3 < calls.count("https://cache-put/tofu") < 20
+
+
+def test_s3_curl_redirect_is_failure_and_dest_is_not_written(tmp_path, monkeypatch):
+    redirect = "<Error><Code>TemporaryRedirect</Code><Message>Please re-send this request to the specified temporary endpoint.</Message></Error>"
+    calls = tmp_path / "curl-calls.log"
+    curl = tmp_path / "curl"
+    curl.write_text(f"""#!/usr/bin/env bash
+out=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift ;;
+    -w) shift ;;
+    https://*) echo "$1" >> "{calls}" ;;
+  esac
+  shift
+done
+printf '%s' '{redirect}' > "$out"; printf 307
+""")
+    curl.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{__import__('os').environ['PATH']}")
+    dest = tmp_path / "plan.tfplan"
+    script = "set -euo pipefail\n" + _SLEEP_ADVANCES_CLOCK + S3_CURL_HELPER + f'\ns3_curl "{dest}" https://bucket.s3.amazonaws.com/plan.tfplan\n'
+
+    completed = subprocess.run(["bash", "-c", script], text=True, capture_output=True, check=False)
+
+    assert completed.returncode == 22
+    assert calls.read_text().splitlines() == ["https://bucket.s3.amazonaws.com/plan.tfplan"]
+    assert "curl: (22) The requested URL returned error: 307" in completed.stderr
+    assert redirect in completed.stderr
+    assert not dest.exists()
