@@ -87,6 +87,8 @@ resource "aws_iam_role_policy" "prepare" {
     { Effect = "Allow", Action = "s3:ListBucket", Resource = var.done_bucket_arn },
     { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject"], Resource = local.package_root_zip_objects },
     { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject"], Resource = local.installer_cache_objects },
+    # ListBucket on the package bucket's cache/ prefix is required so an installer cache miss returns 404 (not 403).
+    { Effect = "Allow", Action = "s3:ListBucket", Resource = var.package_bucket_arn, Condition = { StringLike = { "s3:prefix" = ["cache/*"] } } },
     { Effect = "Deny", Action = ["s3:GetObject", "s3:PutObject"], Resource = local.package_nested_zip_deny },
     { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject"], Resource = "${var.tmp_bucket_arn}/openci-tf/*" },
     { Effect = "Allow", Action = "dynamodb:GetItem", Resource = "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.project_name}-settings" },

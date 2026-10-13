@@ -61,8 +61,21 @@ def test_prepare_package_cache_get_put_allows_pinned_installer_keys():
 
 def test_prepare_done_bucket_list_is_bucket_scoped_only():
     block = _policy_block("prepare")
-    assert block.count("s3:ListBucket") == 1
+    assert block.count("s3:ListBucket") == 2
     assert f'Action = "s3:ListBucket", Resource = {_DONE_BUCKET_ARN}' in block
+
+
+def test_prepare_package_cache_list_is_prefix_scoped():
+    block = _policy_block("prepare")
+    assert (
+        'Action = "s3:ListBucket", Resource = var.package_bucket_arn, '
+        'Condition = { StringLike = { "s3:prefix" = ["cache/*"] } } }'
+    ) in block
+    assert 'Action = "s3:ListBucket", Resource = var.package_bucket_arn }' not in block
+    assert (
+        "ListBucket on the package bucket's cache/ prefix is required so an installer cache miss returns 404 (not 403)"
+        in block
+    )
 
 
 def test_prepare_has_least_privilege_ssm_env_access():
