@@ -2,9 +2,11 @@
 set -euo pipefail
 
 # Write terraform.tfvars into a terraform root from key=value arguments.
-# Values that look like JSON arrays/objects, numbers, or booleans are written
-# raw; everything else is quoted with HCL escaping. The file is gitignored —
-# it may hold values read from SSM and must never be committed or uploaded.
+# Values that look like JSON arrays/objects are written raw; every other value
+# is quoted with HCL escaping. Terraform converts a quoted "7" or "true" to a
+# typed number or bool variable, while a raw 1.10 is the number 1.1.
+# The file is gitignored — it may hold values read from SSM and must never be
+# committed or uploaded.
 #
 # Usage: write_tfvars.sh <root_dir> [key=value ...]
 
@@ -32,16 +34,12 @@ for pair in "$@"; do
     exit 1
   fi
   case "$value" in
-  \[* | \{* | true | false)
+  \[* | \{*)
     printf '%s = %s\n' "$key" "$value" >>"$OUT"
     ;;
   *)
-    if printf '%s' "$value" | grep -Eq '^-?[0-9]+(\.[0-9]+)?$'; then
-      printf '%s = %s\n' "$key" "$value" >>"$OUT"
-    else
-      escaped="$(hcl_escape_string "$value")"
-      printf '%s = "%s"\n' "$key" "$escaped" >>"$OUT"
-    fi
+    escaped="$(hcl_escape_string "$value")"
+    printf '%s = "%s"\n' "$key" "$escaped" >>"$OUT"
     ;;
   esac
 done
