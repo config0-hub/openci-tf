@@ -10,7 +10,7 @@ from typing import Any
 
 from src.core.errors import ConfigResolutionError, ConfigValidationError
 from src.core.models import GlobalSettings
-from src.domain.cmd_builder.installers import installer_key, require_pinned_installer
+from src.domain.cmd_builder.installers import installer_key, upstream_url
 from src.domain.config.folder_config import compact_folder_config_for_outer_state, parse_folder_config
 from src.domain.config.folder_discovery import CONFIG_PATH, discover_folder_paths
 from src.domain.config.folder_discovery import discover_folders as _discover_folders
@@ -125,14 +125,9 @@ def _validated_upstream_urls(
     urls: dict[str, str] = {}
     for binary, version in sorted(required, key=lambda item: installer_key(*item)):
         try:
-            require_pinned_installer(binary, version)
+            urls[installer_key(binary, version)] = upstream_url(
+                binary, version, raw_urls, bare_key=binary_counts[binary] == 1
+            )
         except ValueError as error:
             raise ConfigResolutionError(str(error)) from error
-        key = installer_key(binary, version)
-        url = raw_urls.get(key)
-        if url is None and binary_counts[binary] == 1:
-            url = raw_urls.get(binary)
-        if not isinstance(url, str) or not url.startswith("https://"):
-            raise ConfigResolutionError(f"upstream_urls missing a valid URL for pinned installer {key}")
-        urls[key] = url
     return urls

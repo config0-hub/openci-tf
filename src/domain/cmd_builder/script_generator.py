@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from src.domain.cmd_builder.installers import (
     bin_dir,
     render_installer,
-    require_pinned_installer,
 )
 
 _SAFE_VERBS = frozenset({"plan", "report", "drift", "plan_destroy", "apply", "destroy"})
@@ -329,7 +328,7 @@ def _render_plan_like(params: ScriptParams) -> str:
     flags = " ".join(shlex.quote(flag) for flag in params.extra_flags)
     tool, workdir, directory = (shlex.quote(params.binary), shlex.quote(params.folder), shlex.quote(bin_dir(params.execution_target)))
     installers = "\n".join(
-        render_installer(binary, version, params.execution_target, require_pinned_installer(binary, version).sha256)
+        render_installer(binary, version, params.execution_target)
         for binary, version in _installer_specs(params)
     )
     artifact_names = " ".join(
@@ -452,7 +451,7 @@ def _render_apply_like(params: ScriptParams) -> str:
     output_name = "apply.out" if params.verb == "apply" else "destroy.out"
     tool, workdir, directory = (shlex.quote(params.binary), shlex.quote(params.folder), shlex.quote(bin_dir(params.execution_target)))
     installers = "\n".join(
-        render_installer(binary, version, params.execution_target, require_pinned_installer(binary, version).sha256)
+        render_installer(binary, version, params.execution_target)
         for binary, version in _installer_specs(params)
     )
     artifact_names = " ".join(

@@ -339,21 +339,46 @@ def test_register_repo_settings_item_matches_shell_registration_shape():
     assert item["upstream_urls"]["M"]["tofu:1.12.6"]["S"].startswith("https://")
 
 
-def test_register_repo_rejects_unpinned_upstream_urls():
-    module = _register_module()
-    args = SimpleNamespace(
+def _upstream_url_registration(upstream_urls: dict[str, str]) -> SimpleNamespace:
+    return SimpleNamespace(
         repo="owner/sample-target-repo",
         trigger_id="trig",
         git_url="https://github.com/owner/sample-target-repo.git",
         github_token_ssm="/openci-tf/clone-token/owner-sample-target-repo-control",
-        upstream_urls_json=json.dumps({"tofu:9.9.9": "https://example.com/x.tar.gz"}),
+        upstream_urls_json=json.dumps(upstream_urls),
         region="us-east-1",
         table="openci-tf-settings",
         infracost_api_key_ssm="",
         require_approval=False,
     )
-    with pytest.raises(module.RegistrationError):
+
+
+@pytest.mark.parametrize("key", ["tfsec:9.9.9", "tofu:1.9.0", "tofu:latest", "tofu"])
+def test_register_repo_rejects_unpinned_tool_and_malformed_runtime_keys(key):
+    module = _register_module()
+    args = _upstream_url_registration({key: "https://example.com/x.tar.gz"})
+    with pytest.raises(module.RegistrationError, match="upstream-urls-json key"):
         module.apply_repo_settings(object(), args, "/openci-tf/install/openci-tf/webhook_secret")
+
+
+def test_register_repo_accepts_runtime_keys_outside_the_old_pinned_list():
+    module = _register_module()
+    urls = {
+        "tofu:1.11.14": "https://github.com/opentofu/opentofu/releases/download/v1.11.14/tofu_1.11.14_linux_amd64.tar.gz",
+        "terraform:1.11.4": "https://releases.hashicorp.com/terraform/1.11.4/terraform_1.11.4_linux_amd64.zip",
+    }
+
+    class _FakeDynamo:
+        def __init__(self):
+            self.items = []
+
+        def put_item(self, TableName, Item):
+            self.items.append(Item)
+
+    dynamo = _FakeDynamo()
+    module.apply_repo_settings(dynamo, _upstream_url_registration(urls), "/openci-tf/install/openci-tf/webhook_secret")
+    (item,) = dynamo.items
+    assert {key: value["S"] for key, value in item["upstream_urls"]["M"].items()} == urls
 
 
 class _FakeSsm:

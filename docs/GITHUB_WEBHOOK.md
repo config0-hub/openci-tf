@@ -19,7 +19,7 @@ canonical.
    `/openci-tf/install/<project>/webhook_secret` (reused when it already
    exists),
 3. writes the repository settings row (trigger id, repo, token SSM path,
-   pinned runtime URLs), and
+   pinned scan-tool download URLs), and
 4. creates or reconciles the GitHub webhook against the deploy's
    `webhook_url`, recording the hook id at
    `/openci-tf/install/<project>/webhook_hook_id` so removal can delete the

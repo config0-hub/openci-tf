@@ -8,6 +8,7 @@ import pytest
 from src.core.errors import ConfigResolutionError
 from src.core.models import FolderConfig
 from src.domain.cmd_builder.cmd_resolver import resolve_commands
+from src.domain.cmd_builder.installers import runtime_release
 from src.domain.cmd_builder.script_generator import S3_CURL_HELPER, ScriptParams, render
 from src.domain.config.outer_state import resolve_outer_state
 from src.platform.aws.sops import encrypt_file
@@ -67,12 +68,14 @@ def test_script_is_generated_for_each_safe_verb(verb):
 
 @pytest.mark.parametrize("verb", ["plan", "drift", "report", "plan_destroy", "apply", "destroy"])
 def test_every_s3_transfer_in_the_script_goes_through_the_retrying_helper(verb):
+    """Plain curl only fetches from a release host: the archive and the runtime's SHA256SUMS file."""
     script = render(ScriptParams(verb=verb, execution_target="lambda"))
     assert script.count("s3_curl() {") == 1
     body = script.replace(S3_CURL_HELPER, "")
     curl_lines = [line.strip() for line in body.splitlines() if "curl " in line and "s3_curl " not in line]
-    assert curl_lines == ['curl --fail-with-body --show-error --location "$upstream_url" -o "$archive"'] * len(curl_lines)
-    assert curl_lines
+    archive = 'curl --fail-with-body --show-error --location "$upstream_url" -o "$archive"'
+    sums = f'curl --fail-with-body --show-error --location {runtime_release("tofu", "1.10.6").sums_url!r} -o "$sums"'
+    assert set(curl_lines) == {archive, sums}
 
 
 def test_drift_exit_two_is_normalized_and_adversarial_flags_are_quoted_through_resolver():
@@ -148,13 +151,41 @@ def test_outer_state_allows_legacy_single_runtime_url_key(tmp_path):
     assert result["upstream_urls"] == {"tofu:1.10.6": "https://downloads.example/tofu"}
 
 
-def test_outer_state_rejects_unpinned_runtime_clearly(tmp_path):
-    _write_folder_config(tmp_path, "terraform:1.10.0")
-    with pytest.raises(ConfigResolutionError, match="unsupported unpinned tf_runtime terraform:1.10.0"):
+# What the config0 add-on registers for a tenant repository: openci-tf's
+# pinned list as it stood before any runtime version could run.
+_OLD_PINNED_REGISTRATION = {
+    "terraform:1.10.5": "https://releases.hashicorp.com/terraform/1.10.5/terraform_1.10.5_linux_amd64.zip",
+    "terraform:1.12.2": "https://releases.hashicorp.com/terraform/1.12.2/terraform_1.12.2_linux_amd64.zip",
+    "tofu:1.10.6": "https://github.com/opentofu/opentofu/releases/download/v1.10.6/tofu_1.10.6_linux_amd64.tar.gz",
+    "tofu:1.12.6": "https://github.com/opentofu/opentofu/releases/download/v1.12.6/tofu_1.12.6_linux_amd64.tar.gz",
+    "tfsec:1.28.10": "https://github.com/aquasecurity/tfsec/releases/download/v1.28.10/tfsec_1.28.10_linux_amd64.tar.gz",
+    "infracost:0.10.39": "https://github.com/infracost/infracost/releases/download/v0.10.39/infracost-linux-amd64.tar.gz",
+}
+
+
+@pytest.mark.parametrize(
+    ("runtime", "release_url"),
+    [
+        ("tofu:1.11.14", "https://github.com/opentofu/opentofu/releases/download/v1.11.14/tofu_1.11.14_linux_amd64.tar.gz"),
+        ("terraform:1.11.4", "https://releases.hashicorp.com/terraform/1.11.4/terraform_1.11.4_linux_amd64.zip"),
+    ],
+)
+def test_runtime_outside_the_old_pinned_list_resolves_to_its_release(tmp_path, runtime, release_url):
+    _write_folder_config(tmp_path, runtime)
+
+    result = resolve_outer_state(str(tmp_path), ["infra/app"], _OLD_PINNED_REGISTRATION, "plan")
+
+    assert result["folder_configs"]["infra/app"]["tf_runtime"] == runtime
+    assert result["upstream_urls"][runtime] == release_url
+
+
+def test_outer_state_rejects_a_runtime_without_the_s3_lock_file_clearly(tmp_path):
+    _write_folder_config(tmp_path, "terraform:1.9.8")
+    with pytest.raises(ConfigResolutionError, match="terraform:1.9.8 predates S3 native state locking"):
         resolve_outer_state(
             str(tmp_path),
             ["infra/app"],
-            {"terraform:1.10.0": "https://downloads.example/terraform"},
+            {"terraform:1.9.8": "https://downloads.example/terraform"},
             "drift",
         )
 

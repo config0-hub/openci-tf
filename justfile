@@ -466,7 +466,7 @@ install-config0-addon:
     GITOPS_REPO="$(./scripts/ssm_config.sh get gitops_repo)" || { echo "ERROR: set the repository first: just config set gitops_repo <owner/repo>" >&2; exit 1; }
     TRIGGER_ID="$(./scripts/ssm_config.sh get trigger_id)" || { echo "ERROR: set the trigger id first: just config set trigger_id <id>" >&2; exit 1; }
     ACCOUNT_ALIAS="$(./scripts/ssm_config.sh get account_alias)" || { echo "ERROR: set the hub account alias first: just config set account_alias <alias>" >&2; exit 1; }
-    UPSTREAM_URLS_JSON="$(./scripts/ssm_config.sh get upstream_urls_json)" || { echo "ERROR: set the pinned runtime URLs first: just config set upstream_urls_json '{...}'" >&2; exit 1; }
+    UPSTREAM_URLS_JSON="$(./scripts/ssm_config.sh get upstream_urls_json)" || { echo "ERROR: set the pinned scan-tool download URLs first: just config set upstream_urls_json '{...}'" >&2; exit 1; }
     API_CALLER_ROLE_ARN="$(./scripts/ssm_config.sh get-or api_caller_role_arn '')"
     addon_args=(--region "{{OPENCI_TF_REGION}}" --project-name "{{OPENCI_TF_PROJECT}}" --state-bucket "$STATE_BUCKET" --engine-name "$ENGINE_NAME")
     deploy_args=("${addon_args[@]}")
