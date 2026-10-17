@@ -205,7 +205,7 @@ just config set ghcr_image ghcr.io/<owner>/openci-tf@sha256:<digest>
 just config set gitops_repo <owner/repo>
 just config set trigger_id <trigger-id>
 just config set account_alias <hub-account-alias>
-just config set upstream_urls_json '{...}'          # pinned runtime download URLs
+just config set upstream_urls_json '{...}'          # pinned scan-tool download URLs
 just config set api_caller_role_arn <role-arn>      # optional: tenant executor role for POST /runs
 just install --mode config0-addon
 ```

@@ -41,7 +41,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.domain.accounts.external_id import derive_external_id  # noqa: E402
-from src.domain.cmd_builder.installers import PINNED_UPSTREAM_URLS  # noqa: E402
+from src.domain.cmd_builder.installers import require_upstream_url_key  # noqa: E402
 from src.domain.engine.artifact_limits import MAX_ACCOUNT_ALIAS_CHARS  # noqa: E402
 from src.platform.aws.clone_token import validate_clone_token_path  # noqa: E402
 from src.platform.git.origin import validate_clone_source  # noqa: E402
@@ -163,11 +163,10 @@ def apply_repo_settings(dynamodb, args: argparse.Namespace, webhook_secret_ssm: 
     if not isinstance(upstream_urls, dict) or not upstream_urls:
         raise RegistrationError("--upstream-urls-json must be a non-empty JSON object")
     for key, value in upstream_urls.items():
-        if key not in PINNED_UPSTREAM_URLS:
-            supported = ", ".join(sorted(PINNED_UPSTREAM_URLS))
-            raise RegistrationError(
-                f"upstream-urls-json key {key!r} is not a pinned binary:version key; supported keys: {supported}"
-            )
+        try:
+            require_upstream_url_key(key)
+        except ValueError as error:
+            raise RegistrationError(f"upstream-urls-json key {key!r} {error}") from error
         if not isinstance(value, str) or not value.startswith("https://"):
             raise RegistrationError(f"upstream-urls-json[{key!r}] must be an https URL")
     item = {
@@ -505,7 +504,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="",
         help="SSM path of the GitHub control token (default: /openci-tf/clone-token/<owner>-<repo>-control)",
     )
-    parser.add_argument("--upstream-urls-json", required=True, help="JSON object of pinned binary:version=https:// download URLs")
+    parser.add_argument(
+        "--upstream-urls-json",
+        required=True,
+        help="JSON object of binary:version=https:// download URLs: the pinned scan tools, plus any tofu or terraform "
+        "runtime that should not download from its own release",
+    )
     parser.add_argument("--infracost-api-key-ssm", default="", help="Optional SSM path of the Infracost API key")
     parser.add_argument("--require-approval", action="store_true", help="Require PR approval before runs")
     parser.add_argument("--region", required=True, help="AWS region of the hub install")

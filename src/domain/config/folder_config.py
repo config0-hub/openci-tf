@@ -17,7 +17,7 @@ from src.core.models import (
     MAX_MUTATION_GRACE_SECONDS,
     MutationVerbConfig,
 )
-from src.domain.cmd_builder.installers import require_pinned_runtime
+from src.domain.cmd_builder.installers import RUNTIME_PATTERN, require_runtime
 from src.domain.engine.artifact_limits import (
     MAX_ACCOUNT_ALIAS_CHARS,
     MAX_EXTRA_FLAG_CHARS,
@@ -26,7 +26,6 @@ from src.domain.engine.artifact_limits import (
 )
 from src.domain.ssm_env.paths import validate_ssm_env_paths
 
-_RUNTIME = re.compile(r"^(tofu|terraform):\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 _TARGETS = {"lambda", "codebuild"}
 _STATE_BUCKET = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 _STATE_KEY_GLOB_CHARS = frozenset("*?[]")
@@ -85,12 +84,12 @@ def _validate_extra_flags(extra_flags: object) -> tuple[str, ...]:
 def _validate(
     runtime: str, target: str, timeout: int, alias: object, extra_flags: object
 ) -> tuple[str, tuple[str, ...]]:
-    if not _RUNTIME.fullmatch(runtime):
+    if not RUNTIME_PATTERN.fullmatch(runtime):
         raise ConfigValidationError(
             "tf_runtime must use an allowlisted binary and SemVer"
         )
     try:
-        require_pinned_runtime(runtime)
+        require_runtime(runtime)
     except ValueError as error:
         raise ConfigValidationError(str(error)) from error
     if target not in _TARGETS:

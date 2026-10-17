@@ -90,10 +90,16 @@ Keep these as three separate SSM/KMS-backed credentials:
      --upstream-urls-json '{"terraform:1.10.5":"https://releases.hashicorp.com/terraform/1.10.5/terraform_1.10.5_linux_amd64.zip","tofu:1.10.6":"https://github.com/opentofu/opentofu/releases/download/v1.10.6/tofu_1.10.6_linux_amd64.tar.gz","tfsec:1.28.10":"https://github.com/aquasecurity/tfsec/releases/download/v1.28.10/tfsec_1.28.10_linux_amd64.tar.gz","infracost:0.10.39":"https://github.com/infracost/infracost/releases/download/v0.10.39/infracost-linux-amd64.tar.gz"}'
    ```
 
-`upstream_urls` keys are exact pinned `binary:version` values. Include every
-runtime version your repo uses (for example both `terraform:1.10.5` and
-`terraform:1.12.2` when folders use both). Existing rows with a bare `terraform`
-or `tofu` key are accepted only when resolving one version of that binary.
+`upstream_urls` keys are exact `binary:version` values. The scan tools
+(`tfsec:1.28.10`, `infracost:0.10.39`) are pinned by sha256 and need a URL for
+`plan` and `report`. A folder may name any tofu or terraform version from 1.10
+on (`tf_runtime`). A runtime key here is optional and wins when present;
+without one the runtime downloads from its own release (the OpenTofu GitHub
+release or `releases.hashicorp.com`). Either way the archive is checked against
+the `<binary>_<version>_SHA256SUMS` file of that same release, and a missing
+file, a missing entry or a mismatch fails the run. Existing rows with a bare
+`terraform` or `tofu` key are accepted only when resolving one version of that
+binary.
 
 The standalone verifier uses only `GET` endpoints. Required registration checks validate
 authenticated access (`/user`), repository metadata, root contents, repository PR listing

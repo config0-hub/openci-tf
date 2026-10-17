@@ -69,20 +69,21 @@ fi
 if ! python3 - "$UPSTREAM_URLS_JSON" <<'PY'
 import json
 import sys
-from src.domain.cmd_builder.installers import PINNED_UPSTREAM_URLS
+from src.domain.cmd_builder.installers import require_upstream_url_key
 
 raw = json.loads(sys.argv[1])
 if not isinstance(raw, dict) or not raw:
     raise SystemExit("upstream-urls-json must be a non-empty JSON object")
 for key, value in raw.items():
-    if key not in PINNED_UPSTREAM_URLS:
-        supported = ", ".join(sorted(PINNED_UPSTREAM_URLS))
-        raise SystemExit(f"upstream-urls-json key {key!r} is not a pinned binary:version key; supported keys: {supported}")
+    try:
+        require_upstream_url_key(key)
+    except ValueError as error:
+        raise SystemExit(f"upstream-urls-json key {key!r} {error}")
     if not isinstance(value, str) or not value.startswith("https://"):
         raise SystemExit(f"upstream-urls-json[{key!r}] must be an https URL")
 PY
 then
-  echo "Error: --upstream-urls-json must be a JSON object of pinned binary:version=https:// download URLs" >&2
+  echo "Error: --upstream-urls-json must be a JSON object of binary:version=https:// download URLs (pinned scan tools, tofu or terraform runtimes)" >&2
   exit 1
 fi
 

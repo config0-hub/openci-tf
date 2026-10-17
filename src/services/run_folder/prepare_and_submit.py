@@ -34,8 +34,8 @@ from src.domain.deadlines import remaining_seconds
 from src.domain.cmd_builder.installers import (
     cache_key,
     env_suffix,
-    installer_key,
-    require_pinned_runtime,
+    require_runtime,
+    upstream_url,
 )
 from src.domain.cmd_builder.script_generator import ScriptParams, render
 from src.domain.engine.artifact_limits import MAX_PACKAGE_BYTES
@@ -141,7 +141,7 @@ def _folder_config(event: dict) -> FolderConfig:
     if not isinstance(config, dict):
         raise TypeError("folder_config must be an object")
     folder_config = FolderConfig(**config)
-    require_pinned_runtime(folder_config.tf_runtime)
+    require_runtime(folder_config.tf_runtime)
     return folder_config
 
 
@@ -421,14 +421,6 @@ def handler(event: dict, _context: object) -> dict:
             tmp_bucket, key, expiry
         )
     for binary, version in installers:
-        installer_lookup_key = installer_key(binary, version)
-        upstream_url = upstream_urls.get(installer_lookup_key)
-        if upstream_url is None:
-            upstream_url = upstream_urls.get(binary)
-        if not isinstance(upstream_url, str) or not upstream_url:
-            raise ValueError(
-                f"upstream_urls missing URL for pinned installer {installer_lookup_key}"
-            )
         name = env_suffix(binary, version)
         installer_cache_key = cache_key(binary, version)
         secrets[f"CACHE_GET_URL_{name}"] = s3.presign_get(
@@ -440,7 +432,10 @@ def handler(event: dict, _context: object) -> dict:
             expiry,
             content_type="application/octet-stream",
         )
-        secrets[f"UPSTREAM_URL_{name}"] = upstream_url
+        # A folder runs one version of each binary, so a bare binary key applies.
+        secrets[f"UPSTREAM_URL_{name}"] = upstream_url(
+            binary, version, upstream_urls, bare_key=True
+        )
     if config.ssm_env_paths:
         _update_without_collision(
             secrets,

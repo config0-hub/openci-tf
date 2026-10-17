@@ -29,6 +29,12 @@ _CLONE_TOKEN = "/openci-tf/clone-token/test"
 _INFRACOST_KEY = "/openci-tf/infracost/api_key"
 _PREPARE_BINDING = frozen_account_fields()
 _FULL_SHA = "a" * 40
+# A tofu cache miss also fetches the release's SHA256SUMS file. sha256sum is
+# faked in these scripts, so any entry for the archive passes.
+_TOFU_SUMS_ROUTE = (
+    'case "$*" in *_SHA256SUMS*) while [ "$1" != "-o" ]; do shift; done; '
+    "printf '%064d  tofu_1.10.6_linux_amd64.tar.gz\\n' 0 > \"$2\"; exit 0 ;; esac"
+)
 
 _TFSEC_WRITE = '''if echo "$*" | grep -q -- '--out'; then
   while [ "$#" -gt 0 ]; do
@@ -124,6 +130,7 @@ if [[ " $* " == *" --upload-file "* ]]; then
   ok
   exit 0
 fi
+{_TOFU_SUMS_ROUTE}
 for arg in "$@"; do case "$arg" in https://cache/*) exit 22 ;; https://upstream/*) source="$arg" ;; esac; done
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "-o" ]; then cp "{downloads}/$(basename "$source").tar.gz" "$2"; ok; exit 0; fi
@@ -564,6 +571,7 @@ set -euo pipefail
 curl_args=" $* "
 ok() {{ case "$curl_args" in *" -w "*) printf 200 ;; esac; }}
 if [[ " $* " == *" --upload-file "* ]]; then ok; exit 0; fi
+{_TOFU_SUMS_ROUTE}
 for arg in "$@"; do case "$arg" in https://cache/*) exit 22 ;; https://upstream/*) source="$arg" ;; esac; done
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "-o" ]; then cp "{downloads}/$(basename "$source").tar.gz" "$2"; ok; exit 0; fi
@@ -858,6 +866,7 @@ if [[ " $* " == *" --upload-file "* ]]; then
   ok
   exit 0
 fi
+{_TOFU_SUMS_ROUTE}
 for arg in "$@"; do case "$arg" in https://cache/*) exit 22 ;; https://upstream/*) source="$arg" ;; esac; done
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "-o" ]; then cp "{downloads}/$(basename "$source").tar.gz" "$2"; ok; exit 0; fi

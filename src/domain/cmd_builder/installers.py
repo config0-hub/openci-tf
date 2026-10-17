@@ -5,11 +5,16 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 _RUNTIME_BINARIES = frozenset({"terraform", "tofu"})
 _TOOL_BINARIES = frozenset({"tfsec", "infracost"})
 _SUPPORTED_BINARIES = _RUNTIME_BINARIES | _TOOL_BINARIES
+
+# A tf_runtime is binary:SemVer. The version lands in the generated bash, the
+# installer cache key and the release URLs, so nothing else is accepted.
+RUNTIME_PATTERN = re.compile(r"^(tofu|terraform):\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 
 
 @dataclass(frozen=True)
@@ -18,6 +23,9 @@ class PinnedInstaller:
     sha256: str
 
 
+# The scan tools are pinned by sha256. A tofu or terraform runtime is not: any
+# version installs from its own release, checked against that release's
+# SHA256SUMS file (runtime_release, render_installer).
 PINNED_INSTALLERS: dict[tuple[str, str], PinnedInstaller] = {
     ("tfsec", "1.28.10"): PinnedInstaller(
         url="https://github.com/aquasecurity/tfsec/releases/download/v1.28.10/tfsec_1.28.10_linux_amd64.tar.gz",
@@ -26,24 +34,6 @@ PINNED_INSTALLERS: dict[tuple[str, str], PinnedInstaller] = {
     ("infracost", "0.10.39"): PinnedInstaller(
         url="https://github.com/infracost/infracost/releases/download/v0.10.39/infracost-linux-amd64.tar.gz",
         sha256="4c23dc9de85bd16832a3ab9b2f5b48d24255af3df410ad8aab2609f4b2c47fc6",
-    ),
-    # Platform-driven runs pass -backend-config=use_lockfile=true at init, so
-    # every pinned runtime must support the S3 native lock file (>= 1.10).
-    ("terraform", "1.10.5"): PinnedInstaller(
-        url="https://releases.hashicorp.com/terraform/1.10.5/terraform_1.10.5_linux_amd64.zip",
-        sha256="0566a24f5332098b15716ebc394be503f4094acba5ba529bf5eb0698ed5e2a90",
-    ),
-    ("terraform", "1.12.2"): PinnedInstaller(
-        url="https://releases.hashicorp.com/terraform/1.12.2/terraform_1.12.2_linux_amd64.zip",
-        sha256="1eaed12ca41fcfe094da3d76a7e9aa0639ad3409c43be0103ee9f5a1ff4b7437",
-    ),
-    ("tofu", "1.10.6"): PinnedInstaller(
-        url="https://github.com/opentofu/opentofu/releases/download/v1.10.6/tofu_1.10.6_linux_amd64.tar.gz",
-        sha256="b6b46b4fd8dd0b96e624f2a2d5fbc4efae2fc0174529b37292775c847c2e7d2c",
-    ),
-    ("tofu", "1.12.6"): PinnedInstaller(
-        url="https://github.com/opentofu/opentofu/releases/download/v1.12.6/tofu_1.12.6_linux_amd64.tar.gz",
-        sha256="50a6106fa4de523d09c87af85f3db1dd47535fc005727fdca6852146476b88ec",
     ),
 }
 
@@ -60,8 +50,13 @@ PINNED_SHA256 = {key: installer.sha256 for key, installer in PINNED_INSTALLERS.i
 PINNED_UPSTREAM_URLS = {installer_key(*key): installer.url for key, installer in PINNED_INSTALLERS.items()}
 
 
-def supported_runtime_keys() -> tuple[str, ...]:
-    return tuple(sorted(installer_key(binary, version) for binary, version in PINNED_INSTALLERS if binary in _RUNTIME_BINARIES))
+@dataclass(frozen=True)
+class RuntimeRelease:
+    """A tofu or terraform release: its linux_amd64 archive and its checksum file."""
+
+    url: str
+    sums_url: str
+    archive: str
 
 
 def require_pinned_installer(binary: str, version: str) -> PinnedInstaller:
@@ -74,17 +69,14 @@ def require_pinned_installer(binary: str, version: str) -> PinnedInstaller:
     return installer
 
 
-def require_pinned_runtime(runtime: str) -> tuple[str, str]:
-    if not isinstance(runtime, str) or ":" not in runtime:
-        raise ValueError("tf_runtime must use a pinned runtime in binary:version form")
+def require_runtime(runtime: str) -> tuple[str, str]:
+    """Any tofu or terraform version in binary:version form, from 1.10 on."""
+    if not isinstance(runtime, str) or not RUNTIME_PATTERN.fullmatch(runtime):
+        raise ValueError(
+            f"unsupported tf_runtime {runtime!r}; use binary:version with binary tofu "
+            "or terraform and a SemVer version"
+        )
     binary, version = runtime.split(":", 1)
-    if binary not in _RUNTIME_BINARIES:
-        raise ValueError("tf_runtime binary must be tofu or terraform")
-    try:
-        require_pinned_installer(binary, version)
-    except ValueError as error:
-        supported = ", ".join(supported_runtime_keys())
-        raise ValueError(f"unsupported unpinned tf_runtime {runtime}; supported pinned runtimes: {supported}") from error
     major, minor = (int(part) for part in version.split(".")[:2])
     if (major, minor) < MIN_LOCKFILE_RUNTIME:
         raise ValueError(
@@ -94,8 +86,63 @@ def require_pinned_runtime(runtime: str) -> tuple[str, str]:
     return binary, version
 
 
+def _require_installer(binary: str, version: str) -> None:
+    if binary in _RUNTIME_BINARIES:
+        require_runtime(installer_key(binary, version))
+    else:
+        require_pinned_installer(binary, version)
+
+
+def require_upstream_url_key(key: str) -> None:
+    """A registered ``upstream_urls`` key: a pinned scan tool or a tf_runtime."""
+    if key in PINNED_UPSTREAM_URLS:
+        return
+    try:
+        require_runtime(key)
+    except ValueError as error:
+        supported = ", ".join(sorted(PINNED_UPSTREAM_URLS))
+        raise ValueError(f"is neither a pinned tool key ({supported}) nor a tf_runtime: {error}") from error
+
+
+def runtime_release(binary: str, version: str) -> RuntimeRelease:
+    """The release openci-tf installs a tofu or terraform version from.
+
+    tofu ships a .tar.gz on its GitHub release, terraform a .zip on
+    releases.hashicorp.com. Each release publishes one SHA256SUMS file beside
+    its archives.
+    """
+    require_runtime(installer_key(binary, version))
+    if binary == "terraform":
+        base = f"https://releases.hashicorp.com/terraform/{version}"
+        archive = f"terraform_{version}_linux_amd64.zip"
+    else:
+        base = f"https://github.com/opentofu/opentofu/releases/download/v{version}"
+        archive = f"tofu_{version}_linux_amd64.tar.gz"
+    return RuntimeRelease(url=f"{base}/{archive}", sums_url=f"{base}/{binary}_{version}_SHA256SUMS", archive=archive)
+
+
+def upstream_url(binary: str, version: str, registered: Mapping[str, object], *, bare_key: bool) -> str:
+    """The download URL of one installer.
+
+    The repository's registered ``binary:version`` URL wins, then its bare
+    ``binary`` URL when ``bare_key`` (the run needs one version of that
+    binary). A tofu or terraform runtime with neither downloads from its own
+    release. Whatever the URL, render_installer checks the archive.
+    """
+    _require_installer(binary, version)
+    key = installer_key(binary, version)
+    url = registered.get(key)
+    if url is None and bare_key:
+        url = registered.get(binary)
+    if url is None and binary in _RUNTIME_BINARIES:
+        url = runtime_release(binary, version).url
+    if not isinstance(url, str) or not url.startswith("https://"):
+        raise ValueError(f"upstream_urls missing a valid URL for installer {key}")
+    return url
+
+
 def cache_key(binary: str, version: str) -> str:
-    require_pinned_installer(binary, version)
+    _require_installer(binary, version)
     return f"cache/{binary}/{version}"
 
 
@@ -119,13 +166,37 @@ def _legacy_environment_name(binary: str, prefix: str) -> str:
     return f"{prefix}_{binary.upper().replace('-', '_')}"
 
 
-def render_installer(binary: str, version: str, target: str, checksum: str) -> str:
+def _expected_sha256(binary: str, version: str) -> str:
+    """Shell lines that set ``expected`` to the archive's sha256.
+
+    A scan tool's sha256 is pinned. A runtime's comes from the entry for its
+    release archive in that release's SHA256SUMS file. A missing file or a
+    missing entry fails the script.
+    """
+    if binary not in _RUNTIME_BINARIES:
+        return f"expected={require_pinned_installer(binary, version).sha256}"
+    release = runtime_release(binary, version)
+    return f'''sums="$(mktemp)"
+  curl --fail-with-body --show-error --location {release.sums_url!r} -o "$sums"
+  expected="$(python3 -c 'import sys; print(*[line.split()[0] for line in open(sys.argv[1]) if line.split()[1:] == [sys.argv[2]]])' "$sums" {release.archive!r})"
+  rm -f "$sums"
+  if [ -z "$expected" ]; then
+    echo "Error: {release.sums_url} lists no {release.archive}" >&2
+    exit 1
+  fi'''
+
+
+def render_installer(binary: str, version: str, target: str) -> str:
     """Use a versioned archive cache, with checksum-verified upstream fallback.
+
+    A cache miss downloads the archive and checks its sha256 before the cache
+    PUT and before use (``_expected_sha256``), so the cache only ever holds a
+    checked archive.
 
     The cache GET and PUT call ``s3_curl``, which the generated script defines
     (``script_generator.S3_CURL_HELPER``) so S3 throttling is retried.
     """
-    require_pinned_installer(binary, version)
+    _require_installer(binary, version)
     directory = bin_dir(target)
     cache_get = _environment_name(binary, version, "CACHE_GET_URL")
     cache_put = _environment_name(binary, version, "CACHE_PUT_URL")
@@ -145,7 +216,8 @@ if ! s3_curl "$archive" "$cache_get_url"; then
   test -n "$upstream_url"
   test -n "$cache_put_url"
   curl --fail-with-body --show-error --location "$upstream_url" -o "$archive"
-  echo "{checksum}  $archive" | sha256sum -c -
+  {_expected_sha256(binary, version)}
+  echo "$expected  $archive" | sha256sum -c -
   s3_curl - -H 'Content-Type: application/octet-stream' --upload-file "$archive" "$cache_put_url"
 fi
 {extract}

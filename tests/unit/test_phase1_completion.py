@@ -33,6 +33,12 @@ from tests.helpers.frozen_account import (
 
 _CLONE_TOKEN = "/openci-tf/clone-token/test"
 _FULL_SHA = "a" * 40
+# A tofu cache miss also fetches the release's SHA256SUMS file. sha256sum is
+# faked in these scripts, so any entry for the archive passes.
+_TOFU_SUMS_ROUTE = (
+    'case "$*" in *_SHA256SUMS*) while [ "$1" != "-o" ]; do shift; done; '
+    "printf '%064d  tofu_1.10.6_linux_amd64.tar.gz\\n' 0 > \"$2\"; exit 0 ;; esac"
+)
 _HUB_ACCOUNT_ID = HUB_ACCOUNT_ID
 _TARGET_EXTERNAL_ID = frozen_account_fields()["account_binding"]["external_id"]
 _DEADLINE_AT = "2999-01-01T00:00:00Z"
@@ -194,10 +200,19 @@ def test_prepare_presigns_cache_put_with_octet_stream(monkeypatch, tmp_path):
     assert cache_put_content_types == ["application/octet-stream"] * 3
 
 
-def test_prepare_rejects_unpinned_runtime_before_packaging():
-    with pytest.raises(ValueError, match="unsupported unpinned tf_runtime terraform:1.10.0"):
+@pytest.mark.parametrize("runtime", ["tofu:1.11.14", "terraform:1.11.4"])
+def test_prepare_accepts_a_runtime_outside_the_old_pinned_list(runtime):
+    config = prepare_and_submit._folder_config(
+        {"folder_config": {"account_alias": "target", "tf_runtime": runtime}}
+    )
+    assert config.tf_runtime == runtime
+
+
+@pytest.mark.parametrize("runtime", ["tofu:latest", "terraform:1.9.8"])
+def test_prepare_rejects_a_malformed_or_pre_lock_file_runtime_before_packaging(runtime):
+    with pytest.raises(ValueError, match="tf_runtime"):
         prepare_and_submit._folder_config(
-            {"folder_config": {"account_alias": "target", "tf_runtime": "terraform:1.10.0"}}
+            {"folder_config": {"account_alias": "target", "tf_runtime": runtime}}
         )
 
 
@@ -373,6 +388,7 @@ set -euo pipefail
 curl_args=" $* "
 ok() {{ case "$curl_args" in *" -w "*) printf 200 ;; esac; }}
 if [[ " $* " == *" --upload-file "* ]]; then echo "$*" >> "{uploads}"; ok; exit 0; fi
+{_TOFU_SUMS_ROUTE}
 for arg in "$@"; do case "$arg" in https://upstream/*) source="$arg" ;; esac; done
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "-o" ]; then cp "{downloads}/$(basename "$source").tar.gz" "$2"; ok; exit 0; fi
@@ -432,6 +448,7 @@ set -euo pipefail
 curl_args=" $* "
 ok() {{ case "$curl_args" in *" -w "*) printf 200 ;; esac; }}
 if [[ " $* " == *" --upload-file "* ]]; then ok; exit 0; fi
+{_TOFU_SUMS_ROUTE}
 for arg in "$@"; do
   case "$arg" in
     https://cache/*) exit 22 ;;
