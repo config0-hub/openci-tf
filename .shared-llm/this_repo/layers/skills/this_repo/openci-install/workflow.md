@@ -38,7 +38,7 @@ just target-create-aws-poweruser <leases-1 id>                     # mutation la
 just register-repo --trigger-id openci-test-gitops --repo-name williaumwu/openci-test-gitops \
   --git-url https://github.com/williaumwu/openci-test-gitops.git \
   --webhook-secret-ssm <path> --github-token-ssm <path> \
-  --upstream-urls-json '{"tofu:1.8.0":"https://github.com/opentofu/opentofu/releases/download/v1.8.0/tofu_1.8.0_linux_amd64.tar.gz","tfsec:1.28.10":"https://github.com/aquasecurity/tfsec/releases/download/v1.28.10/tfsec_1.28.10_linux_amd64.tar.gz","infracost:0.10.39":"https://github.com/infracost/infracost/releases/download/v0.10.39/infracost-linux-amd64.tar.gz"}' \
+  --upstream-urls-json '{"tofu:1.10.6":"https://github.com/opentofu/opentofu/releases/download/v1.10.6/tofu_1.10.6_linux_amd64.tar.gz","tfsec:1.28.10":"https://github.com/aquasecurity/tfsec/releases/download/v1.28.10/tfsec_1.28.10_linux_amd64.tar.gz","infracost:0.10.39":"https://github.com/infracost/infracost/releases/download/v0.10.39/infracost-linux-amd64.tar.gz"}' \
   --github-capability-pr-number 1
 just create-webhook --repo williaumwu/openci-test-gitops \
   --webhook-url <api_url>/webhook/openci-test-gitops \
