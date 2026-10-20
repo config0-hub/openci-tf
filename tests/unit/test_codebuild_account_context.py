@@ -116,6 +116,9 @@ def test_codebuild_progress_replaces_only_bot_authored_status_marker(monkeypatch
         def __init__(self):
             self.headers = {}
 
+        def mount(self, prefix, adapter):
+            pass
+
         def get(self, url, params=None):
             if url == f"{github_client.GITHUB_API}/user":
                 return Response({"login": "openci-bot"})
