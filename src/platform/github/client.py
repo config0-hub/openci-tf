@@ -8,6 +8,8 @@ import hashlib
 from dataclasses import dataclass
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 GITHUB_API = "https://api.github.com"
 
@@ -30,6 +32,20 @@ class GitHubClient:
 
     def __init__(self, token: str):
         self.session = requests.Session()
+        # Every GitHub call retries a transient 5xx or connection error with backoff: one GitHub 502 is not a failed run.
+        self.session.mount(
+            "https://",
+            HTTPAdapter(
+                max_retries=Retry(
+                    total=3,
+                    backoff_factor=1,
+                    status_forcelist=(500, 502, 503, 504),
+                    allowed_methods=frozenset({"GET", "POST", "PATCH", "DELETE"}),
+                    raise_on_status=True,
+                    respect_retry_after_header=False,
+                )
+            ),
+        )
         self.session.headers.update({
             "Authorization": f"token {token}",
             "Accept": "application/vnd.github.v3+json",
