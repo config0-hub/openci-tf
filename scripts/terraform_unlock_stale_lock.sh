@@ -13,22 +13,24 @@ STATE_KEY="${3:?Usage: terraform_unlock_stale_lock.sh <terraform_dir> <state_buc
 
 LOCK_OBJECT_KEY="${STATE_KEY}/terraform.tfstate.tflock"
 
+body_file="$(mktemp)"
 err_file="$(mktemp)"
+trap 'rm -f "$body_file" "$err_file"' EXIT
+# get-object writes the lock body to body_file and prints the response
+# metadata on stdout. Keep them apart: the metadata is not the lock.
 set +e
-LOCK_BODY="$(aws s3api get-object --bucket "$STATE_BUCKET" --key "$LOCK_OBJECT_KEY" /dev/stdout 2>"$err_file")"
+aws s3api get-object --bucket "$STATE_BUCKET" --key "$LOCK_OBJECT_KEY" "$body_file" >/dev/null 2>"$err_file"
 get_rc=$?
 set -e
 if [ "$get_rc" -ne 0 ]; then
   if grep -Eq 'NoSuchKey|Not Found|404' "$err_file"; then
-    rm -f "$err_file"
     exit 0
   fi
   cat "$err_file" >&2
-  rm -f "$err_file"
   echo "ERROR: could not determine lock status for s3://${STATE_BUCKET}/${LOCK_OBJECT_KEY}" >&2
   exit "$get_rc"
 fi
-rm -f "$err_file"
+LOCK_BODY="$(cat "$body_file")"
 
 LOCK_UUID="$(printf '%s' "$LOCK_BODY" | jq -r '.ID // empty' 2>/dev/null || true)"
 CREATED="$(printf '%s' "$LOCK_BODY" | jq -r '.Created // empty' 2>/dev/null || true)"

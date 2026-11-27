@@ -8,6 +8,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -1977,9 +1978,11 @@ def test_terraform_unlock_stale_lock_reports_lock_with_force_unlock_command(
 set -euo pipefail
 case "$*" in
   *"s3api get-object"*)
-    cat <<'JSON'
+    # Like the real CLI: the body goes to the outfile, the metadata to stdout.
+    cat >"${@: -1}" <<'JSON'
 {"ID":"c5bcf01c-1ebf-b1e3-9f3a-55a995eef2cc","Created":"2020-01-01T00:00:00Z","Who":"test@host","Operation":"OperationTypeApply"}
 JSON
+    echo '{"AcceptRanges": "bytes", "ContentLength": 120, "ContentType": "application/json"}'
     ;;
   *)
     echo "unexpected aws call: $*" >&2
@@ -2014,7 +2017,12 @@ printf '%s\\n' "$*" >>"{unlock_log}"
     )
     assert completed.returncode == 1, completed.stdout
     assert "terraform -chdir=infra/deploy force-unlock c5bcf01c-1ebf-b1e3-9f3a-55a995eef2cc" in completed.stderr
-    assert "test@host" in completed.stderr
+    assert re.search(
+        r"^Lock holder: test@host \(OperationTypeApply, created 2020-01-01T00:00:00Z, age \d+ minute\(s\)\)$",
+        completed.stderr,
+        re.MULTILINE,
+    ), completed.stderr
+    assert "unknown" not in completed.stderr
     assert not unlock_log.exists()
 
 
@@ -2072,9 +2080,11 @@ def test_terraform_unlock_stale_lock_fails_with_exact_command_for_fresh_lock(
 set -euo pipefail
 case "$*" in
   *"s3api get-object"*)
-    cat <<'JSON'
+    # Like the real CLI: the body goes to the outfile, the metadata to stdout.
+    cat >"${@: -1}" <<'JSON'
 {"ID":"fresh-lock-id","Created":"2099-01-01T00:00:00Z","Who":"test@host","Operation":"OperationTypeApply"}
 JSON
+    echo '{"AcceptRanges": "bytes", "ContentLength": 120, "ContentType": "application/json"}'
     ;;
   *)
     echo "unexpected aws call: $*" >&2
@@ -2104,6 +2114,39 @@ esac
     )
     assert completed.returncode != 0
     assert "terraform -chdir=infra/deploy force-unlock fresh-lock-id" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "aws_body",
+    [
+        "trap '' TERM\nkill -TERM 0\n",
+        'printf \'{"ID":"i","Created":"2020-01-01T00:00:00Z"}\' >"${@: -1}"\necho "{}"\n',
+        'echo "An error occurred (NoSuchKey) when calling the GetObject operation" >&2\nexit 254\n',
+        'echo "An error occurred (AccessDenied) when calling the GetObject operation" >&2\nexit 254\n',
+    ],
+    ids=["interrupted", "lock-present", "no-lock", "denied"],
+)
+def test_terraform_unlock_stale_lock_leaves_no_temp_file(tmp_path: Path, aws_body: str):
+    """The lock body and the error output live in mktemp files that an EXIT trap removes,
+    also when a TERM reaches the process group (Ctrl-C, a killed job) during get-object."""
+    repo_root = Path(__file__).parents[2]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
+    (bin_dir / "aws").write_text(f"#!/usr/bin/env bash\n{aws_body}")
+    (bin_dir / "aws").chmod(0o755)
+    completed = subprocess.run(
+        ["bash", str(repo_root / "scripts/terraform_unlock_stale_lock.sh"), "infra/deploy", "b", "deploy"],
+        cwd=tmp_path,
+        env=os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}", "TMPDIR": str(tmpdir)},
+        capture_output=True,
+        text=True,
+        check=False,
+        start_new_session=True,
+        timeout=60,
+    )
+    assert list(tmpdir.iterdir()) == [], completed.stderr
 
 
 def test_presign_put_sets_content_type_for_text_artifacts(monkeypatch):
