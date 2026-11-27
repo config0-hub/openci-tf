@@ -33,6 +33,9 @@ esac
 PREFIX_ARGS=()
 [ -n "$PREFIX" ] && PREFIX_ARGS=(--prefix "$PREFIX")
 
+batch_file="$(mktemp)"
+trap 'rm -f "$batch_file"' EXIT
+
 while :; do
   versions="$(aws s3api list-object-versions --bucket "$BUCKET" ${PREFIX_ARGS[@]+"${PREFIX_ARGS[@]}"} --max-items 500 \
     --query '{Objects: [Versions[].{Key:Key,VersionId:VersionId}, DeleteMarkers[].{Key:Key,VersionId:VersionId}][] | [0:500]}' \
@@ -41,9 +44,8 @@ while :; do
   if [ "$count" -eq 0 ]; then
     break
   fi
-  printf '%s' "$versions" | jq '{Objects: .Objects, Quiet: true}' >/tmp/empty_bucket_batch.$$.json
-  aws s3api delete-objects --bucket "$BUCKET" --delete "file:///tmp/empty_bucket_batch.$$.json" >/dev/null
-  rm -f "/tmp/empty_bucket_batch.$$.json"
+  printf '%s' "$versions" | jq '{Objects: .Objects, Quiet: true}' >"$batch_file"
+  aws s3api delete-objects --bucket "$BUCKET" --delete "file://${batch_file}" >/dev/null
   echo "deleted ${count} versions from ${BUCKET}"
 done
 

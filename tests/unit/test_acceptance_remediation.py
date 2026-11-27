@@ -1726,6 +1726,52 @@ def test_foundation_destroy_stops_at_the_first_failed_step(tmp_path, failing):
     assert "<< terraform-destroy FAILED after " in completed.stderr
 
 
+@pytest.mark.parametrize("delete_rc", [0, 255])
+def test_empty_bucket_batch_file_is_a_mktemp_file_removed_on_exit(tmp_path, delete_rc):
+    """The delete batch lives in TMPDIR under a mktemp name, and is gone after any exit."""
+    repo_root = Path(__file__).parents[2]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
+    seen = tmp_path / "delete-arg"
+    aws = bin_dir / "aws"
+    aws.write_text(
+        f"""#!/usr/bin/env bash
+case "$*" in
+  *head-bucket*) exit 0 ;;
+  *list-object-versions*)
+    if [ -e "{tmp_path}/listed" ]; then echo '{{"Objects": []}}'; exit 0; fi
+    touch "{tmp_path}/listed"
+    echo '{{"Objects": [{{"Key": "k", "VersionId": "v"}}]}}' ;;
+  *delete-objects*)
+    for arg in "$@"; do case "$arg" in file://*) path="${{arg#file://}}" ;; esac; done
+    echo "$path" > "{seen}"
+    cp "$path" "{tmp_path}/batch-copy"
+    exit {delete_rc} ;;
+  *) exit 99 ;;
+esac
+"""
+    )
+    aws.chmod(0o755)
+    completed = subprocess.run(
+        ["bash", str(repo_root / "scripts/empty_bucket.sh"), "openci-tf-state-123456789012"],
+        cwd=tmp_path,
+        env=os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}", "TMPDIR": str(tmpdir)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == delete_rc, completed.stderr
+    batch_path = Path(seen.read_text().strip())
+    assert batch_path.parent == tmpdir
+    assert json.loads((tmp_path / "batch-copy").read_text()) == {
+        "Objects": [{"Key": "k", "VersionId": "v"}],
+        "Quiet": True,
+    }
+    assert list(tmpdir.iterdir()) == []
+
+
 def test_justfile_worktree_link_comment_makes_every_import_resolve(tmp_path):
     """The header's ln line, run in a sibling worktree, links the gitignored kit modules."""
     justfile = (Path(__file__).parents[2] / "justfile").read_text()
