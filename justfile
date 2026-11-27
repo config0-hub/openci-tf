@@ -505,8 +505,18 @@ uninstall:
     set -euo pipefail
     # shellcheck source=scripts/phase_timing.sh
     source ./scripts/phase_timing.sh
+    run_phase() {
+        local phase="$1"
+        shift
+        local rc=0
+        phase_timing_run "$phase" "$@" || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            phase_timing_total_end uninstall "$rc"
+            echo "ERROR: uninstall stopped at failed phase $phase (rc=$rc); later phases did not run" >&2
+            exit "$rc"
+        fi
+    }
     phase_timing_total_begin
-    journey_rc=0
     KEEP="${OPENCI_TF_KEEP_STATE:-}"
     if [ -z "$KEEP" ]; then
         if [ -t 0 ]; then
@@ -524,7 +534,7 @@ uninstall:
     set -e
     case "$probe_rc" in
       0)
-        phase_timing_run poweruser-delete just target-delete-aws-poweruser "$HUB_ACCOUNT_ID" || journey_rc=$?
+        run_phase poweruser-delete just target-delete-aws-poweruser "$HUB_ACCOUNT_ID"
         ;;
       1)
         ;;
@@ -533,22 +543,21 @@ uninstall:
         exit 1
         ;;
     esac
-    phase_timing_run deploy-destroy just deploy-destroy || journey_rc=$?
-    phase_timing_run engine-destroy just engine-destroy || journey_rc=$?
-    phase_timing_run foundation-destroy just foundation-destroy || journey_rc=$?
+    run_phase deploy-destroy just deploy-destroy
+    run_phase engine-destroy just engine-destroy
+    run_phase foundation-destroy just foundation-destroy
     if [ "$KEEP" = "yes" ]; then
         echo "keeping state bucket + source copies as the surviving record"
     else
-        phase_timing_run bootstrap-destroy just bootstrap-destroy || journey_rc=$?
+        run_phase bootstrap-destroy just bootstrap-destroy
     fi
     ssm_cleanup() {
-    ./scripts/ssm_config.sh delete-all
-    SSM_CONFIG_PROJECT=engine ./scripts/ssm_config.sh delete-all
+    ./scripts/ssm_config.sh delete-all &&
+        SSM_CONFIG_PROJECT=engine ./scripts/ssm_config.sh delete-all
     }
-    phase_timing_run ssm-cleanup ssm_cleanup || journey_rc=$?
-    phase_timing_run operator-cleanup ./scripts/cleanup_operator_footprint.sh || journey_rc=$?
-    phase_timing_total_end uninstall "$journey_rc"
-    [ "$journey_rc" -eq 0 ] || exit "$journey_rc"
+    run_phase ssm-cleanup ssm_cleanup
+    run_phase operator-cleanup ./scripts/cleanup_operator_footprint.sh
+    phase_timing_total_end uninstall 0
     echo "uninstall complete — run 'just verify-clean'"
 
 verify:

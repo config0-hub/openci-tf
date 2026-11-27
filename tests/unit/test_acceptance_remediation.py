@@ -1418,6 +1418,91 @@ def test_justfile_uninstall_and_bootstrap_destroy_invoke_operator_cleanup():
     assert "./scripts/cleanup_operator_footprint.sh" in bootstrap
 
 
+def _run_uninstall_journey(
+    tmp_path: Path, *, fail_recipe: str = "", fail_ssm_project: str = ""
+) -> subprocess.CompletedProcess[str]:
+    """Run the real uninstall recipe body with just, aws, and the phase scripts stubbed."""
+    repo_root = Path(__file__).parents[2]
+    justfile = (repo_root / "justfile").read_text()
+    recipe = justfile.split("\nuninstall:", 1)[1].split("\nverify:", 1)[0]
+    body = "\n".join(line[4:] for line in recipe.splitlines() if line.startswith("    "))
+    work = tmp_path / "work"
+    (work / "scripts").mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    shutil.copy(repo_root / "scripts/phase_timing.sh", work / "scripts/phase_timing.sh")
+    stubs = {
+        bin_dir / "aws": "#!/usr/bin/env bash\necho 123456789012\n",
+        bin_dir / "just": (
+            '#!/usr/bin/env bash\necho "$1" >> just-calls\n'
+            f'[ "$1" != "{fail_recipe}" ] || exit 3\n'
+        ),
+        work / "scripts/poweruser_needs_destroy.sh": "#!/usr/bin/env bash\nexit 1\n",
+        work / "scripts/ssm_config.sh": (
+            '#!/usr/bin/env bash\necho "$SSM_CONFIG_PROJECT" >> ssm-delete-all\n'
+            f'[ "$SSM_CONFIG_PROJECT" != "{fail_ssm_project}" ] || exit 4\n'
+        ),
+        work / "scripts/cleanup_operator_footprint.sh": "#!/usr/bin/env bash\ntouch operator-cleanup-ran\n",
+    }
+    for path, text in stubs.items():
+        path.write_text(text)
+        path.chmod(0o755)
+    env = os.environ | {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "OPENCI_TF_KEEP_STATE": "no",
+        "SSM_CONFIG_PROJECT": "openci-tf",
+    }
+    return subprocess.run(
+        ["bash", "-c", body],
+        cwd=work,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _lines(path: Path) -> list[str]:
+    return path.read_text().split() if path.exists() else []
+
+
+def test_uninstall_runs_every_phase_in_order(tmp_path):
+    completed = _run_uninstall_journey(tmp_path)
+    work = tmp_path / "work"
+    assert completed.returncode == 0, completed.stderr
+    assert _lines(work / "just-calls") == [
+        "deploy-destroy",
+        "engine-destroy",
+        "foundation-destroy",
+        "bootstrap-destroy",
+    ]
+    assert _lines(work / "ssm-delete-all") == ["openci-tf", "engine"]
+    assert (work / "operator-cleanup-ran").exists()
+    assert "uninstall complete" in completed.stdout
+
+
+def test_uninstall_stops_at_first_failed_phase(tmp_path):
+    """A failed engine-destroy never reaches foundation-destroy or bootstrap-destroy."""
+    completed = _run_uninstall_journey(tmp_path, fail_recipe="engine-destroy")
+    work = tmp_path / "work"
+    assert _lines(work / "just-calls") == ["deploy-destroy", "engine-destroy"]
+    assert not (work / "ssm-delete-all").exists()
+    assert not (work / "operator-cleanup-ran").exists()
+    assert completed.returncode == 3, completed.stderr
+    assert "uninstall stopped at failed phase engine-destroy (rc=3)" in completed.stderr
+    assert "uninstall complete" not in completed.stdout
+
+
+def test_uninstall_ssm_cleanup_stops_at_first_failed_namespace(tmp_path):
+    completed = _run_uninstall_journey(tmp_path, fail_ssm_project="openci-tf")
+    work = tmp_path / "work"
+    assert _lines(work / "ssm-delete-all") == ["openci-tf"]
+    assert not (work / "operator-cleanup-ran").exists()
+    assert completed.returncode == 4, completed.stderr
+    assert "uninstall stopped at failed phase ssm-cleanup (rc=4)" in completed.stderr
+
+
 def test_deploy_destroy_unlocks_stale_terraform_lock_before_destroy():
     justfile = (Path(__file__).parents[2] / "justfile").read_text()
     section = justfile.split("deploy-destroy:", 1)[1].split("target-create-aws-readonly", 1)[0]

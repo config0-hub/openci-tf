@@ -423,6 +423,24 @@ surviving record (set `OPENCI_TF_KEEP_STATE=yes|no` for non-interactive runs).
 When not kept, the bootstrap destroy first migrates its own state back to
 local, empties the bucket (all versions), then destroys the bucket. SSM install parameters are deleted in both namespaces.
 
+The uninstall stops at the first failed phase; later phases do not run and the
+recipe exits with that phase's exit code after printing
+`ERROR: uninstall stopped at failed phase <phase> (rc=<code>)`. Fix the cause,
+then run the failed phase and each phase after it, in this order:
+
+1. poweruser-delete: `just target-delete-aws-poweruser <hub_account_id>`, only
+   when `scripts/poweruser_needs_destroy.sh` exits 0
+2. deploy-destroy: `just deploy-destroy`
+3. engine-destroy: `just engine-destroy`
+4. foundation-destroy: `just foundation-destroy`
+5. bootstrap-destroy: `just bootstrap-destroy`, skipped when keeping the state
+   bucket
+6. ssm-cleanup: `./scripts/ssm_config.sh delete-all`, then
+   `SSM_CONFIG_PROJECT=engine ./scripts/ssm_config.sh delete-all`
+7. operator-cleanup: `./scripts/cleanup_operator_footprint.sh`
+
+Then run `just verify-clean`.
+
 After Terraform teardown, both `just uninstall` and `just bootstrap-destroy` run
 `scripts/cleanup_operator_footprint.sh`, which removes operator-managed resources
 that survive `terraform destroy`:
