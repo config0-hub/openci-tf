@@ -1503,6 +1503,134 @@ def test_uninstall_ssm_cleanup_stops_at_first_failed_namespace(tmp_path):
     assert "uninstall stopped at failed phase ssm-cleanup (rc=4)" in completed.stderr
 
 
+def _run_recipe_journey(
+    tmp_path: Path, recipe: str, stubs: dict[str, str]
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """Run one real justfile recipe body with aws, terraform and its scripts stubbed.
+
+    Every stub appends "<name> <args>" to a calls file; the calls come back in order.
+    """
+    repo_root = Path(__file__).parents[2]
+    justfile = (repo_root / "justfile").read_text()
+    body_lines = []
+    for line in justfile.split(f"\n{recipe}:\n", 1)[1].splitlines():
+        if line.strip() and not line.startswith("    "):
+            break
+        body_lines.append(line[4:])
+    body = (
+        "\n".join(body_lines)
+        .replace("{{OPENCI_TF_PROJECT}}", "openci-tf")
+        .replace("{{OPENCI_TF_REGION}}", "us-east-1")
+    )
+    work = tmp_path / "work"
+    (work / "scripts").mkdir(parents=True)
+    for root in ("bootstrap", "foundation", "deploy"):
+        (work / "infra" / root).mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    shutil.copy(repo_root / "scripts/phase_timing.sh", work / "scripts/phase_timing.sh")
+    calls = tmp_path / "calls"
+    every_stub = {"aws": 'echo 123456789012\n'} | stubs
+    for name, text in every_stub.items():
+        path = (work / name) if name.startswith("scripts/") else (bin_dir / name)
+        path.write_text(
+            f'#!/usr/bin/env bash\necho "{Path(name).name} $*" >> "{calls}"\n{text}'
+        )
+        path.chmod(0o755)
+    completed = subprocess.run(
+        ["bash", "-c", body],
+        cwd=work,
+        env=os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}"},
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return completed, calls.read_text().splitlines() if calls.exists() else []
+
+
+def _bootstrap_destroy_stubs(
+    *, terraform: str = "", bucket_owner: str = "echo openci-tf-bootstrap\n"
+) -> dict[str, str]:
+    return {
+        "terraform": terraform,
+        "scripts/write_tfvars.sh": "",
+        "scripts/bucket_exists.sh": "exit 0\n",
+        "scripts/bucket_owner.sh": bucket_owner,
+        "scripts/generate_backend.sh": "",
+        "scripts/empty_bucket.sh": "",
+        "scripts/cleanup_operator_footprint.sh": "",
+    }
+
+
+def test_bootstrap_destroy_stops_when_state_migration_out_of_the_bucket_fails(tmp_path):
+    """A failed init -migrate-state never empties the bucket that still holds the state."""
+    completed, calls = _run_recipe_journey(
+        tmp_path,
+        "bootstrap-destroy",
+        _bootstrap_destroy_stubs(terraform='case "$*" in *-migrate-state*) exit 6 ;; esac\n'),
+    )
+    assert completed.returncode == 6, completed.stderr
+    assert any("-migrate-state" in call for call in calls)
+    assert not any(call.startswith("empty_bucket.sh") for call in calls)
+    assert not any(call.startswith("terraform -chdir=infra/bootstrap destroy") for call in calls)
+    assert not any(call.startswith("cleanup_operator_footprint.sh") for call in calls)
+    assert "<< terraform-destroy FAILED after " in completed.stderr
+
+
+def test_bootstrap_destroy_aborts_on_unreadable_bucket_tags(tmp_path):
+    """bucket_owner.sh exit 2 stops the phase; an empty owner is never compared."""
+    completed, calls = _run_recipe_journey(
+        tmp_path,
+        "bootstrap-destroy",
+        _bootstrap_destroy_stubs(bucket_owner="exit 2\n"),
+    )
+    assert completed.returncode == 2, completed.stderr
+    assert "is not owned by openci-tf-bootstrap" not in completed.stderr
+    assert not any(call.startswith(("terraform", "empty_bucket.sh")) for call in calls)
+    assert "<< terraform-destroy FAILED after " in completed.stderr
+
+
+def test_deploy_destroy_stops_when_the_stale_lock_guard_fails(tmp_path):
+    """A held or unreadable deploy lock stops the phase before terraform destroy."""
+    completed, calls = _run_recipe_journey(
+        tmp_path,
+        "deploy-destroy",
+        {
+            "terraform": "",
+            "scripts/ssm_config.sh": 'echo "$3"\n',
+            "scripts/image_tag.sh": "echo 1.13\n",
+            "scripts/write_tfvars.sh": "",
+            "scripts/generate_backend.sh": "",
+            "scripts/terraform_unlock_stale_lock.sh": "exit 1\n",
+        },
+    )
+    assert completed.returncode == 1, completed.stderr
+    assert any(call.startswith("terraform_unlock_stale_lock.sh") for call in calls)
+    assert not any(call.startswith("terraform -chdir=infra/deploy destroy") for call in calls)
+    assert "<< terraform-destroy FAILED after " in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "failing",
+    ["scripts/write_tfvars.sh", "scripts/generate_backend.sh", "terraform"],
+)
+def test_foundation_destroy_stops_at_the_first_failed_step(tmp_path, failing):
+    """A failed write_tfvars, generate_backend or init never reaches terraform destroy."""
+    stubs = {
+        "terraform": "",
+        "scripts/ssm_config.sh": 'echo "$3"\n',
+        "scripts/write_tfvars.sh": "",
+        "scripts/generate_backend.sh": "",
+    }
+    stubs[failing] = "exit 5\n"
+    completed, calls = _run_recipe_journey(tmp_path, "foundation-destroy", stubs)
+    assert completed.returncode == 5, completed.stderr
+    assert calls[-1].startswith(Path(failing).name)
+    assert not any(call.startswith("terraform -chdir=infra/foundation destroy") for call in calls)
+    assert "<< terraform-destroy FAILED after " in completed.stderr
+
+
 def test_deploy_destroy_unlocks_stale_terraform_lock_before_destroy():
     justfile = (Path(__file__).parents[2] / "justfile").read_text()
     section = justfile.split("deploy-destroy:", 1)[1].split("target-create-aws-readonly", 1)[0]

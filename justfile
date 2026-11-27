@@ -483,8 +483,11 @@ install-config0-addon:
     run_stage() {
         local stage="$1"
         shift
-        local rc=0
-        phase_timing_run "$stage" "$@" || rc=$?
+        local rc
+        set +e
+        phase_timing_run "$stage" "$@"
+        rc=$?
+        set -e
         if [ "$rc" -ne 0 ]; then
             phase_timing_total_end install-config0-addon "$rc"
             echo "ERROR: install-config0-addon stopped at failed stage $stage (rc=$rc); later stages did not run" >&2
@@ -508,8 +511,11 @@ uninstall:
     run_phase() {
         local phase="$1"
         shift
-        local rc=0
-        phase_timing_run "$phase" "$@" || rc=$?
+        local rc
+        set +e
+        phase_timing_run "$phase" "$@"
+        rc=$?
+        set -e
         if [ "$rc" -ne 0 ]; then
             phase_timing_total_end uninstall "$rc"
             echo "ERROR: uninstall stopped at failed phase $phase (rc=$rc); later phases did not run" >&2

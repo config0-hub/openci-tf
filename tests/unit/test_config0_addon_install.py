@@ -173,6 +173,43 @@ def test_install_config0_addon_journey_stops_at_first_failed_stage(tmp_path):
     assert not (tmp_path / "register-ran").exists()
 
 
+def test_install_config0_addon_register_stage_stops_when_webhook_url_is_unreadable(tmp_path):
+    """A failed tofu output never runs register_repo.py with an empty webhook URL."""
+    recipe = _addon_recipe()
+    body = "\n".join(line[4:] for line in recipe.splitlines() if line.startswith("    "))
+    body = body.replace("{{OPENCI_TF_REGION}}", "us-east-1").replace("{{OPENCI_TF_PROJECT}}", "openci-tf")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "install").mkdir()
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "scripts/phase_timing.sh").write_text(
+        (_REPO_ROOT / "scripts/phase_timing.sh").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    stubs = {
+        "scripts/ssm_config.sh": '#!/usr/bin/env bash\necho "stub-value"\n',
+        "scripts/copy_ghcr_image.sh": "#!/usr/bin/env bash\n",
+        "bin/tofu": "#!/usr/bin/env bash\nexit 9\n",
+    }
+    for script, text in stubs.items():
+        (tmp_path / script).write_text(text, encoding="utf-8")
+        (tmp_path / script).chmod(0o755)
+    (tmp_path / "install/config0_addon.py").write_text("", encoding="utf-8")
+    (tmp_path / "install/register_repo.py").write_text(
+        "open('register-ran', 'w').close()\n", encoding="utf-8"
+    )
+
+    completed = subprocess.run(
+        ["bash", "-c", body],
+        cwd=tmp_path,
+        env=os.environ | {"PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 9, completed.stderr
+    assert "stopped at failed stage addon-register (rc=9)" in completed.stderr
+    assert not (tmp_path / "register-ran").exists()
+
+
 def test_standalone_install_recipe_is_unchanged_default():
     text = _JUSTFILE.read_text(encoding="utf-8")
     standalone = text.split("install-standalone:", 1)[1].split("install-config0-addon:", 1)[0]
