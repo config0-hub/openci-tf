@@ -1,6 +1,7 @@
 # PUBLIC kit-synced modules: UpAgent work dispatch, Herdr transport tools, and run control.
-# Worktrees: imported modules live in gitignored .shared-llm; symlink before just recipes:
-#   ln -sfn ../openci-tf/.shared-llm .shared-llm
+# Worktrees: the imported modules live in gitignored .shared-llm/public (.shared-llm/this_repo
+# is tracked). In a sibling worktree, link it before just recipes:
+#   ln -sfn ../../openci-tf/.shared-llm/public .shared-llm/public
 import '.shared-llm/public/extensions/common/upagent/justfile'
 import '.shared-llm/public/extensions/common/herdr/justfile'
 import '.shared-llm/public/extensions/common/runner/justfile'

@@ -1726,6 +1726,25 @@ def test_foundation_destroy_stops_at_the_first_failed_step(tmp_path, failing):
     assert "<< terraform-destroy FAILED after " in completed.stderr
 
 
+def test_justfile_worktree_link_comment_makes_every_import_resolve(tmp_path):
+    """The header's ln line, run in a sibling worktree, links the gitignored kit modules."""
+    justfile = (Path(__file__).parents[2] / "justfile").read_text()
+    header = justfile.split("\nset positional-arguments", 1)[0].splitlines()
+    ln_line = next(line.lstrip("# ") for line in header if line.lstrip("# ").startswith("ln "))
+    imports = [line.split("'")[1] for line in header if line.startswith("import '")]
+    assert imports
+    main = tmp_path / "openci-tf"
+    worktree = tmp_path / "openci-tf-wt-x"
+    for path in imports:
+        (main / path).parent.mkdir(parents=True, exist_ok=True)
+        (main / path).write_text("")
+    # .shared-llm/this_repo is tracked, so every worktree already has .shared-llm/.
+    (worktree / ".shared-llm/this_repo").mkdir(parents=True)
+    subprocess.run(["bash", "-c", ln_line], cwd=worktree, check=True)
+    for path in imports:
+        assert (worktree / path).is_file(), f"{ln_line} does not make {path} resolve"
+
+
 def test_deploy_destroy_unlocks_stale_terraform_lock_before_destroy():
     justfile = (Path(__file__).parents[2] / "justfile").read_text()
     section = justfile.split("deploy-destroy:", 1)[1].split("target-create-aws-readonly", 1)[0]

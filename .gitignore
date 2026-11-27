@@ -28,7 +28,9 @@ review/
 
 # LLM kit: public/ is kit-synced and disposable. this_repo/ is this
 # repo's overlay (CLAUDE.md / AGENTS.md / python skill sources) — keep it.
-.shared-llm/public/
+# No trailing slash: a worktree links public as a symlink, which a "dir/"
+# pattern does not match.
+.shared-llm/public
 AGENTS.md
 CLAUDE.md
 PLANS
