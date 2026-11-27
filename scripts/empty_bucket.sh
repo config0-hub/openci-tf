@@ -45,7 +45,16 @@ while :; do
     break
   fi
   printf '%s' "$versions" | jq '{Objects: .Objects, Quiet: true}' >"$batch_file"
-  aws s3api delete-objects --bucket "$BUCKET" --delete "file://${batch_file}" >/dev/null
+  # DeleteObjects exits 0 even when S3 refused some objects: it lists them
+  # under Errors. A refused object comes back in the next listing, so stop.
+  result="$(aws s3api delete-objects --bucket "$BUCKET" --delete "file://${batch_file}" --output json)"
+  failed="$(printf '%s' "$result" | jq -s '[.[].Errors // [] | .[]] | length')"
+  if [ "$failed" -ne 0 ]; then
+    codes="$(printf '%s' "$result" | jq -rs '[.[].Errors // [] | .[].Code] | unique | join(", ")')"
+    echo "ERROR: S3 did not delete ${failed} of ${count} versions from ${BUCKET} (${codes}); keys:" >&2
+    printf '%s' "$result" | jq -rs '.[].Errors // [] | .[].Key' >&2
+    exit 1
+  fi
   echo "deleted ${count} versions from ${BUCKET}"
 done
 

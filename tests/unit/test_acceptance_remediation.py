@@ -1875,6 +1875,51 @@ esac
     assert list(tmpdir.iterdir()) == []
 
 
+def test_empty_bucket_stops_on_objects_delete_objects_did_not_delete(tmp_path):
+    """DeleteObjects exits 0 and lists refused objects under Errors: name the keys and stop."""
+    repo_root = Path(__file__).parents[2]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    deletes = tmp_path / "delete-calls"
+    aws = bin_dir / "aws"
+    aws.write_text(
+        f"""#!/usr/bin/env bash
+case "$*" in
+  *head-bucket*) exit 0 ;;
+  *list-object-versions*)
+    echo '{{"Objects": [{{"Key": "kept/terraform.tfstate", "VersionId": "v-kept"}}, {{"Key": "gone", "VersionId": "v-gone"}}]}}' ;;
+  *delete-objects*)
+    echo "$*" >> "{deletes}"
+    [ "$(wc -l < "{deletes}")" -le 3 ] || {{ echo "stub: delete-objects called 4 times" >&2; exit 97; }}
+    echo '{{"Errors": [{{"Key": "kept/terraform.tfstate", "VersionId": "v-kept", "Code": "AccessDenied", "Message": "Access Denied"}}]}}' ;;
+  *) exit 99 ;;
+esac
+"""
+    )
+    aws.chmod(0o755)
+    completed = subprocess.run(
+        ["bash", str(repo_root / "scripts/empty_bucket.sh"), "openci-tf-state-123456789012"],
+        cwd=tmp_path,
+        env=os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert completed.returncode == 1, completed.stderr
+    delete_calls = deletes.read_text().splitlines()
+    assert len(delete_calls) == 1
+    assert "--output json" in delete_calls[0]
+    assert (
+        "ERROR: S3 did not delete 1 of 2 versions from openci-tf-state-123456789012 (AccessDenied); keys:"
+        in completed.stderr
+    )
+    assert "\nkept/terraform.tfstate\n" in completed.stderr
+    assert "v-kept" not in completed.stderr + completed.stdout
+    assert "deleted 2 versions" not in completed.stdout
+    assert "emptied" not in completed.stdout
+
+
 def test_justfile_worktree_link_comment_makes_every_import_resolve(tmp_path):
     """The header's ln line, run in a sibling worktree, links the gitignored kit modules."""
     justfile = (Path(__file__).parents[2] / "justfile").read_text()
