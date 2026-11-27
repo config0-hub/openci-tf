@@ -441,6 +441,12 @@ then run the failed phase and each phase after it, in this order:
 
 Then run `just verify-clean`.
 
+`just deploy-destroy` reads the openci-tf image tagged with the checked-out
+`IMAGE_VERSION` from ECR, so that image must still exist in ECR when you
+uninstall. Running `just deploy-destroy` or `just uninstall` again after
+engine-destroy or a later phase has finished is not proven safe, because
+deploy-destroy also reads engine and foundation resources by name.
+
 After Terraform teardown, both `just uninstall` and `just bootstrap-destroy` run
 `scripts/cleanup_operator_footprint.sh`, which removes operator-managed resources
 that survive `terraform destroy`:

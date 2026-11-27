@@ -1598,6 +1598,15 @@ def test_uninstall_ssm_cleanup_stops_at_first_failed_namespace(tmp_path):
     assert "uninstall stopped at failed phase ssm-cleanup (rc=4)" in completed.stderr
 
 
+def test_install_doc_uninstall_states_the_deploy_destroy_limits():
+    """deploy-destroy reads the IMAGE_VERSION image and engine/foundation by name."""
+    install = (Path(__file__).parents[2] / "docs/INSTALL.md").read_text()
+    uninstall = " ".join(install.split("\n## Uninstall\n", 1)[1].split("\n## ", 1)[0].split())
+    assert "tagged with the checked-out `IMAGE_VERSION`" in uninstall
+    assert "that image must still exist in ECR" in uninstall
+    assert "after engine-destroy or a later phase has finished is not proven safe" in uninstall
+
+
 def _run_recipe_journey(
     tmp_path: Path, recipe: str, stubs: dict[str, str]
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
