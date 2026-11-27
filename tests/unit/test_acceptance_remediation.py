@@ -1102,8 +1102,9 @@ def test_engine_install_script_targets_adjacent_engine_tree():
     assert "infra/02-deploy" in script
     assert "--query KeyMetadata.Arn" in script
     assert 'ECR_CANONICAL_STATE_KEY="engine-ecr/terraform.tfstate"' in script
-    assert 'CANONICAL_STATE_KEY="engine/terraform.tfstate"' in script
-    assert 'LEGACY_STATE_KEY="engine-02-deploy/terraform.tfstate"' in script
+    state_key = (Path(__file__).parents[2] / "scripts/engine_state_key.sh").read_text()
+    assert 'CANONICAL_STATE_KEY="engine/terraform.tfstate"' in state_key
+    assert 'LEGACY_STATE_KEY="engine-02-deploy/terraform.tfstate"' in state_key
     assert 'generate_backend.sh" "$STATE_BUCKET" engine-ecr' in script
     assert "mirror-image.sh" in script
     assert 'rev-parse --short=7 HEAD' in script
@@ -1123,6 +1124,16 @@ def test_engine_install_script_targets_adjacent_engine_tree():
     )
 
 
+def test_engine_install_and_uninstall_choose_the_engine_state_key_in_one_place():
+    scripts = Path(__file__).parents[2] / "scripts"
+    for name in ("engine_install.sh", "engine_uninstall.sh"):
+        script = (scripts / name).read_text()
+        assert 'source "${ROOT_DIR}/scripts/engine_state_key.sh"' in script, name
+        assert 'state_key_choice="$(engine_state_key_choice "$STATE_BUCKET")"' in script, name
+        assert "engine-02-deploy/terraform.tfstate" not in script, name
+        assert "state_object_status()" not in script, name
+
+
 def test_engine_uninstall_script_reverses_ecr_then_deploy():
     script = (Path(__file__).parents[2] / "scripts/engine_uninstall.sh").read_text()
     deploy_index = script.index('generate_backend.sh" "$STATE_BUCKET" engine')
@@ -1135,13 +1146,21 @@ def test_engine_uninstall_script_reverses_ecr_then_deploy():
 
 
 def _run_engine_uninstall(
-    tmp_path: Path, *, tfvars: bool, deploy_state: str
+    tmp_path: Path,
+    *,
+    tfvars: bool,
+    deploy_state: str,
+    legacy_state: str = "absent",
+    ecr_state: str = "absent",
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Run the real engine_uninstall.sh with aws, terraform and tofu stubbed.
 
-    deploy_state is what get-object returns for engine/terraform.tfstate:
-    "absent" (NoSuchKey), "empty" (destroyed state), "resources", or "denied".
-    The engine-ecr state is always absent.
+    Each state is what head-object and get-object return for one key:
+    deploy_state for engine/terraform.tfstate, legacy_state for the legacy
+    engine-02-deploy/terraform.tfstate, ecr_state for engine-ecr/terraform.tfstate.
+    "absent" (404 / NoSuchKey), "empty" (destroyed state), "resources",
+    "denied" (head-object works, get-object AccessDenied, as when KMS decrypt is
+    denied), or "forbidden" (head-object 403 too).
     """
     repo_root = Path(__file__).parents[2]
     engine = tmp_path / "engine"
@@ -1152,25 +1171,30 @@ def _run_engine_uninstall(
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     calls = tmp_path / "calls"
-    states = {
-        "empty": '{"version": 4, "resources": []}',
-        "resources": '{"version": 4, "resources": [{"mode": "managed", "type": "aws_sfn_state_machine", "name": "x"}]}',
-    }
-    stubs = {
-        "aws": f"""case "$*" in
-  "sts get-caller-identity"*) echo 123456789012 ;;
-  *"--key engine/terraform.tfstate "*)
-    case "{deploy_state}" in
-      absent) echo "An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist." >&2; exit 254 ;;
-      denied) echo "An error occurred (AccessDenied) when calling the GetObject operation: Access Denied" >&2; exit 254 ;;
-      empty) echo '{states["empty"]}' > "${{@: -1}}" ;;
-      resources) echo '{states["resources"]}' > "${{@: -1}}" ;;
-    esac ;;
-  *"--key engine-ecr/terraform.tfstate "*)
-    echo "An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist." >&2; exit 254 ;;
+    aws = """[ "$*" != "sts get-caller-identity --query Account --output text" ] || { echo 123456789012; exit 0; }
+key=""; prev=""
+for arg in "$@"; do [ "$prev" != --key ] || key="$arg"; prev="$arg"; done
+case "$key" in
+  engine/terraform.tfstate) state=@DEPLOY@ ;;
+  engine-02-deploy/terraform.tfstate) state=@LEGACY@ ;;
+  engine-ecr/terraform.tfstate) state=@ECR@ ;;
   *) exit 99 ;;
 esac
-""",
+case "$1 $2:$state" in
+  "s3api head-object:absent") echo "An error occurred (404) when calling the HeadObject operation: Not Found" >&2; exit 254 ;;
+  "s3api head-object:forbidden") echo "An error occurred (403) when calling the HeadObject operation: Forbidden" >&2; exit 254 ;;
+  "s3api head-object:"*) echo '{"ContentLength": 100}' ;;
+  "s3api get-object:absent") echo "An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist." >&2; exit 254 ;;
+  "s3api get-object:denied"|"s3api get-object:forbidden") echo "An error occurred (AccessDenied) when calling the GetObject operation: Access Denied" >&2; exit 254 ;;
+  "s3api get-object:empty") echo '{"version": 4, "resources": []}' > "${@: -1}" ;;
+  "s3api get-object:resources") echo '{"version": 4, "resources": [{"mode": "managed", "type": "aws_sfn_state_machine", "name": "x"}]}' > "${@: -1}" ;;
+  *) exit 99 ;;
+esac
+"""
+    stubs = {
+        "aws": aws.replace("@DEPLOY@", deploy_state)
+        .replace("@LEGACY@", legacy_state)
+        .replace("@ECR@", ecr_state),
         "terraform": "",
         "tofu": "",
     }
@@ -1187,6 +1211,10 @@ esac
         check=False,
     )
     return completed, calls.read_text().splitlines() if calls.exists() else []
+
+
+def _terraform_calls(calls: list[str]) -> list[str]:
+    return [call for call in calls if call.startswith(("terraform ", "tofu "))]
 
 
 @pytest.mark.parametrize("deploy_state", ["absent", "empty"])
@@ -1220,13 +1248,79 @@ def test_engine_uninstall_without_tfvars_and_unreadable_state_fails_loud(tmp_pat
     assert "engine uninstall complete" not in completed.stdout
 
 
-def test_engine_uninstall_with_tfvars_destroys_both_roots(tmp_path):
-    completed, calls = _run_engine_uninstall(tmp_path, tfvars=True, deploy_state="resources")
+@pytest.mark.parametrize("deploy_state", ["resources", "absent"])
+def test_engine_uninstall_with_tfvars_destroys_both_roots(tmp_path, deploy_state):
+    completed, calls = _run_engine_uninstall(tmp_path, tfvars=True, deploy_state=deploy_state)
     assert completed.returncode == 0, completed.stderr
     assert "terraform destroy -input=false -auto-approve" in calls
     assert "tofu destroy -input=false -auto-approve" in calls
     assert not any("get-object" in call for call in calls)
     assert "engine uninstall complete" in completed.stdout
+
+
+@pytest.mark.parametrize("tfvars", [True, False])
+def test_engine_uninstall_refuses_an_engine_under_the_legacy_state_key(tmp_path, tfvars):
+    """engine_install.sh still accepts engine-02-deploy/terraform.tfstate; the uninstall
+    never destroys the empty canonical key or calls that engine absent."""
+    completed, calls = _run_engine_uninstall(
+        tmp_path, tfvars=tfvars, deploy_state="absent", legacy_state="resources"
+    )
+    assert completed.returncode == 1, completed.stderr
+    assert _terraform_calls(calls) == []
+    assert (
+        "s3://openci-tf-state-123456789012/engine-02-deploy/terraform.tfstate"
+        " (the legacy engine state key) still tracks 1 engine resource(s)" in completed.stderr
+    )
+    assert "the engine was NOT destroyed" in completed.stderr
+    assert "'just engine'" in completed.stderr
+    assert "'just engine-destroy'" in completed.stderr
+    assert "not installed" not in completed.stdout
+    assert "engine uninstall complete" not in completed.stdout
+
+
+def test_engine_uninstall_with_an_emptied_legacy_state_object_says_not_installed(tmp_path):
+    """A legacy object that tracks no resources is no engine: the uninstall goes on."""
+    completed, calls = _run_engine_uninstall(
+        tmp_path, tfvars=False, deploy_state="absent", legacy_state="empty"
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert _terraform_calls(calls) == []
+    assert "engine uninstall: the engine is not installed; nothing was destroyed" in completed.stdout
+
+
+@pytest.mark.parametrize("tfvars", [True, False])
+def test_engine_uninstall_refuses_when_both_engine_state_keys_exist(tmp_path, tfvars):
+    completed, calls = _run_engine_uninstall(
+        tmp_path, tfvars=tfvars, deploy_state="resources", legacy_state="resources"
+    )
+    assert completed.returncode == 1, completed.stderr
+    assert _terraform_calls(calls) == []
+    assert "both s3://openci-tf-state-123456789012/engine/terraform.tfstate and" in completed.stderr
+    assert "the engine was NOT destroyed" in completed.stderr
+    assert "engine uninstall complete" not in completed.stdout
+
+
+def test_engine_uninstall_fails_loud_when_the_state_key_probe_fails(tmp_path):
+    """A 403 on head-object never falls through to the canonical key."""
+    completed, calls = _run_engine_uninstall(tmp_path, tfvars=True, deploy_state="forbidden")
+    assert completed.returncode != 0
+    assert _terraform_calls(calls) == []
+    assert "Forbidden" in completed.stderr
+    assert (
+        "could not determine state object status for"
+        " s3://openci-tf-state-123456789012/engine/terraform.tfstate" in completed.stderr
+    )
+    assert "engine uninstall complete" not in completed.stdout
+
+
+def test_engine_uninstall_without_tfvars_but_with_ecr_resources_fails_loud(tmp_path):
+    completed, calls = _run_engine_uninstall(
+        tmp_path, tfvars=False, deploy_state="absent", ecr_state="resources"
+    )
+    assert completed.returncode == 1, completed.stderr
+    assert _terraform_calls(calls) == []
+    assert "infra/01-ecr/terraform.tfvars is missing" in completed.stderr
+    assert "engine-ecr/terraform.tfstate still tracks 1 engine resource(s)" in completed.stderr
 
 
 def test_verify_uses_canonical_engine_source_and_bucket_names():
