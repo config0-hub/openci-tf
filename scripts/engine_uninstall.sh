@@ -30,15 +30,21 @@ err_file="$(mktemp)"
 trap 'rm -f "$state_file" "$err_file"' EXIT
 
 # engine_state_resource_count <key>: print how many managed resources the state
-# object tracks; 0 when there is no object. An unreadable state stops.
+# object tracks; 0 when there is no object. A state that cannot be read, or
+# that gives no count (a zero-byte object, not JSON, no resources list), stops.
 engine_state_resource_count() {
-  local key="$1" rc
+  local key="$1" rc count
   set +e
   aws s3api get-object --bucket "$STATE_BUCKET" --key "$key" "$state_file" >/dev/null 2>"$err_file"
   rc=$?
   set -e
   if [ "$rc" -eq 0 ]; then
-    jq '[.resources[]? | select(.mode == "managed")] | length' "$state_file"
+    count="$(jq '[.resources[] | select(.mode == "managed")] | length' "$state_file")" || count=""
+    if ! [[ "$count" =~ ^[0-9]+$ ]]; then
+      echo "ERROR: could not count the engine resources in s3://${STATE_BUCKET}/${key}: the object is empty or is not a Terraform state with a resources list" >&2
+      exit 1
+    fi
+    echo "$count"
   elif grep -Eq 'NoSuchKey|NoSuchBucket' "$err_file"; then
     echo 0
   else

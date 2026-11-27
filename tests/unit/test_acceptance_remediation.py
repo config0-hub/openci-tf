@@ -1161,7 +1161,7 @@ def _run_engine_uninstall(
     engine-02-deploy/terraform.tfstate, ecr_state for engine-ecr/terraform.tfstate.
     "absent" (404 / NoSuchKey), "empty" (destroyed state), "resources",
     "denied" (head-object works, get-object AccessDenied, as when KMS decrypt is
-    denied), or "forbidden" (head-object 403 too).
+    denied), "zero" (a zero-byte object), or "forbidden" (head-object 403 too).
     """
     repo_root = Path(__file__).parents[2]
     engine = tmp_path / "engine"
@@ -1188,6 +1188,7 @@ case "$1 $2:$state" in
   "s3api get-object:absent") echo "An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist." >&2; exit 254 ;;
   "s3api get-object:denied"|"s3api get-object:forbidden") echo "An error occurred (AccessDenied) when calling the GetObject operation: Access Denied" >&2; exit 254 ;;
   "s3api get-object:empty") echo '{"version": 4, "resources": []}' > "${@: -1}" ;;
+  "s3api get-object:zero") : > "${@: -1}" ;;
   "s3api get-object:resources") echo '{"version": 4, "resources": [{"mode": "managed", "type": "aws_sfn_state_machine", "name": "x"}]}' > "${@: -1}" ;;
   *) exit 99 ;;
 esac
@@ -1328,22 +1329,24 @@ def test_engine_uninstall_without_tfvars_but_with_ecr_resources_fails_loud(tmp_p
     assert "engine-ecr/terraform.tfstate still tracks 1 engine resource(s)" in completed.stderr
 
 
-_ENGINE_STATES = ("absent", "empty", "resources", "denied", "forbidden")
+_ENGINE_STATES = ("absent", "empty", "resources", "denied", "zero", "forbidden")
 
 _ENGINE_STATE_TABLE = {
     True: {
-        "absent": ("destroy", "destroy", "legacy", "denied:legacy", "probe:legacy"),
-        "empty": ("destroy", "destroy", "legacy-canonical-empty", "denied:legacy", "probe:legacy"),
-        "resources": ("destroy", "destroy", "both", "denied:legacy", "probe:legacy"),
-        "denied": ("denied:canonical", "denied:canonical", "denied:canonical", "denied:canonical", "probe:legacy"),
-        "forbidden": ("probe:canonical", "probe:canonical", "probe:canonical", "probe:canonical", "probe:canonical"),
+        "absent": ("destroy", "destroy", "legacy", "denied:legacy", "zero:legacy", "probe:legacy"),
+        "empty": ("destroy", "destroy", "legacy-canonical-empty", "denied:legacy", "zero:legacy", "probe:legacy"),
+        "resources": ("destroy", "destroy", "both", "denied:legacy", "zero:legacy", "probe:legacy"),
+        "denied": ("denied:canonical",) * 5 + ("probe:legacy",),
+        "zero": ("zero:canonical",) * 5 + ("probe:legacy",),
+        "forbidden": ("probe:canonical",) * 6,
     },
     False: {
-        "absent": ("absent", "absent", "legacy", "denied:legacy", "probe:legacy"),
-        "empty": ("absent", "absent", "legacy-canonical-empty", "denied:legacy", "probe:legacy"),
-        "resources": ("no-tfvars", "no-tfvars", "both", "denied:legacy", "probe:legacy"),
-        "denied": ("denied:canonical", "denied:canonical", "denied:canonical", "denied:canonical", "probe:legacy"),
-        "forbidden": ("probe:canonical", "probe:canonical", "probe:canonical", "probe:canonical", "probe:canonical"),
+        "absent": ("absent", "absent", "legacy", "denied:legacy", "zero:legacy", "probe:legacy"),
+        "empty": ("absent", "absent", "legacy-canonical-empty", "denied:legacy", "zero:legacy", "probe:legacy"),
+        "resources": ("no-tfvars", "no-tfvars", "both", "denied:legacy", "zero:legacy", "probe:legacy"),
+        "denied": ("denied:canonical",) * 5 + ("probe:legacy",),
+        "zero": ("zero:canonical",) * 5 + ("probe:legacy",),
+        "forbidden": ("probe:canonical",) * 6,
     },
 }
 
@@ -1383,6 +1386,8 @@ _ENGINE_STATE_OUTCOMES = {
     ),
     "denied:canonical": (254, [f"could not read engine state {_STATE_URL}/engine/terraform.tfstate"]),
     "denied:legacy": (254, [f"could not read engine state {_STATE_URL}/engine-02-deploy/terraform.tfstate"]),
+    "zero:canonical": (1, [f"could not count the engine resources in {_STATE_URL}/engine/terraform.tfstate"]),
+    "zero:legacy": (1, [f"could not count the engine resources in {_STATE_URL}/engine-02-deploy/terraform.tfstate"]),
     "probe:canonical": (1, [f"could not determine state object status for {_STATE_URL}/engine/terraform.tfstate"]),
     "probe:legacy": (
         1,
@@ -1411,6 +1416,21 @@ def test_engine_uninstall_follows_the_engine_state_table(tmp_path, tfvars, canon
         assert _terraform_calls(calls) == []
     assert ("engine uninstall complete" in completed.stdout) == (outcome == "destroy")
     assert ("not installed" in completed.stdout) == (outcome == "absent")
+    assert "integer expression expected" not in completed.stderr
+
+
+def test_engine_uninstall_without_tfvars_stops_on_a_zero_byte_ecr_state(tmp_path):
+    completed, calls = _run_engine_uninstall(
+        tmp_path, tfvars=False, deploy_state="absent", ecr_state="zero"
+    )
+    assert completed.returncode == 1, completed.stderr
+    assert _terraform_calls(calls) == []
+    assert (
+        "could not count the engine resources in"
+        " s3://openci-tf-state-123456789012/engine-ecr/terraform.tfstate" in completed.stderr
+    )
+    assert "integer expression expected" not in completed.stderr
+    assert "engine uninstall: the engine is not installed; nothing was destroyed" not in completed.stdout
 
 
 def test_verify_uses_canonical_engine_source_and_bucket_names():
