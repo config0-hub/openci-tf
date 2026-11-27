@@ -23,6 +23,39 @@ if [ ! -d "$DEPLOY_DIR" ]; then
   exit 1
 fi
 
+state_file="$(mktemp)"
+err_file="$(mktemp)"
+trap 'rm -f "$state_file" "$err_file"' EXIT
+
+# engine_install.sh writes terraform.tfvars into this checkout. When it is
+# missing, the engine state tells the two cases apart. No managed resources in
+# state (no state object, or one a destroy emptied) means the engine is not
+# installed: there is nothing to destroy. Resources in state mean the engine is
+# installed and only the file is gone: skipping would hide a destroy that did
+# not run, so stop with what to do. An unreadable state also stops.
+require_no_engine_resources() {
+  local dir="$1" key="$2/terraform.tfstate" rc count
+  set +e
+  aws s3api get-object --bucket "$STATE_BUCKET" --key "$key" "$state_file" >/dev/null 2>"$err_file"
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ]; then
+    count="$(jq '[.resources[]? | select(.mode == "managed")] | length' "$state_file")"
+  elif grep -Eq 'NoSuchKey|NoSuchBucket' "$err_file"; then
+    count=0
+  else
+    cat "$err_file" >&2
+    echo "ERROR: could not read engine state s3://${STATE_BUCKET}/${key}" >&2
+    exit "$rc"
+  fi
+  if [ "$count" -ne 0 ]; then
+    echo "ERROR: ${dir}/terraform.tfvars is missing, but s3://${STATE_BUCKET}/${key} still tracks ${count} engine resource(s); the engine was NOT destroyed." >&2
+    echo "Run this from the engine checkout that installed it (ENGINE_REPO_PATH), or run 'just engine' to write terraform.tfvars again, then run 'just engine-destroy'." >&2
+    exit 1
+  fi
+  echo "no ${dir}/terraform.tfvars and no resources in s3://${STATE_BUCKET}/${key}: the engine is not installed, nothing to destroy"
+}
+
 "${ROOT_DIR}/scripts/generate_backend.sh" "$STATE_BUCKET" engine "$REGION" "$DEPLOY_DIR"
 (
   cd "$DEPLOY_DIR"
@@ -30,7 +63,7 @@ fi
     terraform init -reconfigure -input=false -backend-config=use_lockfile=true
     terraform destroy -input=false -auto-approve
   else
-    echo "no engine terraform.tfvars; skipping destroy"
+    require_no_engine_resources "$DEPLOY_DIR" engine
   fi
 )
 
@@ -46,8 +79,12 @@ fi
     tofu init -reconfigure -input=false -backend-config=use_lockfile=true
     tofu destroy -input=false -auto-approve
   else
-    echo "no engine ecr terraform.tfvars; skipping destroy"
+    require_no_engine_resources "$ECR_DIR" engine-ecr
   fi
 )
 
-echo "engine uninstall complete"
+if [ ! -f "${DEPLOY_DIR}/terraform.tfvars" ] && [ ! -f "${ECR_DIR}/terraform.tfvars" ]; then
+  echo "engine uninstall: the engine is not installed; nothing was destroyed"
+else
+  echo "engine uninstall complete"
+fi

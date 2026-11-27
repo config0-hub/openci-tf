@@ -1134,6 +1134,101 @@ def test_engine_uninstall_script_reverses_ecr_then_deploy():
     assert "batch-delete-image" not in script
 
 
+def _run_engine_uninstall(
+    tmp_path: Path, *, tfvars: bool, deploy_state: str
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """Run the real engine_uninstall.sh with aws, terraform and tofu stubbed.
+
+    deploy_state is what get-object returns for engine/terraform.tfstate:
+    "absent" (NoSuchKey), "empty" (destroyed state), "resources", or "denied".
+    The engine-ecr state is always absent.
+    """
+    repo_root = Path(__file__).parents[2]
+    engine = tmp_path / "engine"
+    for root in ("infra/02-deploy", "infra/01-ecr"):
+        (engine / root).mkdir(parents=True)
+        if tfvars:
+            (engine / root / "terraform.tfvars").write_text('aws_region = "us-east-1"\n')
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "calls"
+    states = {
+        "empty": '{"version": 4, "resources": []}',
+        "resources": '{"version": 4, "resources": [{"mode": "managed", "type": "aws_sfn_state_machine", "name": "x"}]}',
+    }
+    stubs = {
+        "aws": f"""case "$*" in
+  "sts get-caller-identity"*) echo 123456789012 ;;
+  *"--key engine/terraform.tfstate "*)
+    case "{deploy_state}" in
+      absent) echo "An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist." >&2; exit 254 ;;
+      denied) echo "An error occurred (AccessDenied) when calling the GetObject operation: Access Denied" >&2; exit 254 ;;
+      empty) echo '{states["empty"]}' > "${{@: -1}}" ;;
+      resources) echo '{states["resources"]}' > "${{@: -1}}" ;;
+    esac ;;
+  *"--key engine-ecr/terraform.tfstate "*)
+    echo "An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist." >&2; exit 254 ;;
+  *) exit 99 ;;
+esac
+""",
+        "terraform": "",
+        "tofu": "",
+    }
+    for name, text in stubs.items():
+        (bin_dir / name).write_text(f'#!/usr/bin/env bash\necho "{name} $*" >> "{calls}"\n{text}')
+        (bin_dir / name).chmod(0o755)
+    completed = subprocess.run(
+        ["bash", str(repo_root / "scripts/engine_uninstall.sh"), str(engine)],
+        cwd=tmp_path,
+        env=os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}", "OPENCI_TF_PROJECT": "openci-tf"},
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return completed, calls.read_text().splitlines() if calls.exists() else []
+
+
+@pytest.mark.parametrize("deploy_state", ["absent", "empty"])
+def test_engine_uninstall_without_tfvars_or_engine_resources_says_not_installed(tmp_path, deploy_state):
+    completed, calls = _run_engine_uninstall(tmp_path, tfvars=False, deploy_state=deploy_state)
+    assert completed.returncode == 0, completed.stderr
+    assert not any(" destroy " in f"{call} " for call in calls)
+    assert "the engine is not installed, nothing to destroy" in completed.stdout
+    assert "engine uninstall: the engine is not installed; nothing was destroyed" in completed.stdout
+    assert "engine uninstall complete" not in completed.stdout
+
+
+def test_engine_uninstall_without_tfvars_but_with_engine_resources_fails_loud(tmp_path):
+    """An installed engine whose tfvars file is gone is a destroy that did not run."""
+    completed, calls = _run_engine_uninstall(tmp_path, tfvars=False, deploy_state="resources")
+    assert completed.returncode == 1, completed.stderr
+    assert not any(" destroy " in f"{call} " for call in calls)
+    assert "infra/02-deploy/terraform.tfvars is missing" in completed.stderr
+    assert "still tracks 1 engine resource(s); the engine was NOT destroyed" in completed.stderr
+    assert "'just engine'" in completed.stderr
+    assert "'just engine-destroy'" in completed.stderr
+    assert "engine uninstall complete" not in completed.stdout
+
+
+def test_engine_uninstall_without_tfvars_and_unreadable_state_fails_loud(tmp_path):
+    completed, calls = _run_engine_uninstall(tmp_path, tfvars=False, deploy_state="denied")
+    assert completed.returncode != 0
+    assert not any(" destroy " in f"{call} " for call in calls)
+    assert "AccessDenied" in completed.stderr
+    assert "could not read engine state s3://openci-tf-state-123456789012/engine/terraform.tfstate" in completed.stderr
+    assert "engine uninstall complete" not in completed.stdout
+
+
+def test_engine_uninstall_with_tfvars_destroys_both_roots(tmp_path):
+    completed, calls = _run_engine_uninstall(tmp_path, tfvars=True, deploy_state="resources")
+    assert completed.returncode == 0, completed.stderr
+    assert "terraform destroy -input=false -auto-approve" in calls
+    assert "tofu destroy -input=false -auto-approve" in calls
+    assert not any("get-object" in call for call in calls)
+    assert "engine uninstall complete" in completed.stdout
+
+
 def test_verify_uses_canonical_engine_source_and_bucket_names():
     script = (Path(__file__).parents[2] / "scripts/verify.sh").read_text()
     assert "bootstrap foundation deploy engine" in script
