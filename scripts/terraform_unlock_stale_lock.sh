@@ -13,9 +13,12 @@ STATE_KEY="${3:?Usage: terraform_unlock_stale_lock.sh <terraform_dir> <state_buc
 
 LOCK_OBJECT_KEY="${STATE_KEY}/terraform.tfstate.tflock"
 
+# Set the cleanup right after the first mktemp, so a failed second one does not
+# leave the first file; it removes err_file too once that exists.
 body_file="$(mktemp)"
+err_file=""
+trap 'rm -f "$body_file" ${err_file:+"$err_file"}' EXIT
 err_file="$(mktemp)"
-trap 'rm -f "$body_file" "$err_file"' EXIT
 # get-object writes the lock body to body_file and prints the response
 # metadata on stdout. Keep them apart: the metadata is not the lock.
 set +e

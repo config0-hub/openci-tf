@@ -2258,6 +2258,46 @@ def test_terraform_unlock_stale_lock_leaves_no_temp_file(tmp_path: Path, aws_bod
     assert list(tmpdir.iterdir()) == [], completed.stderr
 
 
+def test_terraform_unlock_stale_lock_removes_the_first_temp_file_when_the_second_mktemp_fails(
+    tmp_path: Path,
+):
+    """The EXIT trap is set right after the first mktemp, so a failed second one
+    leaves no file behind."""
+    repo_root = Path(__file__).parents[2]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
+    counter = tmp_path / "mktemp-calls"
+    real_mktemp = shutil.which("mktemp")
+    assert real_mktemp
+    (bin_dir / "mktemp").write_text(
+        f"""#!/usr/bin/env bash
+n=$(( $(cat "{counter}" 2>/dev/null || echo 0) + 1 ))
+echo "$n" >"{counter}"
+[ "$n" -lt 2 ] || {{ echo "mktemp: failed to create file via template" >&2; exit 1; }}
+exec "{real_mktemp}" "$@"
+"""
+    )
+    (bin_dir / "aws").write_text("#!/usr/bin/env bash\necho \"unexpected aws call: $*\" >&2\nexit 99\n")
+    (bin_dir / "mktemp").chmod(0o755)
+    (bin_dir / "aws").chmod(0o755)
+    completed = subprocess.run(
+        ["bash", str(repo_root / "scripts/terraform_unlock_stale_lock.sh"), "infra/deploy", "b", "deploy"],
+        cwd=tmp_path,
+        env=os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}", "TMPDIR": str(tmpdir)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert completed.returncode == 1, completed.stderr
+    assert "mktemp: failed to create file via template" in completed.stderr
+    assert "unexpected aws call" not in completed.stderr
+    assert counter.read_text().strip() == "2"
+    assert list(tmpdir.iterdir()) == [], completed.stderr
+
+
 def test_presign_put_sets_content_type_for_text_artifacts(monkeypatch):
     captured = {}
 
