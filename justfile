@@ -442,14 +442,26 @@ install-standalone:
     set -euo pipefail
     # shellcheck source=scripts/phase_timing.sh
     source ./scripts/phase_timing.sh
+    run_stage() {
+        local stage="$1"
+        shift
+        local rc
+        set +e
+        phase_timing_run "$stage" "$@"
+        rc=$?
+        set -e
+        if [ "$rc" -ne 0 ]; then
+            phase_timing_total_end install "$rc"
+            echo "ERROR: install stopped at failed stage $stage (rc=$rc); later stages did not run" >&2
+            exit "$rc"
+        fi
+    }
     phase_timing_total_begin
-    journey_rc=0
-    phase_timing_run bootstrap just bootstrap || journey_rc=$?
-    phase_timing_run foundation just foundation || journey_rc=$?
-    phase_timing_run engine just engine || journey_rc=$?
-    phase_timing_run deploy just deploy || journey_rc=$?
-    phase_timing_total_end install "$journey_rc"
-    [ "$journey_rc" -eq 0 ] || exit "$journey_rc"
+    run_stage bootstrap just bootstrap
+    run_stage foundation just foundation
+    run_stage engine just engine
+    run_stage deploy just deploy
+    phase_timing_total_end install 0
     echo "install complete — hub readonly owned by deploy; run 'just verify'"
 
 # config0-addon install into a tenant account. Reads its inputs from the SSM
