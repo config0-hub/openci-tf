@@ -88,6 +88,50 @@ exit "$rc"
     assert lines[1].startswith("<< no-errexit FAILED after ")
 
 
+def test_phase_timing_run_function_phase_stops_at_first_failed_command():
+    completed = _run_helper(
+        """
+two_steps() { false; echo step-two-ran; }
+phase_timing_run two-steps two_steps
+"""
+    )
+    assert completed.returncode == 1
+    assert "step-two-ran" not in completed.stdout
+    lines = completed.stderr.splitlines()
+    assert lines[0] == ">> two-steps start"
+    assert lines[1].startswith("<< two-steps FAILED after ")
+
+
+def test_phase_timing_run_exit_inside_function_phase_prints_failed():
+    completed = _run_helper(
+        """
+refuses() { echo refusing >&2; exit 9; }
+phase_timing_run refuses refuses
+"""
+    )
+    assert completed.returncode == 9
+    lines = completed.stderr.splitlines()
+    assert lines[1] == "refusing"
+    assert lines[2].startswith("<< refuses FAILED after ")
+
+
+def test_phase_timing_run_set_plus_e_caller_reads_function_phase_exit_code():
+    completed = _run_helper(
+        """
+two_steps() { (exit 4); echo step-two-ran; }
+set +e
+phase_timing_run two-steps two_steps
+rc=$?
+set -e
+echo "caller rc=$rc"
+"""
+    )
+    assert completed.returncode == 0
+    assert "step-two-ran" not in completed.stdout
+    assert "caller rc=4" in completed.stdout
+    assert completed.stderr.splitlines()[1].startswith("<< two-steps FAILED after ")
+
+
 def test_phase_timing_total_end_prints_total_on_success():
     completed = _run_helper(
         """

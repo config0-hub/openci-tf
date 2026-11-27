@@ -14,6 +14,8 @@ SOPS_AGE_LAYER_S3_KEY="engine/artifacts/sops-age-layer.zip"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENGINE_ROOT="$(cd "$ENGINE_ROOT" && pwd)"
+# shellcheck source=scripts/engine_state_key.sh
+source "${ROOT_DIR}/scripts/engine_state_key.sh"
 
 if [ ! -f "${ENGINE_ROOT}/scripts/build-release-zip.sh" ]; then
   echo "ERROR: engine checkout missing scripts/build-release-zip.sh: ${ENGINE_ROOT}" >&2
@@ -49,31 +51,6 @@ export ADDITIONAL_RESULT_BUCKET_ARNS_JSON="[\"arn:aws:s3:::${DONE_BUCKET}\"]"
 ECR_DIR="${ENGINE_ROOT}/infra/01-ecr"
 DEPLOY_DIR="${ENGINE_ROOT}/infra/02-deploy"
 ECR_CANONICAL_STATE_KEY="engine-ecr/terraform.tfstate"
-CANONICAL_STATE_KEY="engine/terraform.tfstate"
-LEGACY_STATE_KEY="engine-02-deploy/terraform.tfstate"
-
-state_object_status() {
-  local key="$1" error_file rc
-  error_file="$(mktemp)"
-  set +e
-  aws s3api head-object --bucket "$STATE_BUCKET" --key "$key" >/dev/null 2>"$error_file"
-  rc=$?
-  set -e
-  if [ "$rc" -eq 0 ]; then
-    rm -f "$error_file"
-    printf 'present'
-    return 0
-  fi
-  if grep -Eq '(404|Not Found|NoSuchKey)' "$error_file"; then
-    rm -f "$error_file"
-    printf 'absent'
-    return 0
-  fi
-  cat "$error_file" >&2
-  rm -f "$error_file"
-  echo "ERROR: could not determine state object status for s3://${STATE_BUCKET}/${key}" >&2
-  return 1
-}
 
 echo "applying engine infra/01-ecr (state key ${ECR_CANONICAL_STATE_KEY})"
 "${ROOT_DIR}/scripts/generate_backend.sh" "$STATE_BUCKET" engine-ecr "$REGION" "$ECR_DIR"
@@ -100,9 +77,8 @@ ECR_REPOSITORY_URL="$(tofu -chdir="$ECR_DIR" output -raw repository_url)"
 }
 export ENGINE_IMAGE_URI="${ECR_REPOSITORY_URL}:${ENGINE_SHORT_SHA}"
 
-canonical_status="$(state_object_status "$CANONICAL_STATE_KEY")"
-legacy_status="$(state_object_status "$LEGACY_STATE_KEY")"
-if [ "$canonical_status" = absent ] && [ "$legacy_status" = present ]; then
+state_key_choice="$(engine_state_key_choice "$STATE_BUCKET")"
+if [ "$state_key_choice" = legacy ]; then
   echo "migrating legacy engine Terraform state to ${CANONICAL_STATE_KEY}"
   "${ROOT_DIR}/scripts/generate_backend.sh" "$STATE_BUCKET" engine-02-deploy "$REGION" "$DEPLOY_DIR"
   terraform -chdir="$DEPLOY_DIR" init -reconfigure -input=false -backend-config=use_lockfile=true
@@ -114,7 +90,7 @@ if [ "$canonical_status" = absent ] && [ "$legacy_status" = present ]; then
     exit 1
   }
   aws s3api delete-object --bucket "$STATE_BUCKET" --key "$LEGACY_STATE_KEY" >/dev/null
-elif [ "$canonical_status" = present ] && [ "$legacy_status" = present ]; then
+elif [ "$state_key_choice" = ambiguous ]; then
   echo "ERROR: both canonical and legacy engine state objects exist; refusing an ambiguous migration" >&2
   exit 1
 else

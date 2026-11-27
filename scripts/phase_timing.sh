@@ -32,15 +32,28 @@ phase_timing_end() {
   fi
 }
 
+# The phase runs in a subshell with errexit on, so a phase that is a shell
+# function stops at its first failed command and the subshell's exit code is
+# the phase's exit code. errexit is off only around the subshell, so the
+# FAILED line prints before that code is returned; the caller's errexit state
+# is restored afterwards.
+# Bash ignores errexit inside a command whose status is tested (`||`, `&&`,
+# `if`, `!`), subshells included. So call this as a plain command when the
+# phase is a function; to read its exit code, use
+#   set +e; phase_timing_run <phase> <cmd...>; rc=$?; set -e
 phase_timing_run() {
   local phase="$1"
   shift
-  local rc
+  local rc errexit=off
+  case "$-" in *e*) errexit=on ;; esac
   phase_timing_begin "$phase"
   set +e
-  "$@"
+  (
+    set -e
+    "$@"
+  )
   rc=$?
-  set -e
+  if [ "$errexit" = on ]; then set -e; fi
   phase_timing_end "$rc"
   return "$rc"
 }

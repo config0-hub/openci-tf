@@ -8,6 +8,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -1102,8 +1103,9 @@ def test_engine_install_script_targets_adjacent_engine_tree():
     assert "infra/02-deploy" in script
     assert "--query KeyMetadata.Arn" in script
     assert 'ECR_CANONICAL_STATE_KEY="engine-ecr/terraform.tfstate"' in script
-    assert 'CANONICAL_STATE_KEY="engine/terraform.tfstate"' in script
-    assert 'LEGACY_STATE_KEY="engine-02-deploy/terraform.tfstate"' in script
+    state_key = (Path(__file__).parents[2] / "scripts/engine_state_key.sh").read_text()
+    assert 'CANONICAL_STATE_KEY="engine/terraform.tfstate"' in state_key
+    assert 'LEGACY_STATE_KEY="engine-02-deploy/terraform.tfstate"' in state_key
     assert 'generate_backend.sh" "$STATE_BUCKET" engine-ecr' in script
     assert "mirror-image.sh" in script
     assert 'rev-parse --short=7 HEAD' in script
@@ -1123,6 +1125,16 @@ def test_engine_install_script_targets_adjacent_engine_tree():
     )
 
 
+def test_engine_install_and_uninstall_choose_the_engine_state_key_in_one_place():
+    scripts = Path(__file__).parents[2] / "scripts"
+    for name in ("engine_install.sh", "engine_uninstall.sh"):
+        script = (scripts / name).read_text()
+        assert 'source "${ROOT_DIR}/scripts/engine_state_key.sh"' in script, name
+        assert 'state_key_choice="$(engine_state_key_choice "$STATE_BUCKET")"' in script, name
+        assert "engine-02-deploy/terraform.tfstate" not in script, name
+        assert "state_object_status()" not in script, name
+
+
 def test_engine_uninstall_script_reverses_ecr_then_deploy():
     script = (Path(__file__).parents[2] / "scripts/engine_uninstall.sh").read_text()
     deploy_index = script.index('generate_backend.sh" "$STATE_BUCKET" engine')
@@ -1132,6 +1144,293 @@ def test_engine_uninstall_script_reverses_ecr_then_deploy():
     assert "infra/01-ecr" in script
     assert "tofu destroy -input=false -auto-approve" in script
     assert "batch-delete-image" not in script
+
+
+def _run_engine_uninstall(
+    tmp_path: Path,
+    *,
+    tfvars: bool,
+    deploy_state: str,
+    legacy_state: str = "absent",
+    ecr_state: str = "absent",
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """Run the real engine_uninstall.sh with aws, terraform and tofu stubbed.
+
+    Each state is what head-object and get-object return for one key:
+    deploy_state for engine/terraform.tfstate, legacy_state for the legacy
+    engine-02-deploy/terraform.tfstate, ecr_state for engine-ecr/terraform.tfstate.
+    "absent" (404 / NoSuchKey), "empty" (destroyed state), "resources",
+    "denied" (head-object works, get-object AccessDenied, as when KMS decrypt is
+    denied), "zero" (a zero-byte object), or "forbidden" (head-object 403 too).
+    """
+    repo_root = Path(__file__).parents[2]
+    engine = tmp_path / "engine"
+    for root in ("infra/02-deploy", "infra/01-ecr"):
+        (engine / root).mkdir(parents=True)
+        if tfvars:
+            (engine / root / "terraform.tfvars").write_text('aws_region = "us-east-1"\n')
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "calls"
+    aws = """[ "$*" != "sts get-caller-identity --query Account --output text" ] || { echo 123456789012; exit 0; }
+key=""; prev=""
+for arg in "$@"; do [ "$prev" != --key ] || key="$arg"; prev="$arg"; done
+case "$key" in
+  engine/terraform.tfstate) state=@DEPLOY@ ;;
+  engine-02-deploy/terraform.tfstate) state=@LEGACY@ ;;
+  engine-ecr/terraform.tfstate) state=@ECR@ ;;
+  *) exit 99 ;;
+esac
+case "$1 $2:$state" in
+  "s3api head-object:absent") echo "An error occurred (404) when calling the HeadObject operation: Not Found" >&2; exit 254 ;;
+  "s3api head-object:forbidden") echo "An error occurred (403) when calling the HeadObject operation: Forbidden" >&2; exit 254 ;;
+  "s3api head-object:"*) echo '{"ContentLength": 100}' ;;
+  "s3api get-object:absent") echo "An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist." >&2; exit 254 ;;
+  "s3api get-object:denied"|"s3api get-object:forbidden") echo "An error occurred (AccessDenied) when calling the GetObject operation: Access Denied" >&2; exit 254 ;;
+  "s3api get-object:empty") echo '{"version": 4, "resources": []}' > "${@: -1}" ;;
+  "s3api get-object:zero") : > "${@: -1}" ;;
+  "s3api get-object:resources") echo '{"version": 4, "resources": [{"mode": "managed", "type": "aws_sfn_state_machine", "name": "x"}]}' > "${@: -1}" ;;
+  *) exit 99 ;;
+esac
+"""
+    stubs = {
+        "aws": aws.replace("@DEPLOY@", deploy_state)
+        .replace("@LEGACY@", legacy_state)
+        .replace("@ECR@", ecr_state),
+        "terraform": "",
+        "tofu": "",
+    }
+    for name, text in stubs.items():
+        (bin_dir / name).write_text(f'#!/usr/bin/env bash\necho "{name} $*" >> "{calls}"\n{text}')
+        (bin_dir / name).chmod(0o755)
+    completed = subprocess.run(
+        ["bash", str(repo_root / "scripts/engine_uninstall.sh"), str(engine)],
+        cwd=tmp_path,
+        env=os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}", "OPENCI_TF_PROJECT": "openci-tf"},
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return completed, calls.read_text().splitlines() if calls.exists() else []
+
+
+def _terraform_calls(calls: list[str]) -> list[str]:
+    return [call for call in calls if call.startswith(("terraform ", "tofu "))]
+
+
+@pytest.mark.parametrize("deploy_state", ["absent", "empty"])
+def test_engine_uninstall_without_tfvars_or_engine_resources_says_not_installed(tmp_path, deploy_state):
+    completed, calls = _run_engine_uninstall(tmp_path, tfvars=False, deploy_state=deploy_state)
+    assert completed.returncode == 0, completed.stderr
+    assert not any(" destroy " in f"{call} " for call in calls)
+    assert "the engine is not installed, nothing to destroy" in completed.stdout
+    assert "engine uninstall: the engine is not installed; nothing was destroyed" in completed.stdout
+    assert "engine uninstall complete" not in completed.stdout
+
+
+def test_engine_uninstall_without_tfvars_but_with_engine_resources_fails_loud(tmp_path):
+    """An installed engine whose tfvars file is gone is a destroy that did not run."""
+    completed, calls = _run_engine_uninstall(tmp_path, tfvars=False, deploy_state="resources")
+    assert completed.returncode == 1, completed.stderr
+    assert not any(" destroy " in f"{call} " for call in calls)
+    assert "infra/02-deploy/terraform.tfvars is missing" in completed.stderr
+    assert "still tracks 1 engine resource(s); the engine was NOT destroyed" in completed.stderr
+    assert "'just engine'" in completed.stderr
+    assert "'just engine-destroy'" in completed.stderr
+    assert "engine uninstall complete" not in completed.stdout
+
+
+def test_engine_uninstall_without_tfvars_and_unreadable_state_fails_loud(tmp_path):
+    completed, calls = _run_engine_uninstall(tmp_path, tfvars=False, deploy_state="denied")
+    assert completed.returncode != 0
+    assert not any(" destroy " in f"{call} " for call in calls)
+    assert "AccessDenied" in completed.stderr
+    assert "could not read engine state s3://openci-tf-state-123456789012/engine/terraform.tfstate" in completed.stderr
+    assert "engine uninstall complete" not in completed.stdout
+
+
+@pytest.mark.parametrize("deploy_state", ["resources", "absent"])
+def test_engine_uninstall_with_tfvars_destroys_both_roots(tmp_path, deploy_state):
+    completed, calls = _run_engine_uninstall(tmp_path, tfvars=True, deploy_state=deploy_state)
+    assert completed.returncode == 0, completed.stderr
+    assert "terraform destroy -input=false -auto-approve" in calls
+    assert "tofu destroy -input=false -auto-approve" in calls
+    canonical_read = next(
+        i for i, call in enumerate(calls)
+        if call.startswith("aws s3api get-object ") and " --key engine/terraform.tfstate " in call
+    )
+    assert canonical_read < calls.index("terraform init -reconfigure -input=false -backend-config=use_lockfile=true")
+    assert "engine uninstall complete" in completed.stdout
+
+
+@pytest.mark.parametrize("tfvars", [True, False])
+def test_engine_uninstall_refuses_an_engine_under_the_legacy_state_key(tmp_path, tfvars):
+    """engine_install.sh still accepts engine-02-deploy/terraform.tfstate; the uninstall
+    never destroys the empty canonical key or calls that engine absent."""
+    completed, calls = _run_engine_uninstall(
+        tmp_path, tfvars=tfvars, deploy_state="absent", legacy_state="resources"
+    )
+    assert completed.returncode == 1, completed.stderr
+    assert _terraform_calls(calls) == []
+    assert (
+        "s3://openci-tf-state-123456789012/engine-02-deploy/terraform.tfstate"
+        " (the legacy engine state key) still tracks 1 engine resource(s)" in completed.stderr
+    )
+    assert "the engine was NOT destroyed" in completed.stderr
+    assert "'just engine'" in completed.stderr
+    assert "'just engine-destroy'" in completed.stderr
+    assert "not installed" not in completed.stdout
+    assert "engine uninstall complete" not in completed.stdout
+
+
+def test_engine_uninstall_with_an_emptied_legacy_state_object_says_not_installed(tmp_path):
+    """A legacy object that tracks no resources is no engine: the uninstall goes on."""
+    completed, calls = _run_engine_uninstall(
+        tmp_path, tfvars=False, deploy_state="absent", legacy_state="empty"
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert _terraform_calls(calls) == []
+    assert "engine uninstall: the engine is not installed; nothing was destroyed" in completed.stdout
+
+
+@pytest.mark.parametrize("tfvars", [True, False])
+def test_engine_uninstall_refuses_when_both_engine_state_keys_exist(tmp_path, tfvars):
+    completed, calls = _run_engine_uninstall(
+        tmp_path, tfvars=tfvars, deploy_state="resources", legacy_state="resources"
+    )
+    assert completed.returncode == 1, completed.stderr
+    assert _terraform_calls(calls) == []
+    assert "both s3://openci-tf-state-123456789012/engine/terraform.tfstate and" in completed.stderr
+    assert "the engine was NOT destroyed" in completed.stderr
+    assert "engine uninstall complete" not in completed.stdout
+
+
+def test_engine_uninstall_fails_loud_when_the_state_key_probe_fails(tmp_path):
+    """A 403 on head-object never falls through to the canonical key."""
+    completed, calls = _run_engine_uninstall(tmp_path, tfvars=True, deploy_state="forbidden")
+    assert completed.returncode != 0
+    assert _terraform_calls(calls) == []
+    assert "Forbidden" in completed.stderr
+    assert (
+        "could not determine state object status for"
+        " s3://openci-tf-state-123456789012/engine/terraform.tfstate" in completed.stderr
+    )
+    assert "engine uninstall complete" not in completed.stdout
+
+
+def test_engine_uninstall_without_tfvars_but_with_ecr_resources_fails_loud(tmp_path):
+    completed, calls = _run_engine_uninstall(
+        tmp_path, tfvars=False, deploy_state="absent", ecr_state="resources"
+    )
+    assert completed.returncode == 1, completed.stderr
+    assert _terraform_calls(calls) == []
+    assert "infra/01-ecr/terraform.tfvars is missing" in completed.stderr
+    assert "engine-ecr/terraform.tfstate still tracks 1 engine resource(s)" in completed.stderr
+
+
+_ENGINE_STATES = ("absent", "empty", "resources", "denied", "zero", "forbidden")
+
+_ENGINE_STATE_TABLE = {
+    True: {
+        "absent": ("destroy", "destroy", "legacy", "denied:legacy", "zero:legacy", "probe:legacy"),
+        "empty": ("destroy", "destroy", "legacy-canonical-empty", "denied:legacy", "zero:legacy", "probe:legacy"),
+        "resources": ("destroy", "destroy", "both", "denied:legacy", "zero:legacy", "probe:legacy"),
+        "denied": ("denied:canonical",) * 5 + ("probe:legacy",),
+        "zero": ("zero:canonical",) * 5 + ("probe:legacy",),
+        "forbidden": ("probe:canonical",) * 6,
+    },
+    False: {
+        "absent": ("absent", "absent", "legacy", "denied:legacy", "zero:legacy", "probe:legacy"),
+        "empty": ("absent", "absent", "legacy-canonical-empty", "denied:legacy", "zero:legacy", "probe:legacy"),
+        "resources": ("no-tfvars", "no-tfvars", "both", "denied:legacy", "zero:legacy", "probe:legacy"),
+        "denied": ("denied:canonical",) * 5 + ("probe:legacy",),
+        "zero": ("zero:canonical",) * 5 + ("probe:legacy",),
+        "forbidden": ("probe:canonical",) * 6,
+    },
+}
+
+_STATE_URL = "s3://openci-tf-state-123456789012"
+
+_ENGINE_STATE_OUTCOMES = {
+    "destroy": (0, ["engine uninstall complete"]),
+    "absent": (0, ["engine uninstall: the engine is not installed; nothing was destroyed"]),
+    "no-tfvars": (
+        1,
+        [
+            f"infra/02-deploy/terraform.tfvars is missing, but {_STATE_URL}/engine/terraform.tfstate"
+            " still tracks 1 engine resource(s); the engine was NOT destroyed."
+        ],
+    ),
+    "legacy": (
+        1,
+        [
+            f"{_STATE_URL}/engine-02-deploy/terraform.tfstate (the legacy engine state key) still tracks 1 engine resource(s)",
+            "Run 'just engine' (it moves the state to engine/terraform.tfstate), then run 'just engine-destroy'.",
+        ],
+    ),
+    "legacy-canonical-empty": (
+        1,
+        [
+            f"{_STATE_URL}/engine-02-deploy/terraform.tfstate (the legacy engine state key) still tracks 1 engine resource(s)",
+            f"delete {_STATE_URL}/engine/terraform.tfstate, run 'just engine' (it moves the state to"
+            " engine/terraform.tfstate), then run 'just engine-destroy'.",
+        ],
+    ),
+    "both": (
+        1,
+        [
+            f"both {_STATE_URL}/engine/terraform.tfstate and {_STATE_URL}/engine-02-deploy/terraform.tfstate"
+            " track engine resources (1 and 1)"
+        ],
+    ),
+    "denied:canonical": (254, [f"could not read engine state {_STATE_URL}/engine/terraform.tfstate"]),
+    "denied:legacy": (254, [f"could not read engine state {_STATE_URL}/engine-02-deploy/terraform.tfstate"]),
+    "zero:canonical": (1, [f"could not count the engine resources in {_STATE_URL}/engine/terraform.tfstate"]),
+    "zero:legacy": (1, [f"could not count the engine resources in {_STATE_URL}/engine-02-deploy/terraform.tfstate"]),
+    "probe:canonical": (1, [f"could not determine state object status for {_STATE_URL}/engine/terraform.tfstate"]),
+    "probe:legacy": (
+        1,
+        [f"could not determine state object status for {_STATE_URL}/engine-02-deploy/terraform.tfstate"],
+    ),
+}
+
+
+@pytest.mark.parametrize("legacy", _ENGINE_STATES)
+@pytest.mark.parametrize("canonical", _ENGINE_STATES)
+@pytest.mark.parametrize("tfvars", [True, False], ids=["tfvars", "no-tfvars"])
+def test_engine_uninstall_follows_the_engine_state_table(tmp_path, tfvars, canonical, legacy):
+    outcome = _ENGINE_STATE_TABLE[tfvars][canonical][_ENGINE_STATES.index(legacy)]
+    returncode, fragments = _ENGINE_STATE_OUTCOMES[outcome]
+    completed, calls = _run_engine_uninstall(
+        tmp_path, tfvars=tfvars, deploy_state=canonical, legacy_state=legacy
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == returncode, output
+    for fragment in fragments:
+        assert fragment in output
+    if outcome == "destroy":
+        assert "terraform destroy -input=false -auto-approve" in calls
+        assert "tofu destroy -input=false -auto-approve" in calls
+    else:
+        assert _terraform_calls(calls) == []
+    assert ("engine uninstall complete" in completed.stdout) == (outcome == "destroy")
+    assert ("not installed" in completed.stdout) == (outcome == "absent")
+    assert "integer expression expected" not in completed.stderr
+
+
+def test_engine_uninstall_without_tfvars_stops_on_a_zero_byte_ecr_state(tmp_path):
+    completed, calls = _run_engine_uninstall(
+        tmp_path, tfvars=False, deploy_state="absent", ecr_state="zero"
+    )
+    assert completed.returncode == 1, completed.stderr
+    assert _terraform_calls(calls) == []
+    assert (
+        "could not count the engine resources in"
+        " s3://openci-tf-state-123456789012/engine-ecr/terraform.tfstate" in completed.stderr
+    )
+    assert "integer expression expected" not in completed.stderr
+    assert "engine uninstall: the engine is not installed; nothing was destroyed" not in completed.stdout
 
 
 def test_verify_uses_canonical_engine_source_and_bucket_names():
@@ -1418,6 +1717,338 @@ def test_justfile_uninstall_and_bootstrap_destroy_invoke_operator_cleanup():
     assert "./scripts/cleanup_operator_footprint.sh" in bootstrap
 
 
+def _run_uninstall_journey(
+    tmp_path: Path, *, fail_recipe: str = "", fail_ssm_project: str = ""
+) -> subprocess.CompletedProcess[str]:
+    """Run the real uninstall recipe body with just, aws, and the phase scripts stubbed."""
+    repo_root = Path(__file__).parents[2]
+    justfile = (repo_root / "justfile").read_text()
+    recipe = justfile.split("\nuninstall:", 1)[1].split("\nverify:", 1)[0]
+    body = "\n".join(line[4:] for line in recipe.splitlines() if line.startswith("    "))
+    work = tmp_path / "work"
+    (work / "scripts").mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    shutil.copy(repo_root / "scripts/phase_timing.sh", work / "scripts/phase_timing.sh")
+    stubs = {
+        bin_dir / "aws": "#!/usr/bin/env bash\necho 123456789012\n",
+        bin_dir / "just": (
+            '#!/usr/bin/env bash\necho "$1" >> just-calls\n'
+            f'[ "$1" != "{fail_recipe}" ] || exit 3\n'
+        ),
+        work / "scripts/poweruser_needs_destroy.sh": "#!/usr/bin/env bash\nexit 1\n",
+        work / "scripts/ssm_config.sh": (
+            '#!/usr/bin/env bash\necho "$SSM_CONFIG_PROJECT" >> ssm-delete-all\n'
+            f'[ "$SSM_CONFIG_PROJECT" != "{fail_ssm_project}" ] || exit 4\n'
+        ),
+        work / "scripts/cleanup_operator_footprint.sh": "#!/usr/bin/env bash\ntouch operator-cleanup-ran\n",
+    }
+    for path, text in stubs.items():
+        path.write_text(text)
+        path.chmod(0o755)
+    env = os.environ | {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "OPENCI_TF_KEEP_STATE": "no",
+        "SSM_CONFIG_PROJECT": "openci-tf",
+    }
+    return subprocess.run(
+        ["bash", "-c", body],
+        cwd=work,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _lines(path: Path) -> list[str]:
+    return path.read_text().split() if path.exists() else []
+
+
+def test_uninstall_runs_every_phase_in_order(tmp_path):
+    completed = _run_uninstall_journey(tmp_path)
+    work = tmp_path / "work"
+    assert completed.returncode == 0, completed.stderr
+    assert _lines(work / "just-calls") == [
+        "deploy-destroy",
+        "engine-destroy",
+        "foundation-destroy",
+        "bootstrap-destroy",
+    ]
+    assert _lines(work / "ssm-delete-all") == ["openci-tf", "engine"]
+    assert (work / "operator-cleanup-ran").exists()
+    assert "uninstall complete" in completed.stdout
+
+
+def test_uninstall_stops_at_first_failed_phase(tmp_path):
+    """A failed engine-destroy never reaches foundation-destroy or bootstrap-destroy."""
+    completed = _run_uninstall_journey(tmp_path, fail_recipe="engine-destroy")
+    work = tmp_path / "work"
+    assert _lines(work / "just-calls") == ["deploy-destroy", "engine-destroy"]
+    assert not (work / "ssm-delete-all").exists()
+    assert not (work / "operator-cleanup-ran").exists()
+    assert completed.returncode == 3, completed.stderr
+    assert "uninstall stopped at failed phase engine-destroy (rc=3)" in completed.stderr
+    assert "uninstall complete" not in completed.stdout
+
+
+def test_uninstall_ssm_cleanup_stops_at_first_failed_namespace(tmp_path):
+    completed = _run_uninstall_journey(tmp_path, fail_ssm_project="openci-tf")
+    work = tmp_path / "work"
+    assert _lines(work / "ssm-delete-all") == ["openci-tf"]
+    assert not (work / "operator-cleanup-ran").exists()
+    assert completed.returncode == 4, completed.stderr
+    assert "uninstall stopped at failed phase ssm-cleanup (rc=4)" in completed.stderr
+
+
+def test_install_doc_uninstall_states_the_deploy_destroy_limits():
+    """deploy-destroy reads the IMAGE_VERSION image and engine/foundation by name."""
+    install = (Path(__file__).parents[2] / "docs/INSTALL.md").read_text()
+    uninstall = " ".join(install.split("\n## Uninstall\n", 1)[1].split("\n## ", 1)[0].split())
+    assert "tagged with the checked-out `IMAGE_VERSION`" in uninstall
+    assert "that image must still exist in ECR" in uninstall
+    assert "after engine-destroy or a later phase has finished is not proven safe" in uninstall
+
+
+def _run_recipe_journey(
+    tmp_path: Path, recipe: str, stubs: dict[str, str]
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """Run one real justfile recipe body with aws, terraform and its scripts stubbed.
+
+    Every stub appends "<name> <args>" to a calls file; the calls come back in order.
+    """
+    repo_root = Path(__file__).parents[2]
+    justfile = (repo_root / "justfile").read_text()
+    body_lines = []
+    for line in justfile.split(f"\n{recipe}:\n", 1)[1].splitlines():
+        if line.strip() and not line.startswith("    "):
+            break
+        body_lines.append(line[4:])
+    body = (
+        "\n".join(body_lines)
+        .replace("{{OPENCI_TF_PROJECT}}", "openci-tf")
+        .replace("{{OPENCI_TF_REGION}}", "us-east-1")
+    )
+    work = tmp_path / "work"
+    (work / "scripts").mkdir(parents=True)
+    for root in ("bootstrap", "foundation", "deploy"):
+        (work / "infra" / root).mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    shutil.copy(repo_root / "scripts/phase_timing.sh", work / "scripts/phase_timing.sh")
+    calls = tmp_path / "calls"
+    every_stub = {"aws": 'echo 123456789012\n'} | stubs
+    for name, text in every_stub.items():
+        path = (work / name) if name.startswith("scripts/") else (bin_dir / name)
+        path.write_text(
+            f'#!/usr/bin/env bash\necho "{Path(name).name} $*" >> "{calls}"\n{text}'
+        )
+        path.chmod(0o755)
+    completed = subprocess.run(
+        ["bash", "-c", body],
+        cwd=work,
+        env=os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}"},
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return completed, calls.read_text().splitlines() if calls.exists() else []
+
+
+def _bootstrap_destroy_stubs(
+    *, terraform: str = "", bucket_owner: str = "echo openci-tf-bootstrap\n"
+) -> dict[str, str]:
+    return {
+        "terraform": terraform,
+        "scripts/write_tfvars.sh": "",
+        "scripts/bucket_exists.sh": "exit 0\n",
+        "scripts/bucket_owner.sh": bucket_owner,
+        "scripts/generate_backend.sh": "",
+        "scripts/empty_bucket.sh": "",
+        "scripts/cleanup_operator_footprint.sh": "",
+    }
+
+
+def test_bootstrap_destroy_stops_when_state_migration_out_of_the_bucket_fails(tmp_path):
+    """A failed init -migrate-state never empties the bucket that still holds the state."""
+    completed, calls = _run_recipe_journey(
+        tmp_path,
+        "bootstrap-destroy",
+        _bootstrap_destroy_stubs(terraform='case "$*" in *-migrate-state*) exit 6 ;; esac\n'),
+    )
+    assert completed.returncode == 6, completed.stderr
+    assert any("-migrate-state" in call for call in calls)
+    assert not any(call.startswith("empty_bucket.sh") for call in calls)
+    assert not any(call.startswith("terraform -chdir=infra/bootstrap destroy") for call in calls)
+    assert not any(call.startswith("cleanup_operator_footprint.sh") for call in calls)
+    assert "<< terraform-destroy FAILED after " in completed.stderr
+
+
+def test_bootstrap_destroy_aborts_on_unreadable_bucket_tags(tmp_path):
+    """bucket_owner.sh exit 2 stops the phase; an empty owner is never compared."""
+    completed, calls = _run_recipe_journey(
+        tmp_path,
+        "bootstrap-destroy",
+        _bootstrap_destroy_stubs(bucket_owner="exit 2\n"),
+    )
+    assert completed.returncode == 2, completed.stderr
+    assert "is not owned by openci-tf-bootstrap" not in completed.stderr
+    assert not any(call.startswith(("terraform", "empty_bucket.sh")) for call in calls)
+    assert "<< terraform-destroy FAILED after " in completed.stderr
+
+
+def test_deploy_destroy_stops_when_the_stale_lock_guard_fails(tmp_path):
+    """A held or unreadable deploy lock stops the phase before terraform destroy."""
+    completed, calls = _run_recipe_journey(
+        tmp_path,
+        "deploy-destroy",
+        {
+            "terraform": "",
+            "scripts/ssm_config.sh": 'echo "$3"\n',
+            "scripts/image_tag.sh": "echo 1.13\n",
+            "scripts/write_tfvars.sh": "",
+            "scripts/generate_backend.sh": "",
+            "scripts/terraform_unlock_stale_lock.sh": "exit 1\n",
+        },
+    )
+    assert completed.returncode == 1, completed.stderr
+    assert any(call.startswith("terraform_unlock_stale_lock.sh") for call in calls)
+    assert not any(call.startswith("terraform -chdir=infra/deploy destroy") for call in calls)
+    assert "<< terraform-destroy FAILED after " in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "failing",
+    ["scripts/write_tfvars.sh", "scripts/generate_backend.sh", "terraform"],
+)
+def test_foundation_destroy_stops_at_the_first_failed_step(tmp_path, failing):
+    """A failed write_tfvars, generate_backend or init never reaches terraform destroy."""
+    stubs = {
+        "terraform": "",
+        "scripts/ssm_config.sh": 'echo "$3"\n',
+        "scripts/write_tfvars.sh": "",
+        "scripts/generate_backend.sh": "",
+    }
+    stubs[failing] = "exit 5\n"
+    completed, calls = _run_recipe_journey(tmp_path, "foundation-destroy", stubs)
+    assert completed.returncode == 5, completed.stderr
+    assert calls[-1].startswith(Path(failing).name)
+    assert not any(call.startswith("terraform -chdir=infra/foundation destroy") for call in calls)
+    assert "<< terraform-destroy FAILED after " in completed.stderr
+
+
+@pytest.mark.parametrize("delete_rc", [0, 255])
+def test_empty_bucket_batch_file_is_a_mktemp_file_removed_on_exit(tmp_path, delete_rc):
+    """The delete batch lives in TMPDIR under a mktemp name, and is gone after any exit."""
+    repo_root = Path(__file__).parents[2]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
+    seen = tmp_path / "delete-arg"
+    aws = bin_dir / "aws"
+    aws.write_text(
+        f"""#!/usr/bin/env bash
+case "$*" in
+  *head-bucket*) exit 0 ;;
+  *list-object-versions*)
+    if [ -e "{tmp_path}/listed" ]; then echo '{{"Objects": []}}'; exit 0; fi
+    touch "{tmp_path}/listed"
+    echo '{{"Objects": [{{"Key": "k", "VersionId": "v"}}]}}' ;;
+  *delete-objects*)
+    for arg in "$@"; do case "$arg" in file://*) path="${{arg#file://}}" ;; esac; done
+    echo "$path" > "{seen}"
+    cp "$path" "{tmp_path}/batch-copy"
+    exit {delete_rc} ;;
+  *) exit 99 ;;
+esac
+"""
+    )
+    aws.chmod(0o755)
+    completed = subprocess.run(
+        ["bash", str(repo_root / "scripts/empty_bucket.sh"), "openci-tf-state-123456789012"],
+        cwd=tmp_path,
+        env=os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}", "TMPDIR": str(tmpdir)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == delete_rc, completed.stderr
+    batch_path = Path(seen.read_text().strip())
+    assert batch_path.parent == tmpdir
+    assert json.loads((tmp_path / "batch-copy").read_text()) == {
+        "Objects": [{"Key": "k", "VersionId": "v"}],
+        "Quiet": True,
+    }
+    assert list(tmpdir.iterdir()) == []
+
+
+def test_empty_bucket_stops_on_objects_delete_objects_did_not_delete(tmp_path):
+    """DeleteObjects exits 0 and lists refused objects under Errors: name the keys and stop."""
+    repo_root = Path(__file__).parents[2]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    deletes = tmp_path / "delete-calls"
+    aws = bin_dir / "aws"
+    aws.write_text(
+        f"""#!/usr/bin/env bash
+case "$*" in
+  *head-bucket*) exit 0 ;;
+  *list-object-versions*)
+    echo '{{"Objects": [{{"Key": "kept/terraform.tfstate", "VersionId": "v-kept"}}, {{"Key": "gone", "VersionId": "v-gone"}}]}}' ;;
+  *delete-objects*)
+    echo "$*" >> "{deletes}"
+    [ "$(wc -l < "{deletes}")" -le 3 ] || {{ echo "stub: delete-objects called 4 times" >&2; exit 97; }}
+    echo '{{"Errors": [{{"Key": "kept/terraform.tfstate", "VersionId": "v-kept", "Code": "AccessDenied", "Message": "Access Denied"}}]}}' ;;
+  *) exit 99 ;;
+esac
+"""
+    )
+    aws.chmod(0o755)
+    completed = subprocess.run(
+        ["bash", str(repo_root / "scripts/empty_bucket.sh"), "openci-tf-state-123456789012"],
+        cwd=tmp_path,
+        env=os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert completed.returncode == 1, completed.stderr
+    delete_calls = deletes.read_text().splitlines()
+    assert len(delete_calls) == 1
+    assert "--output json" in delete_calls[0]
+    assert (
+        "ERROR: S3 did not delete 1 of 2 versions from openci-tf-state-123456789012 (AccessDenied); keys:"
+        in completed.stderr
+    )
+    assert "\nkept/terraform.tfstate\n" in completed.stderr
+    assert "v-kept" not in completed.stderr + completed.stdout
+    assert "deleted 2 versions" not in completed.stdout
+    assert "emptied" not in completed.stdout
+
+
+def test_justfile_worktree_link_comment_makes_every_import_resolve(tmp_path):
+    """The header's ln line, run in a sibling worktree, links the gitignored kit modules."""
+    justfile = (Path(__file__).parents[2] / "justfile").read_text()
+    header = justfile.split("\nset positional-arguments", 1)[0].splitlines()
+    ln_line = next(line.lstrip("# ") for line in header if line.lstrip("# ").startswith("ln "))
+    imports = [line.split("'")[1] for line in header if line.startswith("import '")]
+    assert imports
+    main = tmp_path / "openci-tf"
+    worktree = tmp_path / "openci-tf-wt-x"
+    for path in imports:
+        (main / path).parent.mkdir(parents=True, exist_ok=True)
+        (main / path).write_text("")
+    # .shared-llm/this_repo is tracked, so every worktree already has .shared-llm/.
+    (worktree / ".shared-llm/this_repo").mkdir(parents=True)
+    subprocess.run(["bash", "-c", ln_line], cwd=worktree, check=True)
+    for path in imports:
+        assert (worktree / path).is_file(), f"{ln_line} does not make {path} resolve"
+
+
 def test_deploy_destroy_unlocks_stale_terraform_lock_before_destroy():
     justfile = (Path(__file__).parents[2] / "justfile").read_text()
     section = justfile.split("deploy-destroy:", 1)[1].split("target-create-aws-readonly", 1)[0]
@@ -1456,9 +2087,11 @@ def test_terraform_unlock_stale_lock_reports_lock_with_force_unlock_command(
 set -euo pipefail
 case "$*" in
   *"s3api get-object"*)
-    cat <<'JSON'
+    # Like the real CLI: the body goes to the outfile, the metadata to stdout.
+    cat >"${@: -1}" <<'JSON'
 {"ID":"c5bcf01c-1ebf-b1e3-9f3a-55a995eef2cc","Created":"2020-01-01T00:00:00Z","Who":"test@host","Operation":"OperationTypeApply"}
 JSON
+    echo '{"AcceptRanges": "bytes", "ContentLength": 120, "ContentType": "application/json"}'
     ;;
   *)
     echo "unexpected aws call: $*" >&2
@@ -1493,7 +2126,12 @@ printf '%s\\n' "$*" >>"{unlock_log}"
     )
     assert completed.returncode == 1, completed.stdout
     assert "terraform -chdir=infra/deploy force-unlock c5bcf01c-1ebf-b1e3-9f3a-55a995eef2cc" in completed.stderr
-    assert "test@host" in completed.stderr
+    assert re.search(
+        r"^Lock holder: test@host \(OperationTypeApply, created 2020-01-01T00:00:00Z, age \d+ minute\(s\)\)$",
+        completed.stderr,
+        re.MULTILINE,
+    ), completed.stderr
+    assert "unknown" not in completed.stderr
     assert not unlock_log.exists()
 
 
@@ -1551,9 +2189,11 @@ def test_terraform_unlock_stale_lock_fails_with_exact_command_for_fresh_lock(
 set -euo pipefail
 case "$*" in
   *"s3api get-object"*)
-    cat <<'JSON'
+    # Like the real CLI: the body goes to the outfile, the metadata to stdout.
+    cat >"${@: -1}" <<'JSON'
 {"ID":"fresh-lock-id","Created":"2099-01-01T00:00:00Z","Who":"test@host","Operation":"OperationTypeApply"}
 JSON
+    echo '{"AcceptRanges": "bytes", "ContentLength": 120, "ContentType": "application/json"}'
     ;;
   *)
     echo "unexpected aws call: $*" >&2
@@ -1583,6 +2223,79 @@ esac
     )
     assert completed.returncode != 0
     assert "terraform -chdir=infra/deploy force-unlock fresh-lock-id" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "aws_body",
+    [
+        "trap '' TERM\nkill -TERM 0\n",
+        'printf \'{"ID":"i","Created":"2020-01-01T00:00:00Z"}\' >"${@: -1}"\necho "{}"\n',
+        'echo "An error occurred (NoSuchKey) when calling the GetObject operation" >&2\nexit 254\n',
+        'echo "An error occurred (AccessDenied) when calling the GetObject operation" >&2\nexit 254\n',
+    ],
+    ids=["interrupted", "lock-present", "no-lock", "denied"],
+)
+def test_terraform_unlock_stale_lock_leaves_no_temp_file(tmp_path: Path, aws_body: str):
+    """The lock body and the error output live in mktemp files that an EXIT trap removes,
+    also when a TERM reaches the process group (Ctrl-C, a killed job) during get-object."""
+    repo_root = Path(__file__).parents[2]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
+    (bin_dir / "aws").write_text(f"#!/usr/bin/env bash\n{aws_body}")
+    (bin_dir / "aws").chmod(0o755)
+    completed = subprocess.run(
+        ["bash", str(repo_root / "scripts/terraform_unlock_stale_lock.sh"), "infra/deploy", "b", "deploy"],
+        cwd=tmp_path,
+        env=os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}", "TMPDIR": str(tmpdir)},
+        capture_output=True,
+        text=True,
+        check=False,
+        start_new_session=True,
+        timeout=60,
+    )
+    assert list(tmpdir.iterdir()) == [], completed.stderr
+
+
+def test_terraform_unlock_stale_lock_removes_the_first_temp_file_when_the_second_mktemp_fails(
+    tmp_path: Path,
+):
+    """The EXIT trap is set right after the first mktemp, so a failed second one
+    leaves no file behind."""
+    repo_root = Path(__file__).parents[2]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
+    counter = tmp_path / "mktemp-calls"
+    real_mktemp = shutil.which("mktemp")
+    assert real_mktemp
+    (bin_dir / "mktemp").write_text(
+        f"""#!/usr/bin/env bash
+n=$(( $(cat "{counter}" 2>/dev/null || echo 0) + 1 ))
+echo "$n" >"{counter}"
+[ "$n" -lt 2 ] || {{ echo "mktemp: failed to create file via template" >&2; exit 1; }}
+exec "{real_mktemp}" "$@"
+"""
+    )
+    (bin_dir / "aws").write_text("#!/usr/bin/env bash\necho \"unexpected aws call: $*\" >&2\nexit 99\n")
+    (bin_dir / "mktemp").chmod(0o755)
+    (bin_dir / "aws").chmod(0o755)
+    completed = subprocess.run(
+        ["bash", str(repo_root / "scripts/terraform_unlock_stale_lock.sh"), "infra/deploy", "b", "deploy"],
+        cwd=tmp_path,
+        env=os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}", "TMPDIR": str(tmpdir)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert completed.returncode == 1, completed.stderr
+    assert "mktemp: failed to create file via template" in completed.stderr
+    assert "unexpected aws call" not in completed.stderr
+    assert counter.read_text().strip() == "2"
+    assert list(tmpdir.iterdir()) == [], completed.stderr
 
 
 def test_presign_put_sets_content_type_for_text_artifacts(monkeypatch):

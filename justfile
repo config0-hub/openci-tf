@@ -1,6 +1,7 @@
 # PUBLIC kit-synced modules: UpAgent work dispatch, Herdr transport tools, and run control.
-# Worktrees: imported modules live in gitignored .shared-llm; symlink before just recipes:
-#   ln -sfn ../openci-tf/.shared-llm .shared-llm
+# Worktrees: the imported modules live in gitignored .shared-llm/public (.shared-llm/this_repo
+# is tracked). In a sibling worktree, link it before just recipes:
+#   ln -sfn ../../openci-tf/.shared-llm/public .shared-llm/public
 import '.shared-llm/public/extensions/common/upagent/justfile'
 import '.shared-llm/public/extensions/common/herdr/justfile'
 import '.shared-llm/public/extensions/common/runner/justfile'
@@ -442,14 +443,26 @@ install-standalone:
     set -euo pipefail
     # shellcheck source=scripts/phase_timing.sh
     source ./scripts/phase_timing.sh
+    run_stage() {
+        local stage="$1"
+        shift
+        local rc
+        set +e
+        phase_timing_run "$stage" "$@"
+        rc=$?
+        set -e
+        if [ "$rc" -ne 0 ]; then
+            phase_timing_total_end install "$rc"
+            echo "ERROR: install stopped at failed stage $stage (rc=$rc); later stages did not run" >&2
+            exit "$rc"
+        fi
+    }
     phase_timing_total_begin
-    journey_rc=0
-    phase_timing_run bootstrap just bootstrap || journey_rc=$?
-    phase_timing_run foundation just foundation || journey_rc=$?
-    phase_timing_run engine just engine || journey_rc=$?
-    phase_timing_run deploy just deploy || journey_rc=$?
-    phase_timing_total_end install "$journey_rc"
-    [ "$journey_rc" -eq 0 ] || exit "$journey_rc"
+    run_stage bootstrap just bootstrap
+    run_stage foundation just foundation
+    run_stage engine just engine
+    run_stage deploy just deploy
+    phase_timing_total_end install 0
     echo "install complete — hub readonly owned by deploy; run 'just verify'"
 
 # config0-addon install into a tenant account. Reads its inputs from the SSM
@@ -483,8 +496,11 @@ install-config0-addon:
     run_stage() {
         local stage="$1"
         shift
-        local rc=0
-        phase_timing_run "$stage" "$@" || rc=$?
+        local rc
+        set +e
+        phase_timing_run "$stage" "$@"
+        rc=$?
+        set -e
         if [ "$rc" -ne 0 ]; then
             phase_timing_total_end install-config0-addon "$rc"
             echo "ERROR: install-config0-addon stopped at failed stage $stage (rc=$rc); later stages did not run" >&2
@@ -505,8 +521,21 @@ uninstall:
     set -euo pipefail
     # shellcheck source=scripts/phase_timing.sh
     source ./scripts/phase_timing.sh
+    run_phase() {
+        local phase="$1"
+        shift
+        local rc
+        set +e
+        phase_timing_run "$phase" "$@"
+        rc=$?
+        set -e
+        if [ "$rc" -ne 0 ]; then
+            phase_timing_total_end uninstall "$rc"
+            echo "ERROR: uninstall stopped at failed phase $phase (rc=$rc); later phases did not run" >&2
+            exit "$rc"
+        fi
+    }
     phase_timing_total_begin
-    journey_rc=0
     KEEP="${OPENCI_TF_KEEP_STATE:-}"
     if [ -z "$KEEP" ]; then
         if [ -t 0 ]; then
@@ -524,7 +553,7 @@ uninstall:
     set -e
     case "$probe_rc" in
       0)
-        phase_timing_run poweruser-delete just target-delete-aws-poweruser "$HUB_ACCOUNT_ID" || journey_rc=$?
+        run_phase poweruser-delete just target-delete-aws-poweruser "$HUB_ACCOUNT_ID"
         ;;
       1)
         ;;
@@ -533,22 +562,21 @@ uninstall:
         exit 1
         ;;
     esac
-    phase_timing_run deploy-destroy just deploy-destroy || journey_rc=$?
-    phase_timing_run engine-destroy just engine-destroy || journey_rc=$?
-    phase_timing_run foundation-destroy just foundation-destroy || journey_rc=$?
+    run_phase deploy-destroy just deploy-destroy
+    run_phase engine-destroy just engine-destroy
+    run_phase foundation-destroy just foundation-destroy
     if [ "$KEEP" = "yes" ]; then
         echo "keeping state bucket + source copies as the surviving record"
     else
-        phase_timing_run bootstrap-destroy just bootstrap-destroy || journey_rc=$?
+        run_phase bootstrap-destroy just bootstrap-destroy
     fi
     ssm_cleanup() {
-    ./scripts/ssm_config.sh delete-all
-    SSM_CONFIG_PROJECT=engine ./scripts/ssm_config.sh delete-all
+    ./scripts/ssm_config.sh delete-all &&
+        SSM_CONFIG_PROJECT=engine ./scripts/ssm_config.sh delete-all
     }
-    phase_timing_run ssm-cleanup ssm_cleanup || journey_rc=$?
-    phase_timing_run operator-cleanup ./scripts/cleanup_operator_footprint.sh || journey_rc=$?
-    phase_timing_total_end uninstall "$journey_rc"
-    [ "$journey_rc" -eq 0 ] || exit "$journey_rc"
+    run_phase ssm-cleanup ssm_cleanup
+    run_phase operator-cleanup ./scripts/cleanup_operator_footprint.sh
+    phase_timing_total_end uninstall 0
     echo "uninstall complete — run 'just verify-clean'"
 
 verify:
