@@ -66,23 +66,37 @@ require_no_engine_resources() {
 }
 
 # Read the engine state where engine_install.sh puts it before anything is
-# destroyed or called absent. The destroy below uses the canonical key only. An
-# engine whose state is still under the legacy key (engine_install.sh has not
-# migrated it yet) would make that destroy a no-op and let the later uninstall
-# phases remove what the running engine needs, so stop.
+# destroyed or called absent. engine_state_key_choice says which of the two
+# objects exist; each one that exists is read and its resources counted, with
+# or without terraform.tfvars, so an unreadable state stops before any destroy.
+# The destroy below uses the canonical key only. A legacy object that tracks
+# resources is an engine that destroy would not see, and the later uninstall
+# phases would remove what it needs, so stop. A legacy object that tracks
+# nothing is no engine: the uninstall goes on.
 state_key_choice="$(engine_state_key_choice "$STATE_BUCKET")"
-if [ "$state_key_choice" = ambiguous ]; then
-  echo "ERROR: both s3://${STATE_BUCKET}/${CANONICAL_STATE_KEY} and s3://${STATE_BUCKET}/${LEGACY_STATE_KEY} exist; refusing to guess which one tracks the engine, so the engine was NOT destroyed." >&2
+canonical_count=0
+legacy_count=0
+if [ "$state_key_choice" != legacy ]; then
+  canonical_count="$(engine_state_resource_count "$CANONICAL_STATE_KEY")"
+fi
+if [ "$state_key_choice" != canonical ]; then
+  legacy_count="$(engine_state_resource_count "$LEGACY_STATE_KEY")"
+fi
+if [ "$canonical_count" -ne 0 ] && [ "$legacy_count" -ne 0 ]; then
+  echo "ERROR: both s3://${STATE_BUCKET}/${CANONICAL_STATE_KEY} and s3://${STATE_BUCKET}/${LEGACY_STATE_KEY} track engine resources (${canonical_count} and ${legacy_count}); refusing to guess which one tracks the engine, so the engine was NOT destroyed." >&2
   echo "Compare the two state objects and delete the one that does not track the engine, then run 'just engine-destroy'." >&2
   exit 1
 fi
-if [ "$state_key_choice" = legacy ]; then
-  legacy_count="$(engine_state_resource_count "$LEGACY_STATE_KEY")"
-  if [ "$legacy_count" -ne 0 ]; then
-    echo "ERROR: s3://${STATE_BUCKET}/${LEGACY_STATE_KEY} (the legacy engine state key) still tracks ${legacy_count} engine resource(s); engine uninstall destroys from ${CANONICAL_STATE_KEY} only, so the engine was NOT destroyed." >&2
+if [ "$legacy_count" -ne 0 ]; then
+  echo "ERROR: s3://${STATE_BUCKET}/${LEGACY_STATE_KEY} (the legacy engine state key) still tracks ${legacy_count} engine resource(s); engine uninstall destroys from ${CANONICAL_STATE_KEY} only, so the engine was NOT destroyed." >&2
+  if [ "$state_key_choice" = ambiguous ]; then
+    echo "s3://${STATE_BUCKET}/${CANONICAL_STATE_KEY} tracks no engine resources, and 'just engine' does not move the state while both objects exist: delete s3://${STATE_BUCKET}/${CANONICAL_STATE_KEY}, run 'just engine' (it moves the state to ${CANONICAL_STATE_KEY}), then run 'just engine-destroy'." >&2
+  else
     echo "Run 'just engine' (it moves the state to ${CANONICAL_STATE_KEY}), then run 'just engine-destroy'." >&2
-    exit 1
   fi
+  exit 1
+fi
+if [ "$state_key_choice" != canonical ]; then
   echo "s3://${STATE_BUCKET}/${LEGACY_STATE_KEY} (the legacy engine state key) tracks no engine resources"
 fi
 

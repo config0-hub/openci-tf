@@ -1255,7 +1255,11 @@ def test_engine_uninstall_with_tfvars_destroys_both_roots(tmp_path, deploy_state
     assert completed.returncode == 0, completed.stderr
     assert "terraform destroy -input=false -auto-approve" in calls
     assert "tofu destroy -input=false -auto-approve" in calls
-    assert not any("get-object" in call for call in calls)
+    canonical_read = next(
+        i for i, call in enumerate(calls)
+        if call.startswith("aws s3api get-object ") and " --key engine/terraform.tfstate " in call
+    )
+    assert canonical_read < calls.index("terraform init -reconfigure -input=false -backend-config=use_lockfile=true")
     assert "engine uninstall complete" in completed.stdout
 
 
@@ -1322,6 +1326,91 @@ def test_engine_uninstall_without_tfvars_but_with_ecr_resources_fails_loud(tmp_p
     assert _terraform_calls(calls) == []
     assert "infra/01-ecr/terraform.tfvars is missing" in completed.stderr
     assert "engine-ecr/terraform.tfstate still tracks 1 engine resource(s)" in completed.stderr
+
+
+_ENGINE_STATES = ("absent", "empty", "resources", "denied", "forbidden")
+
+_ENGINE_STATE_TABLE = {
+    True: {
+        "absent": ("destroy", "destroy", "legacy", "denied:legacy", "probe:legacy"),
+        "empty": ("destroy", "destroy", "legacy-canonical-empty", "denied:legacy", "probe:legacy"),
+        "resources": ("destroy", "destroy", "both", "denied:legacy", "probe:legacy"),
+        "denied": ("denied:canonical", "denied:canonical", "denied:canonical", "denied:canonical", "probe:legacy"),
+        "forbidden": ("probe:canonical", "probe:canonical", "probe:canonical", "probe:canonical", "probe:canonical"),
+    },
+    False: {
+        "absent": ("absent", "absent", "legacy", "denied:legacy", "probe:legacy"),
+        "empty": ("absent", "absent", "legacy-canonical-empty", "denied:legacy", "probe:legacy"),
+        "resources": ("no-tfvars", "no-tfvars", "both", "denied:legacy", "probe:legacy"),
+        "denied": ("denied:canonical", "denied:canonical", "denied:canonical", "denied:canonical", "probe:legacy"),
+        "forbidden": ("probe:canonical", "probe:canonical", "probe:canonical", "probe:canonical", "probe:canonical"),
+    },
+}
+
+_STATE_URL = "s3://openci-tf-state-123456789012"
+
+_ENGINE_STATE_OUTCOMES = {
+    "destroy": (0, ["engine uninstall complete"]),
+    "absent": (0, ["engine uninstall: the engine is not installed; nothing was destroyed"]),
+    "no-tfvars": (
+        1,
+        [
+            f"infra/02-deploy/terraform.tfvars is missing, but {_STATE_URL}/engine/terraform.tfstate"
+            " still tracks 1 engine resource(s); the engine was NOT destroyed."
+        ],
+    ),
+    "legacy": (
+        1,
+        [
+            f"{_STATE_URL}/engine-02-deploy/terraform.tfstate (the legacy engine state key) still tracks 1 engine resource(s)",
+            "Run 'just engine' (it moves the state to engine/terraform.tfstate), then run 'just engine-destroy'.",
+        ],
+    ),
+    "legacy-canonical-empty": (
+        1,
+        [
+            f"{_STATE_URL}/engine-02-deploy/terraform.tfstate (the legacy engine state key) still tracks 1 engine resource(s)",
+            f"delete {_STATE_URL}/engine/terraform.tfstate, run 'just engine' (it moves the state to"
+            " engine/terraform.tfstate), then run 'just engine-destroy'.",
+        ],
+    ),
+    "both": (
+        1,
+        [
+            f"both {_STATE_URL}/engine/terraform.tfstate and {_STATE_URL}/engine-02-deploy/terraform.tfstate"
+            " track engine resources (1 and 1)"
+        ],
+    ),
+    "denied:canonical": (254, [f"could not read engine state {_STATE_URL}/engine/terraform.tfstate"]),
+    "denied:legacy": (254, [f"could not read engine state {_STATE_URL}/engine-02-deploy/terraform.tfstate"]),
+    "probe:canonical": (1, [f"could not determine state object status for {_STATE_URL}/engine/terraform.tfstate"]),
+    "probe:legacy": (
+        1,
+        [f"could not determine state object status for {_STATE_URL}/engine-02-deploy/terraform.tfstate"],
+    ),
+}
+
+
+@pytest.mark.parametrize("legacy", _ENGINE_STATES)
+@pytest.mark.parametrize("canonical", _ENGINE_STATES)
+@pytest.mark.parametrize("tfvars", [True, False], ids=["tfvars", "no-tfvars"])
+def test_engine_uninstall_follows_the_engine_state_table(tmp_path, tfvars, canonical, legacy):
+    outcome = _ENGINE_STATE_TABLE[tfvars][canonical][_ENGINE_STATES.index(legacy)]
+    returncode, fragments = _ENGINE_STATE_OUTCOMES[outcome]
+    completed, calls = _run_engine_uninstall(
+        tmp_path, tfvars=tfvars, deploy_state=canonical, legacy_state=legacy
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == returncode, output
+    for fragment in fragments:
+        assert fragment in output
+    if outcome == "destroy":
+        assert "terraform destroy -input=false -auto-approve" in calls
+        assert "tofu destroy -input=false -auto-approve" in calls
+    else:
+        assert _terraform_calls(calls) == []
+    assert ("engine uninstall complete" in completed.stdout) == (outcome == "destroy")
+    assert ("not installed" in completed.stdout) == (outcome == "absent")
 
 
 def test_verify_uses_canonical_engine_source_and_bucket_names():
